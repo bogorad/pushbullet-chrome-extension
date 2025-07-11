@@ -1,5 +1,8 @@
 # Pushbullet for Chrome (Unofficial, Manifest V3)
 
+> [!WARNING]
+> This extension was vibe-coded on the jurassic models and tooling of 4mo ago and just barely worked well enough for my needs. I'm pretty sure the current generation can do a better job of writing it from scratch. I'm not using it anymore, and won't be maintaining it, so, if you need it, I encourage you to prompt yourself a new one.
+
 An unofficial Chrome extension for Pushbullet that uses Manifest V3 to replace the original extension which is no longer compatible with recent Chrome versions.
 
 **DISCLAIMER: This extension is not affiliated with, endorsed by, or connected to Pushbullet Inc. in any way. This is an independent, community-developed project.**
