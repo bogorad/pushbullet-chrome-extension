@@ -23,6 +23,36 @@
       text-align: center;
       font-style: italic;
     }
+
+    .push-type-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 5px;
+    }
+
+    .push-type-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      background-color: #f9f9f9;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+
+    .push-type-btn.active {
+      background-color: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+
+    .push-type-btn:hover {
+      background-color: #e9ecef;
+    }
+
+    .push-type-btn.active:hover {
+      background-color: #0056b3;
+    }
   </style>
 </head>
 <body>
@@ -62,13 +92,13 @@
     <div class="push-form">
       <h2>Send a Push</h2>
       
-      <div class="form-group">
-        <label for="push-type">Push Type:</label>
-        <select id="push-type">
-          <option value="note">Note</option>
-          <option value="link">Link</option>
-        </select>
-      </div>
+       <div class="form-group">
+         <label>Push Type:</label>
+         <div class="push-type-buttons">
+           <button id="push-type-note" class="push-type-btn active">Note</button>
+           <button id="push-type-link" class="push-type-btn">Link</button>
+         </div>
+       </div>
       
       <div id="note-form">
         <div class="form-group">
