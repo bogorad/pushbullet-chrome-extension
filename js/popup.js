@@ -1,51 +1,53 @@
 // DOM elements
-const loadingSection = document.getElementById("loading-section");
-const loginSection = document.getElementById("login-section");
-const mainSection = document.getElementById("main-section");
-const apiKeyInput = document.getElementById("api-key");
-const deviceNicknameInput = document.getElementById("device-nickname");
+const loadingSection = document.getElementById('loading-section');
+const loginSection = document.getElementById('login-section');
+const mainSection = document.getElementById('main-section');
+const apiKeyInput = document.getElementById('api-key');
+const deviceNicknameInput = document.getElementById('device-nickname');
 const deviceNicknameSettingInput = document.getElementById(
-  "device-nickname-setting",
+  'device-nickname-setting',
 );
-const updateNicknameButton = document.getElementById("update-nickname");
-const saveApiKeyButton = document.getElementById("save-api-key");
-const logoutButton = document.getElementById("logout");
-const userImage = document.getElementById("user-image");
-const userName = document.getElementById("user-name");
-const pushTypeNoteBtn = document.getElementById("push-type-note");
-const pushTypeLinkBtn = document.getElementById("push-type-link");
-const noteForm = document.getElementById("note-form");
-const linkForm = document.getElementById("link-form");
-const noteTitleInput = document.getElementById("note-title");
-const noteBodyInput = document.getElementById("note-body");
-const linkTitleInput = document.getElementById("link-title");
-const linkUrlInput = document.getElementById("link-url");
-const linkBodyInput = document.getElementById("link-body");
-const targetDeviceSelect = document.getElementById("target-device");
-const sendPushButton = document.getElementById("send-push");
-const pushesList = document.getElementById("pushes-list");
-const statusMessage = document.getElementById("status-message");
-const autoOpenCheckbox = document.getElementById("auto-open-links");
+const updateNicknameButton = document.getElementById('update-nickname');
+const saveApiKeyButton = document.getElementById('save-api-key');
+const logoutButton = document.getElementById('logout');
+const userImage = document.getElementById('user-image');
+const userName = document.getElementById('user-name');
+const pushTypeNoteBtn = document.getElementById('push-type-note');
+const pushTypeLinkBtn = document.getElementById('push-type-link');
+const noteForm = document.getElementById('note-form');
+const linkForm = document.getElementById('link-form');
+const noteTitleInput = document.getElementById('note-title');
+const noteBodyInput = document.getElementById('note-body');
+const linkTitleInput = document.getElementById('link-title');
+const linkUrlInput = document.getElementById('link-url');
+const linkBodyInput = document.getElementById('link-body');
+const targetDeviceSelect = document.getElementById('target-device');
+const sendPushButton = document.getElementById('send-push');
+const pushesList = document.getElementById('pushes-list');
+const statusMessage = document.getElementById('status-message');
+const autoOpenCheckbox = document.getElementById('auto-open-links');
+const debugModeToggle = document.getElementById('debug-mode-toggle');
+const openDebugDashboardBtn = document.getElementById('open-debug-dashboard');
 
 // API URL constants
-const API_BASE_URL = "https://api.pushbullet.com/v2";
+const API_BASE_URL = 'https://api.pushbullet.com/v2';
 const USER_INFO_URL = `${API_BASE_URL}/users/me`;
 const DEVICES_URL = `${API_BASE_URL}/devices`;
 const PUSHES_URL = `${API_BASE_URL}/pushes`;
-const WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
+const WEBSOCKET_URL = 'wss://stream.pushbullet.com/websocket/';
 
 // State variables
 let apiKey = null;
-let deviceNickname = "Chrome"; // Default nickname
+let deviceNickname = 'Chrome'; // Default nickname
 let devices = [];
 let autoOpenLinks = true; // Default to true for auto opening links
 let websocket = null;
 let hasInitialized = false;
-let currentPushType = "note"; // Default to note
+let currentPushType = 'note'; // Default to note
 
 // Initialize popup
-document.addEventListener("DOMContentLoaded", async () => {
-  console.log("Popup DOM loaded");
+document.addEventListener('DOMContentLoaded', async () => {
+  console.log('Popup DOM loaded');
 
   // Set up event listeners
   setupEventListeners();
@@ -59,17 +61,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Try to get session data from background script first (for instant loading)
   chrome.runtime.sendMessage(
     {
-      action: "getSessionData",
+      action: 'getSessionData',
     },
     (response) => {
       if (response && response.isAuthenticated) {
-        console.log("Received session data from background script:", response);
+        console.log('Received session data from background script:', response);
         // We have cached session data, use it
         const syncPromise = new Promise((resolve) => {
-          chrome.storage.sync.get(["apiKey"], resolve);
+          chrome.storage.sync.get(['apiKey'], resolve);
         });
         const localPromise = new Promise((resolve) => {
-          chrome.storage.local.get(["scrollToRecentPushes"], resolve);
+          chrome.storage.local.get(['scrollToRecentPushes'], resolve);
         });
         Promise.all([syncPromise, localPromise]).then(
           ([syncResult, localResult]) => {
@@ -83,7 +85,7 @@ document.addEventListener("DOMContentLoaded", async () => {
               // Check if we should scroll to recent pushes
               if (result.scrollToRecentPushes) {
                 // Clear the flag
-                chrome.storage.local.remove(["scrollToRecentPushes"]);
+                chrome.storage.local.remove(['scrollToRecentPushes']);
 
                 // Scroll to recent pushes section after a short delay to ensure the UI is fully rendered
                 setTimeout(() => {
@@ -91,12 +93,12 @@ document.addEventListener("DOMContentLoaded", async () => {
                 }, 100);
               }
             } else {
-              showSection("login");
+              showSection('login');
             }
           },
         );
       } else {
-        console.log("No session data available, checking storage");
+        console.log('No session data available, checking storage');
         // No cached session data, check storage
         checkStorageForApiKey();
       }
@@ -107,17 +109,17 @@ document.addEventListener("DOMContentLoaded", async () => {
 // Set up message listener for real-time updates
 function setupMessageListener() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log("Message received in popup:", message);
+    console.log('Message received in popup:', message);
 
     // Handle pushes updated message from background script
-    if (message.action === "pushesUpdated" && message.pushes) {
-      console.log("Received updated pushes from background script");
+    if (message.action === 'pushesUpdated' && message.pushes) {
+      console.log('Received updated pushes from background script');
       displayPushes(message.pushes);
     }
 
     // Handle session data updated message
-    if (message.action === "sessionDataUpdated" && message.isAuthenticated) {
-      console.log("Received updated session data from background script");
+    if (message.action === 'sessionDataUpdated' && message.isAuthenticated) {
+      console.log('Received updated session data from background script');
       setupWithCachedData(message);
     }
 
@@ -128,14 +130,14 @@ function setupMessageListener() {
 
 // Hide all sections initially
 function hideAllSections() {
-  loadingSection.style.display = "none";
-  loginSection.style.display = "none";
-  mainSection.style.display = "none";
+  loadingSection.style.display = 'none';
+  loginSection.style.display = 'none';
+  mainSection.style.display = 'none';
 }
 
 // Set up UI with cached data
 function setupWithCachedData(response) {
-  console.log("Setting up UI with cached data");
+  console.log('Setting up UI with cached data');
   devices = response.devices;
 
   // Update auto-open links setting
@@ -166,28 +168,31 @@ function setupWithCachedData(response) {
   displayPushes(response.recentPushes);
 
   // Show main section immediately
-  showSection("main");
+  showSection('main');
 
   // Connect to WebSocket for real-time updates
   connectWebSocket();
+
+  // Load debug mode state
+  loadDebugModeState();
 
   hasInitialized = true;
 }
 
 // Check storage for API key
 function checkStorageForApiKey() {
-  console.log("Checking storage for API key");
+  console.log('Checking storage for API key');
   // Show loading section while checking storage
-  showSection("loading");
+  showSection('loading');
 
   const syncPromise = new Promise((resolve) => {
     chrome.storage.sync.get(
-      ["apiKey", "autoOpenLinks", "deviceNickname"],
+      ['apiKey', 'autoOpenLinks', 'deviceNickname'],
       resolve,
     );
   });
   const localPromise = new Promise((resolve) => {
-    chrome.storage.local.get(["scrollToRecentPushes"], resolve);
+    chrome.storage.local.get(['scrollToRecentPushes'], resolve);
   });
 
   Promise.all([syncPromise, localPromise]).then(
@@ -212,13 +217,13 @@ function checkStorageForApiKey() {
 
         try {
           await initializeAuthenticated();
-          showSection("main");
+          showSection('main');
           hasInitialized = true;
 
           // Check if we should scroll to recent pushes
           if (result.scrollToRecentPushes) {
             // Clear the flag
-            chrome.storage.local.remove(["scrollToRecentPushes"]);
+            chrome.storage.local.remove(['scrollToRecentPushes']);
 
             // Scroll to recent pushes section after a short delay to ensure the UI is fully rendered
             setTimeout(() => {
@@ -226,11 +231,11 @@ function checkStorageForApiKey() {
             }, 100);
           }
         } catch (error) {
-          console.error("Error initializing:", error);
-          showSection("login");
+          console.error('Error initializing:', error);
+          showSection('login');
         }
       } else {
-        showSection("login");
+        showSection('login');
       }
     },
   );
@@ -238,46 +243,46 @@ function checkStorageForApiKey() {
 
 // Show the specified section and hide others
 function showSection(section) {
-  console.log("Showing section:", section);
-  loadingSection.style.display = section === "loading" ? "flex" : "none";
-  loginSection.style.display = section === "login" ? "block" : "none";
-  mainSection.style.display = section === "main" ? "block" : "none";
+  console.log('Showing section:', section);
+  loadingSection.style.display = section === 'loading' ? 'flex' : 'none';
+  loginSection.style.display = section === 'login' ? 'block' : 'none';
+  mainSection.style.display = section === 'main' ? 'block' : 'none';
 }
 
 // Set up event listeners
 function setupEventListeners() {
   // Save API key button
-  saveApiKeyButton.addEventListener("click", saveApiKey);
+  saveApiKeyButton.addEventListener('click', saveApiKey);
 
   // API key input - save on Enter key
-  apiKeyInput.addEventListener("keyup", (event) => {
-    if (event.key === "Enter") {
+  apiKeyInput.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') {
       saveApiKey();
     }
   });
 
   // Device nickname input - save on Enter key
-  deviceNicknameInput.addEventListener("keyup", (event) => {
-    if (event.key === "Enter") {
+  deviceNicknameInput.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') {
       saveApiKey();
     }
   });
 
   // Update nickname button
-  updateNicknameButton.addEventListener("click", updateDeviceNickname);
+  updateNicknameButton.addEventListener('click', updateDeviceNickname);
 
   // Logout button
-  logoutButton.addEventListener("click", logout);
+  logoutButton.addEventListener('click', logout);
 
   // Push type buttons
-  pushTypeNoteBtn.addEventListener("click", () => togglePushType("note"));
-  pushTypeLinkBtn.addEventListener("click", () => togglePushType("link"));
+  pushTypeNoteBtn.addEventListener('click', () => togglePushType('note'));
+  pushTypeLinkBtn.addEventListener('click', () => togglePushType('link'));
 
   // Send push button
-  sendPushButton.addEventListener("click", sendPush);
+  sendPushButton.addEventListener('click', sendPush);
 
   // Auto-open links checkbox
-  autoOpenCheckbox.addEventListener("change", () => {
+  autoOpenCheckbox.addEventListener('change', () => {
     autoOpenLinks = autoOpenCheckbox.checked;
 
     // Save to storage
@@ -287,8 +292,30 @@ function setupEventListeners() {
 
     // Notify background script
     chrome.runtime.sendMessage({
-      action: "autoOpenLinksChanged",
+      action: 'autoOpenLinksChanged',
       autoOpenLinks: autoOpenLinks,
+    });
+  });
+
+  // Debug mode toggle
+  debugModeToggle.addEventListener('change', () => {
+    const enabled = debugModeToggle.checked;
+
+    // Notify background script
+    chrome.runtime.sendMessage({
+      action: 'toggleDebugMode',
+      enabled: enabled,
+    }, (response) => {
+      if (response && response.success) {
+        console.log('Debug mode toggled:', enabled);
+      }
+    });
+  });
+
+  // Open debug dashboard button
+  openDebugDashboardBtn.addEventListener('click', () => {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('debug-dashboard.html')
     });
   });
 }
@@ -296,25 +323,25 @@ function setupEventListeners() {
 // Save API key
 async function saveApiKey() {
   const newApiKey = apiKeyInput.value.trim();
-  const newNickname = deviceNicknameInput.value.trim() || "Chrome"; // Default to 'Chrome' if empty
+  const newNickname = deviceNicknameInput.value.trim() || 'Chrome'; // Default to 'Chrome' if empty
 
   if (!newApiKey) {
-    showStatus("Please enter an Access Token.", "error");
+    showStatus('Please enter an Access Token.', 'error');
     return;
   }
 
-  showSection("loading");
+  showSection('loading');
 
   try {
     // Validate API key by making a request to get user info
     const response = await fetch(USER_INFO_URL, {
       headers: {
-        "Access-Token": newApiKey,
+        'Access-Token': newApiKey,
       },
     });
 
     if (!response.ok) {
-      throw new Error("Invalid Access Token");
+      throw new Error('Invalid Access Token');
     }
 
     // Save API key and device nickname to storage
@@ -329,24 +356,24 @@ async function saveApiKey() {
 
         // Notify background script about API key and nickname change
         chrome.runtime.sendMessage({
-          action: "apiKeyChanged",
+          action: 'apiKeyChanged',
           apiKey: newApiKey,
           deviceNickname: newNickname,
         });
 
         try {
           await initializeAuthenticated();
-          showSection("main");
+          showSection('main');
           hasInitialized = true;
         } catch (error) {
-          showStatus(`Error: ${error.message}`, "error");
-          showSection("login");
+          showStatus(`Error: ${error.message}`, 'error');
+          showSection('login');
         }
       },
     );
   } catch (error) {
-    showStatus(`Error: ${error.message}`, "error");
-    showSection("login");
+    showStatus(`Error: ${error.message}`, 'error');
+    showSection('login');
   }
 }
 
@@ -355,7 +382,7 @@ function updateDeviceNickname() {
   const newNickname = deviceNicknameSettingInput.value.trim();
 
   if (!newNickname) {
-    showStatus("Please enter a device nickname.", "error");
+    showStatus('Please enter a device nickname.', 'error');
     return;
   }
 
@@ -369,11 +396,11 @@ function updateDeviceNickname() {
 
       // Notify background script
       chrome.runtime.sendMessage({
-        action: "deviceNicknameChanged",
+        action: 'deviceNicknameChanged',
         deviceNickname: newNickname,
       });
 
-      showStatus("Device nickname updated successfully!", "success");
+      showStatus('Device nickname updated successfully!', 'success');
     },
   );
 }
@@ -381,13 +408,13 @@ function updateDeviceNickname() {
 // Logout
 function logout() {
   disconnectWebSocket();
-  chrome.storage.sync.remove(["apiKey"]);
-  chrome.storage.local.remove(["deviceIden"]);
+  chrome.storage.sync.remove(['apiKey']);
+  chrome.storage.local.remove(['deviceIden']);
   apiKey = null;
   hasInitialized = false;
-  showSection("login");
-  apiKeyInput.value = "";
-  deviceNicknameInput.value = "";
+  showSection('login');
+  apiKeyInput.value = '';
+  deviceNicknameInput.value = '';
 }
 
 // Initialize authenticated state
@@ -416,7 +443,7 @@ async function initializeAuthenticated() {
 
     return true;
   } catch (error) {
-    console.error("Error in initializeAuthenticated:", error);
+    console.error('Error in initializeAuthenticated:', error);
     throw error;
   }
 }
@@ -433,43 +460,43 @@ function connectWebSocket() {
     websocket = new WebSocket(wsUrl);
 
     websocket.onopen = (event) => {
-      console.log("Connected to Pushbullet WebSocket from popup");
+      console.log('Connected to Pushbullet WebSocket from popup');
     };
 
     websocket.onmessage = async (event) => {
       const data = JSON.parse(event.data);
-      console.log("WebSocket message received in popup:", data);
+      console.log('WebSocket message received in popup:', data);
 
       // Handle different message types
       switch (data.type) {
-        case "tickle":
-          if (data.subtype === "push") {
-            console.log(
-              "Push tickle received in popup, fetching latest pushes",
-            );
-            // Refresh pushes when a new push arrives
-            const pushes = await fetchRecentPushes();
-            displayPushes(pushes);
-          }
-          break;
-        case "push":
-          // Handle push message directly
-          if (data.push) {
-            console.log("Push message received directly in popup:", data.push);
-            // Add the new push to the list
-            const pushes = await fetchRecentPushes();
-            displayPushes(pushes);
-          }
-          break;
+      case 'tickle':
+        if (data.subtype === 'push') {
+          console.log(
+            'Push tickle received in popup, fetching latest pushes',
+          );
+          // Refresh pushes when a new push arrives
+          const pushes = await fetchRecentPushes();
+          displayPushes(pushes);
+        }
+        break;
+      case 'push':
+        // Handle push message directly
+        if (data.push) {
+          console.log('Push message received directly in popup:', data.push);
+          // Add the new push to the list
+          const pushes = await fetchRecentPushes();
+          displayPushes(pushes);
+        }
+        break;
       }
     };
 
     websocket.onerror = (error) => {
-      console.error("WebSocket error in popup:", error);
+      console.error('WebSocket error in popup:', error);
     };
 
     websocket.onclose = (event) => {
-      console.log("Disconnected from Pushbullet WebSocket in popup");
+      console.log('Disconnected from Pushbullet WebSocket in popup');
 
       // Try to reconnect after a delay
       setTimeout(() => {
@@ -479,7 +506,7 @@ function connectWebSocket() {
       }, 5000);
     };
   } catch (error) {
-    console.error("Error connecting to WebSocket from popup:", error);
+    console.error('Error connecting to WebSocket from popup:', error);
   }
 }
 
@@ -495,12 +522,12 @@ function disconnectWebSocket() {
 async function fetchUserInfo() {
   const response = await fetch(USER_INFO_URL, {
     headers: {
-      "Access-Token": apiKey,
+      'Access-Token': apiKey,
     },
   });
 
   if (!response.ok) {
-    throw new Error("Failed to fetch user info");
+    throw new Error('Failed to fetch user info');
   }
 
   return response.json();
@@ -510,12 +537,12 @@ async function fetchUserInfo() {
 async function fetchDevices() {
   const response = await fetch(DEVICES_URL, {
     headers: {
-      "Access-Token": apiKey,
+      'Access-Token': apiKey,
     },
   });
 
   if (!response.ok) {
-    throw new Error("Failed to fetch devices");
+    throw new Error('Failed to fetch devices');
   }
 
   const data = await response.json();
@@ -527,12 +554,12 @@ async function fetchRecentPushes() {
   // Get up to 20 recent pushes to ensure we have enough to display
   const response = await fetch(`${PUSHES_URL}?limit=20`, {
     headers: {
-      "Access-Token": apiKey,
+      'Access-Token': apiKey,
     },
   });
 
   if (!response.ok) {
-    throw new Error("Failed to fetch pushes");
+    throw new Error('Failed to fetch pushes');
   }
 
   const data = await response.json();
@@ -541,11 +568,11 @@ async function fetchRecentPushes() {
   let deviceIden = null;
   try {
     const deviceResult = await new Promise((resolve) => {
-      chrome.storage.local.get(["deviceIden"], resolve);
+      chrome.storage.local.get(['deviceIden'], resolve);
     });
     deviceIden = deviceResult.deviceIden;
   } catch (error) {
-    console.error("Error getting device iden:", error);
+    console.error('Error getting device iden:', error);
   }
 
   // Filter pushes that aren't empty
@@ -563,9 +590,9 @@ function updateUserInfo(userInfo) {
 
   if (userInfo.image_url) {
     userImage.src = userInfo.image_url;
-    userImage.style.display = "block";
+    userImage.style.display = 'block';
   } else {
-    userImage.style.display = "none";
+    userImage.style.display = 'none';
   }
 }
 
@@ -581,19 +608,19 @@ function populateDeviceDropdown(devicesList) {
 
   // Add devices to dropdown
   devicesToUse.forEach((device) => {
-    const option = document.createElement("option");
+    const option = document.createElement('option');
     option.value = device.iden;
-    option.textContent = device.nickname || device.model || "Unknown Device";
+    option.textContent = device.nickname || device.model || 'Unknown Device';
     targetDeviceSelect.appendChild(option);
   });
 }
 
 // Display pushes in the UI
 function displayPushes(pushes) {
-  pushesList.innerHTML = "";
+  pushesList.innerHTML = '';
 
   if (!pushes || pushes.length === 0) {
-    pushesList.innerHTML = "<p>No recent pushes</p>";
+    pushesList.innerHTML = '<p>No recent pushes</p>';
     return;
   }
 
@@ -605,37 +632,37 @@ function displayPushes(pushes) {
       return; // Skip empty pushes
     }
 
-    const pushItem = document.createElement("div");
-    pushItem.className = "push-item";
+    const pushItem = document.createElement('div');
+    pushItem.className = 'push-item';
 
     // Add a timestamp
     if (push.created) {
       const timestamp = new Date(push.created * 1000);
-      const timeElement = document.createElement("div");
-      timeElement.className = "push-time";
+      const timeElement = document.createElement('div');
+      timeElement.className = 'push-time';
       timeElement.textContent = formatTimestamp(timestamp);
       pushItem.appendChild(timeElement);
     }
 
     if (push.title) {
-      const title = document.createElement("div");
-      title.className = "push-title";
+      const title = document.createElement('div');
+      title.className = 'push-title';
       title.textContent = push.title;
       pushItem.appendChild(title);
     }
 
     if (push.url) {
-      const url = document.createElement("a");
+      const url = document.createElement('a');
       url.href = push.url;
-      url.target = "_blank";
-      url.className = "push-url";
+      url.target = '_blank';
+      url.className = 'push-url';
       url.textContent = push.url;
       pushItem.appendChild(url);
     }
 
     if (push.body) {
-      const body = document.createElement("div");
-      body.className = "push-body";
+      const body = document.createElement('div');
+      body.className = 'push-body';
       body.textContent = push.body;
       pushItem.appendChild(body);
     }
@@ -660,7 +687,7 @@ function formatTimestamp(date) {
   } else if (diffMin > 0) {
     return `${diffMin}m ago`;
   } else {
-    return "just now";
+    return 'just now';
   }
 }
 
@@ -669,15 +696,15 @@ async function togglePushType(type) {
   currentPushType = type;
 
   // Update button styles
-  pushTypeNoteBtn.classList.toggle("active", type === "note");
-  pushTypeLinkBtn.classList.toggle("active", type === "link");
+  pushTypeNoteBtn.classList.toggle('active', type === 'note');
+  pushTypeLinkBtn.classList.toggle('active', type === 'link');
 
-  if (type === "note") {
-    noteForm.style.display = "block";
-    linkForm.style.display = "none";
-  } else if (type === "link") {
-    noteForm.style.display = "none";
-    linkForm.style.display = "block";
+  if (type === 'note') {
+    noteForm.style.display = 'block';
+    linkForm.style.display = 'none';
+  } else if (type === 'link') {
+    noteForm.style.display = 'none';
+    linkForm.style.display = 'block';
 
     // Auto-populate link fields with current tab info
     try {
@@ -686,11 +713,11 @@ async function togglePushType(type) {
         currentWindow: true,
       });
       if (tabs[0]) {
-        linkUrlInput.value = tabs[0].url || "";
-        linkTitleInput.value = tabs[0].title || "";
+        linkUrlInput.value = tabs[0].url || '';
+        linkTitleInput.value = tabs[0].title || '';
       }
     } catch (error) {
-      console.error("Error getting current tab info:", error);
+      console.error('Error getting current tab info:', error);
     }
   }
 }
@@ -705,77 +732,77 @@ async function sendPush() {
     };
 
     // Set device target
-    if (targetDevice !== "all") {
+    if (targetDevice !== 'all') {
       pushData.device_iden = targetDevice;
     }
 
     // Get the source device iden
     try {
       const deviceResult = await new Promise((resolve) => {
-        chrome.storage.local.get(["deviceIden"], resolve);
+        chrome.storage.local.get(['deviceIden'], resolve);
       });
       if (deviceResult.deviceIden) {
         pushData.source_device_iden = deviceResult.deviceIden;
       }
     } catch (error) {
-      console.error("Error getting device iden:", error);
+      console.error('Error getting device iden:', error);
     }
 
     // Set push data based on type
-    if (pushType === "note") {
+    if (pushType === 'note') {
       pushData.title = noteTitleInput.value.trim();
       pushData.body = noteBodyInput.value.trim();
 
       if (!pushData.title && !pushData.body) {
-        showStatus("Please enter a title or body for the note.", "error");
+        showStatus('Please enter a title or body for the note.', 'error');
         return;
       }
-    } else if (pushType === "link") {
+    } else if (pushType === 'link') {
       pushData.title = linkTitleInput.value.trim();
       pushData.url = linkUrlInput.value.trim();
       pushData.body = linkBodyInput.value.trim();
 
       if (!pushData.url) {
-        showStatus("Please enter a URL for the link.", "error");
+        showStatus('Please enter a URL for the link.', 'error');
         return;
       }
     }
 
     // Send push
     const response = await fetch(PUSHES_URL, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Access-Token": apiKey,
-        "Content-Type": "application/json",
+        'Access-Token': apiKey,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify(pushData),
     });
 
     if (!response.ok) {
-      throw new Error("Failed to send push");
+      throw new Error('Failed to send push');
     }
 
     // Clear form
     clearPushForm();
 
     // Show success message
-    showStatus("Push sent successfully!", "success");
+    showStatus('Push sent successfully!', 'success');
 
     // Reload pushes
     const pushes = await fetchRecentPushes();
     displayPushes(pushes);
   } catch (error) {
-    showStatus(`Error: ${error.message}`, "error");
+    showStatus(`Error: ${error.message}`, 'error');
   }
 }
 
 // Clear push form
 function clearPushForm() {
-  noteTitleInput.value = "";
-  noteBodyInput.value = "";
-  linkTitleInput.value = "";
-  linkUrlInput.value = "";
-  linkBodyInput.value = "";
+  noteTitleInput.value = '';
+  noteBodyInput.value = '';
+  linkTitleInput.value = '';
+  linkUrlInput.value = '';
+  linkBodyInput.value = '';
 }
 
 // Show status message
@@ -785,19 +812,31 @@ function showStatus(message, type) {
 
   // Clear message after 3 seconds
   setTimeout(() => {
-    statusMessage.textContent = "";
-    statusMessage.className = "";
+    statusMessage.textContent = '';
+    statusMessage.className = '';
   }, 3000);
 }
 
 // Scroll to recent pushes section
 function scrollToRecentPushes() {
-  const recentPushesSection = document.querySelector(".recent-pushes");
+  const recentPushesSection = document.querySelector('.recent-pushes');
   if (recentPushesSection) {
-    console.log("Scrolling to recent pushes section");
+    console.log('Scrolling to recent pushes section');
     recentPushesSection.scrollIntoView({
-      behavior: "smooth",
+      behavior: 'smooth',
     });
   }
+}
+
+// Load debug mode state from background
+function loadDebugModeState() {
+  chrome.runtime.sendMessage({
+    action: 'getDebugConfig'
+  }, (response) => {
+    if (response && response.success && response.config) {
+      debugModeToggle.checked = response.config.enabled;
+      console.log('Debug mode state loaded:', response.config.enabled);
+    }
+  });
 }
 

@@ -248,4 +248,26 @@ a:hover {
 #status-message.error {
   background-color: #f8d7da;
   color: #721c24;
-} 
+}
+
+/* Debug controls */
+.secondary-btn {
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 8px;
+  width: 100%;
+  transition: background-color 0.2s;
+}
+
+.secondary-btn:hover {
+  background-color: #5a6268;
+}
+
+.secondary-btn:active {
+  background-color: #545b62;
+}

@@ -17,6 +17,9 @@ An unofficial Chrome extension for Pushbullet that uses Manifest V3 to replace t
 - Improved UI with button-based push type selection
 - Auto-populate link fields with current tab URL and title
 - Secure API key storage with basic obfuscation
+- **Debug Dashboard** with real-time monitoring and diagnostics
+- **Debug Mode Toggle** for easy troubleshooting
+- **Debug Log Export** for sharing diagnostic information
 - No external dependencies
 - Manifest V3 compliant
 
@@ -82,6 +85,28 @@ When enabled (default), links sent directly to your Chrome device will automatic
 
 Your Access Token and settings sync automatically across Chrome browsers signed into the same Google account. Changes made in one browser will appear in others after a short sync delay.
 
+### Debug Features
+
+The extension includes comprehensive debugging tools to help diagnose issues and monitor performance:
+
+#### Debug Mode Toggle
+- Enable or disable debug mode from the extension popup settings
+- When enabled, detailed logging information is collected
+- Debug mode state persists across browser sessions
+
+#### Debug Dashboard
+- Access the debug dashboard by clicking "Open Debug Dashboard" in the settings
+- View real-time logs with filtering by category and level
+- Monitor WebSocket and notification performance metrics
+- Track errors and critical issues
+- View system configuration and status
+
+#### Debug Log Export
+- Export debug logs in JSON or text format
+- Share diagnostic information with support or for offline analysis
+- Includes logs, performance metrics, error data, and system information
+- Automatically sanitizes sensitive data (API keys, tokens)
+
 ## Troubleshooting
 
 ### Extension Not Loading
@@ -107,6 +132,14 @@ Your Access Token and settings sync automatically across Chrome browsers signed 
 ### Permission Errors
 - Re-install the extension to grant required permissions
 - Check that all required permissions are enabled in `chrome://extensions`
+
+### Using the Debug Dashboard
+For detailed troubleshooting:
+1. Open the extension popup
+2. Scroll to Settings section
+3. Click "Open Debug Dashboard"
+4. Review logs, performance metrics, and error reports
+5. Export debug data if you need to share it with support
 
 ## Privacy
 
@@ -137,20 +170,28 @@ Created as an independent alternative to the original Pushbullet extension which
 - `manifest.json`: Extension manifest (Manifest V3)
 - `popup.html/js/popup.js`: Extension popup interface
 - `background.js`: Background service worker for API calls and WebSocket
+- `debug-dashboard.html/js/debug-dashboard.js`: Debug dashboard interface
 - `css/popup.css`: Popup styling
+- `css/debug-dashboard.css`: Debug dashboard styling
 - `js/`: JavaScript files
 - `icons/`: Extension icons
+- `package.json`: NPM dependencies (ESLint)
+- `.eslintrc.json`: ESLint configuration
 
 ### Building and Testing
-1. Load the extension unpacked as described in Installation
-2. Make changes to the code
-3. Reload the extension in `chrome://extensions`
-4. Test functionality
+1. Install dependencies: `npm install`
+2. Run linting: `npm run lint`
+3. Load the extension unpacked as described in Installation
+4. Make changes to the code
+5. Reload the extension in `chrome://extensions`
+6. Test functionality using the debug dashboard
 
 ### Code Style
 - Uses modern JavaScript (ES6+)
 - Follows Chrome Extension best practices
-- Includes basic error handling and logging
+- Linted with ESLint
+- Includes comprehensive error handling and debug logging
+- All code follows 2-space indentation and single-quote style
 
 ## Contributing
 
