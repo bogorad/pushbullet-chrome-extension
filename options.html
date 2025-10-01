@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pushbullet Settings</title>
+  <link rel="stylesheet" href="css/options.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Pushbullet Settings</h1>
+      <p class="subtitle">Configure your Pushbullet extension preferences</p>
+    </header>
+
+    <main>
+      <section class="settings-section">
+        <h2>Device Settings</h2>
+        <div class="setting-item">
+          <label for="device-nickname">Device Nickname</label>
+          <div class="input-group">
+            <input type="text" id="device-nickname" placeholder="Enter device nickname">
+            <button id="update-nickname" class="btn-primary">Update</button>
+          </div>
+          <p class="help-text">This name will identify this browser in your Pushbullet devices list.</p>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h2>Notification Settings</h2>
+        <div class="setting-item">
+          <label for="notification-timeout">Auto-dismiss Timeout (seconds)</label>
+          <div class="input-group">
+            <input type="number" id="notification-timeout" min="0" max="60" step="1" value="10">
+            <span class="input-suffix">seconds</span>
+          </div>
+          <p class="help-text">How long notifications stay visible before auto-dismissing. Set to 0 to disable auto-dismiss.</p>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h2>Behavior Settings</h2>
+        <div class="setting-item">
+          <label class="checkbox-label">
+            <input type="checkbox" id="auto-open-links" checked>
+            <span>Auto-open links when received</span>
+          </label>
+          <p class="help-text">Automatically open link pushes in a new tab when received.</p>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h2>Debug Settings</h2>
+        <div class="setting-item">
+          <label class="checkbox-label">
+            <input type="checkbox" id="debug-mode" checked>
+            <span>Enable Debug Mode</span>
+          </label>
+          <p class="help-text">Enable detailed logging for troubleshooting. Access debug dashboard from the extension popup.</p>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h2>Actions</h2>
+        <div class="action-buttons">
+          <button id="save-settings" class="btn-primary btn-large">Save All Settings</button>
+          <button id="reset-settings" class="btn-secondary">Reset to Defaults</button>
+        </div>
+      </section>
+
+      <div id="status-message" class="status-message"></div>
+    </main>
+
+    <footer>
+      <p class="disclaimer">This is an unofficial extension and is not affiliated with Pushbullet Inc.</p>
+      <p class="version">Version <span id="version">1.0.17</span></p>
+    </footer>
+  </div>
+
+  <script src="js/options.js"></script>
+</body>
+</html>
+

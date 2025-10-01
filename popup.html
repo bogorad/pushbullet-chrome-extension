@@ -83,6 +83,9 @@
   <div id="main-section">
     <div class="header">
       <div class="user-info">
+        <div class="connection-indicator" id="connection-indicator" title="Connection status">
+          <span class="connection-dot"></span>
+        </div>
         <img id="user-image" src="" alt="User Image">
         <span id="user-name">User Name</span>
       </div>
@@ -136,26 +139,10 @@
     </div>
     
     <div class="settings">
-      <h2>Settings</h2>
-      <div class="setting-item">
-        <label for="auto-open-links">
-          <input type="checkbox" id="auto-open-links" checked>
-          Auto-open links when received
-        </label>
-      </div>
-      <div class="setting-item">
-        <label for="device-nickname-setting">Device Nickname:</label>
-        <div class="form-group">
-          <input type="text" id="device-nickname-setting" placeholder="Device Nickname">
-          <button id="update-nickname">Update</button>
-        </div>
-      </div>
-      <div class="setting-item">
-        <label for="debug-mode-toggle">
-          <input type="checkbox" id="debug-mode-toggle" checked>
-          Enable Debug Mode
-        </label>
-        <button id="open-debug-dashboard" class="secondary-btn">Open Debug Dashboard</button>
+      <h2>Quick Actions</h2>
+      <div class="action-buttons">
+        <button id="open-settings" class="secondary-btn">⚙️ Settings</button>
+        <button id="open-debug-dashboard" class="secondary-btn">🐛 Debug Dashboard</button>
       </div>
     </div>
     

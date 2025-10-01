@@ -26,7 +26,9 @@ const logsContainer = document.getElementById('logs-container');
 
 // Performance tab elements
 const websocketMetricsEl = document.getElementById('websocket-metrics');
+const qualityMetricsEl = document.getElementById('quality-metrics');
 const notificationMetricsEl = document.getElementById('notification-metrics');
+const initializationStatsEl = document.getElementById('initialization-stats');
 
 // Errors tab elements
 const errorSummaryEl = document.getElementById('error-summary');
@@ -156,6 +158,7 @@ function updateDashboard(data) {
   updateSummary(data);
   renderLogs();
   renderPerformanceMetrics(data.performance);
+  renderInitializationStats(data.initializationStats);
   renderErrors(data.errors);
   renderConfig(data.config, data.websocketState);
 }
@@ -175,7 +178,9 @@ function updateSummary(data) {
   }
   
   // Total logs
-  if (data.logs && data.logs.length) {
+  if (data.totalLogs !== undefined) {
+    totalLogsEl.textContent = data.totalLogs;
+  } else if (data.logs && data.logs.length) {
     totalLogsEl.textContent = data.logs.length;
   } else {
     totalLogsEl.textContent = '0';
@@ -246,10 +251,12 @@ function renderLogs() {
 function renderPerformanceMetrics(performance) {
   if (!performance) {
     websocketMetricsEl.innerHTML = '<p class="loading">No data available</p>';
+    qualityMetricsEl.innerHTML = '<p class="loading">No data available</p>';
     notificationMetricsEl.innerHTML = '<p class="loading">No data available</p>';
+    initializationStatsEl.innerHTML = '<p class="loading">No data available</p>';
     return;
   }
-  
+
   // WebSocket metrics
   if (performance.websocket) {
     const ws = performance.websocket;
@@ -261,7 +268,21 @@ function renderPerformanceMetrics(performance) {
       <p><strong>Last Connection:</strong> <span>${ws.lastConnectionTime ? new Date(ws.lastConnectionTime).toLocaleString() : 'Never'}</span></p>
     `;
   }
-  
+
+  // Connection quality metrics
+  if (performance.qualityMetrics) {
+    const quality = performance.qualityMetrics;
+    qualityMetricsEl.innerHTML = `
+      <p><strong>Average Latency:</strong> <span>${quality.averageLatency ? quality.averageLatency.toFixed(0) + 'ms' : 'N/A'}</span></p>
+      <p><strong>Min/Max Latency:</strong> <span>${quality.minLatency ? quality.minLatency.toFixed(0) : 'N/A'} / ${quality.maxLatency ? quality.maxLatency.toFixed(0) : 'N/A'} ms</span></p>
+      <p><strong>Total Uptime:</strong> <span>${formatDuration(quality.connectionUptime)}</span></p>
+      <p><strong>Current Uptime:</strong> <span>${formatDuration(quality.currentUptime)}</span></p>
+      <p><strong>Disconnections:</strong> <span>${quality.disconnectionCount || 0}</span></p>
+      <p><strong>Health Checks:</strong> <span class="success">${quality.healthChecksPassed || 0} passed</span> / <span class="error">${quality.healthChecksFailed || 0} failed</span></p>
+      <p><strong>Consecutive Failures:</strong> <span class="${quality.consecutiveFailures > 3 ? 'error' : ''}">${quality.consecutiveFailures || 0}</span></p>
+    `;
+  }
+
   // Notification metrics
   if (performance.notifications) {
     const notif = performance.notifications;
@@ -271,6 +292,48 @@ function renderPerformanceMetrics(performance) {
       <p><strong>Notifications Failed:</strong> <span>${notif.notificationsFailed || 0}</span></p>
       <p><strong>Avg Processing Time:</strong> <span>${notif.averageProcessingTime ? notif.averageProcessingTime.toFixed(2) + 'ms' : 'N/A'}</span></p>
     `;
+  }
+}
+
+// Format duration in ms to human readable
+function formatDuration(ms) {
+  if (!ms || ms === 0) return '0s';
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  } else {
+    return `${seconds}s`;
+  }
+}
+
+// Render initialization statistics
+function renderInitializationStats(initStats) {
+  if (!initStats || !initStats.stats) {
+    initializationStatsEl.innerHTML = '<p class="loading">No data available</p>';
+    return;
+  }
+
+  const stats = initStats.stats;
+  initializationStatsEl.innerHTML = `
+    <p><strong>Total Initializations:</strong> <span>${stats.total || 0}</span></p>
+    <p><strong>On Install/Update:</strong> <span>${stats.onInstalled || 0}</span></p>
+    <p><strong>On Browser Startup:</strong> <span>${stats.onStartup || 0}</span></p>
+    <p><strong>Service Worker Wakeup:</strong> <span>${stats.serviceWorkerWakeup || 0}</span></p>
+    <p><strong>Unknown Source:</strong> <span>${stats.unknown || 0}</span></p>
+    <p><strong>Last Initialization:</strong> <span>${stats.lastInitialization ? new Date(stats.lastInitialization).toLocaleString() : 'Never'}</span></p>
+  `;
+
+  // Show recent initializations
+  if (stats.recentInitializations && stats.recentInitializations.length > 0) {
+    const recentHtml = stats.recentInitializations.map(init =>
+      `<p style="font-size: 12px; margin: 5px 0;"><strong>${init.source}:</strong> ${new Date(init.timestamp).toLocaleTimeString()}</p>`
+    ).join('');
+    initializationStatsEl.innerHTML += '<hr style="margin: 10px 0; border-color: #444;"><p style="font-size: 11px; color: #888; margin-bottom: 5px;">Recent (last 10):</p>' + recentHtml;
   }
 }
 

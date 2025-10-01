@@ -1,17 +1,16 @@
+'use strict';
+
 // DOM elements
 const loadingSection = document.getElementById('loading-section');
 const loginSection = document.getElementById('login-section');
 const mainSection = document.getElementById('main-section');
 const apiKeyInput = document.getElementById('api-key');
 const deviceNicknameInput = document.getElementById('device-nickname');
-const deviceNicknameSettingInput = document.getElementById(
-  'device-nickname-setting',
-);
-const updateNicknameButton = document.getElementById('update-nickname');
 const saveApiKeyButton = document.getElementById('save-api-key');
 const logoutButton = document.getElementById('logout');
 const userImage = document.getElementById('user-image');
 const userName = document.getElementById('user-name');
+const connectionIndicator = document.getElementById('connection-indicator');
 const pushTypeNoteBtn = document.getElementById('push-type-note');
 const pushTypeLinkBtn = document.getElementById('push-type-link');
 const noteForm = document.getElementById('note-form');
@@ -25,8 +24,7 @@ const targetDeviceSelect = document.getElementById('target-device');
 const sendPushButton = document.getElementById('send-push');
 const pushesList = document.getElementById('pushes-list');
 const statusMessage = document.getElementById('status-message');
-const autoOpenCheckbox = document.getElementById('auto-open-links');
-const debugModeToggle = document.getElementById('debug-mode-toggle');
+const openSettingsBtn = document.getElementById('open-settings');
 const openDebugDashboardBtn = document.getElementById('open-debug-dashboard');
 
 // API URL constants
@@ -40,7 +38,6 @@ const WEBSOCKET_URL = 'wss://stream.pushbullet.com/websocket/';
 let apiKey = null;
 let deviceNickname = 'Chrome'; // Default nickname
 let devices = [];
-let autoOpenLinks = true; // Default to true for auto opening links
 let websocket = null;
 let hasInitialized = false;
 let currentPushType = 'note'; // Default to note
@@ -140,20 +137,16 @@ function setupWithCachedData(response) {
   console.log('Setting up UI with cached data');
   devices = response.devices;
 
-  // Update auto-open links setting
+  // Update auto-open links setting (stored in background, no UI in popup)
   if (response.autoOpenLinks !== undefined) {
-    autoOpenLinks = response.autoOpenLinks;
-    if (autoOpenCheckbox) {
-      autoOpenCheckbox.checked = autoOpenLinks;
-    }
+    // Just store it, no checkbox to update in popup anymore
+    console.log('Auto-open links setting:', response.autoOpenLinks);
   }
 
-  // Update device nickname
+  // Update device nickname (stored in background, no UI in popup)
   if (response.deviceNickname) {
     deviceNickname = response.deviceNickname;
-    if (deviceNicknameSettingInput) {
-      deviceNicknameSettingInput.value = deviceNickname;
-    }
+    console.log('Device nickname:', deviceNickname);
   }
 
   // Update user info
@@ -170,11 +163,15 @@ function setupWithCachedData(response) {
   // Show main section immediately
   showSection('main');
 
+  // Update connection indicator based on WebSocket state
+  if (response.websocketConnected) {
+    updateConnectionIndicator('connected');
+  } else {
+    updateConnectionIndicator('connecting');
+  }
+
   // Connect to WebSocket for real-time updates
   connectWebSocket();
-
-  // Load debug mode state
-  loadDebugModeState();
 
   hasInitialized = true;
 }
@@ -202,17 +199,13 @@ function checkStorageForApiKey() {
         apiKey = result.apiKey;
 
         if (result.autoOpenLinks !== undefined) {
-          autoOpenLinks = result.autoOpenLinks;
-          if (autoOpenCheckbox) {
-            autoOpenCheckbox.checked = autoOpenLinks;
-          }
+          // Just log it, no checkbox to update in popup anymore
+          console.log('Auto-open links setting:', result.autoOpenLinks);
         }
 
         if (result.deviceNickname) {
           deviceNickname = result.deviceNickname;
-          if (deviceNicknameSettingInput) {
-            deviceNicknameSettingInput.value = deviceNickname;
-          }
+          console.log('Device nickname:', deviceNickname);
         }
 
         try {
@@ -268,9 +261,6 @@ function setupEventListeners() {
     }
   });
 
-  // Update nickname button
-  updateNicknameButton.addEventListener('click', updateDeviceNickname);
-
   // Logout button
   logoutButton.addEventListener('click', logout);
 
@@ -281,35 +271,9 @@ function setupEventListeners() {
   // Send push button
   sendPushButton.addEventListener('click', sendPush);
 
-  // Auto-open links checkbox
-  autoOpenCheckbox.addEventListener('change', () => {
-    autoOpenLinks = autoOpenCheckbox.checked;
-
-    // Save to storage
-    chrome.storage.sync.set({
-      autoOpenLinks: autoOpenLinks,
-    });
-
-    // Notify background script
-    chrome.runtime.sendMessage({
-      action: 'autoOpenLinksChanged',
-      autoOpenLinks: autoOpenLinks,
-    });
-  });
-
-  // Debug mode toggle
-  debugModeToggle.addEventListener('change', () => {
-    const enabled = debugModeToggle.checked;
-
-    // Notify background script
-    chrome.runtime.sendMessage({
-      action: 'toggleDebugMode',
-      enabled: enabled,
-    }, (response) => {
-      if (response && response.success) {
-        console.log('Debug mode toggled:', enabled);
-      }
-    });
+  // Open settings button
+  openSettingsBtn.addEventListener('click', () => {
+    chrome.runtime.openOptionsPage();
   });
 
   // Open debug dashboard button
@@ -375,34 +339,6 @@ async function saveApiKey() {
     showStatus(`Error: ${error.message}`, 'error');
     showSection('login');
   }
-}
-
-// Update device nickname
-function updateDeviceNickname() {
-  const newNickname = deviceNicknameSettingInput.value.trim();
-
-  if (!newNickname) {
-    showStatus('Please enter a device nickname.', 'error');
-    return;
-  }
-
-  // Save to storage
-  chrome.storage.sync.set(
-    {
-      deviceNickname: newNickname,
-    },
-    () => {
-      deviceNickname = newNickname;
-
-      // Notify background script
-      chrome.runtime.sendMessage({
-        action: 'deviceNicknameChanged',
-        deviceNickname: newNickname,
-      });
-
-      showStatus('Device nickname updated successfully!', 'success');
-    },
-  );
 }
 
 // Logout
@@ -769,6 +705,7 @@ async function sendPush() {
     }
 
     // Send push
+    console.log('Sending push:', pushData);
     const response = await fetch(PUSHES_URL, {
       method: 'POST',
       headers: {
@@ -779,7 +716,18 @@ async function sendPush() {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to send push');
+      const errorText = await response.text();
+      console.error('Push failed:', response.status, errorText);
+      let errorMessage = 'Failed to send push';
+      try {
+        const errorData = JSON.parse(errorText);
+        if (errorData.error && errorData.error.message) {
+          errorMessage = errorData.error.message;
+        }
+      } catch (e) {
+        // Use default error message
+      }
+      throw new Error(errorMessage);
     }
 
     // Clear form
@@ -828,15 +776,37 @@ function scrollToRecentPushes() {
   }
 }
 
-// Load debug mode state from background
-function loadDebugModeState() {
-  chrome.runtime.sendMessage({
-    action: 'getDebugConfig'
-  }, (response) => {
-    if (response && response.success && response.config) {
-      debugModeToggle.checked = response.config.enabled;
-      console.log('Debug mode state loaded:', response.config.enabled);
-    }
-  });
+// Update connection indicator
+function updateConnectionIndicator(state) {
+  if (!connectionIndicator) return;
+
+  // Remove all state classes
+  connectionIndicator.classList.remove('connected', 'connecting', 'disconnected', 'polling');
+
+  // Add new state class
+  connectionIndicator.classList.add(state);
+
+  // Update title
+  const titles = {
+    connected: 'Connected - Real-time updates active',
+    connecting: 'Connecting...',
+    disconnected: 'Disconnected - Reconnecting...',
+    polling: 'Polling mode - Limited updates'
+  };
+  connectionIndicator.title = titles[state] || 'Unknown status';
+
+  console.log('Connection indicator updated:', state);
 }
+
+// Listen for connection state changes from background
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'connectionStateChanged') {
+    updateConnectionIndicator(message.state);
+  } else if (message.action === 'pushesUpdated') {
+    // Update pushes list
+    if (message.pushes) {
+      displayPushes(message.pushes);
+    }
+  }
+});
 
