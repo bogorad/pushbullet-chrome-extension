@@ -34,7 +34,8 @@
       flex: 1;
       padding: 8px 12px;
       border: 1px solid #ccc;
-      background-color: #f9f9f9;
+      background-color: #4a4a4a;
+      color: #ffffff;
       cursor: pointer;
       border-radius: 4px;
       transition: background-color 0.2s;
@@ -47,11 +48,46 @@
     }
 
     .push-type-btn:hover {
-      background-color: #e9ecef;
+      background-color: #5a5a5a;
     }
 
     .push-type-btn.active:hover {
       background-color: #0056b3;
+    }
+
+    .file-input-wrapper {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+      width: 100%;
+    }
+
+    .file-input-wrapper input[type=file] {
+      position: absolute;
+      left: -9999px;
+    }
+
+    .file-input-label {
+      display: block;
+      padding: 10px;
+      background-color: #f0f0f0;
+      border: 2px dashed #ccc;
+      border-radius: 4px;
+      text-align: center;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .file-input-label:hover {
+      background-color: #e0e0e0;
+    }
+
+    .file-selected {
+      margin-top: 8px;
+      padding: 8px;
+      background-color: #e7f3ff;
+      border-radius: 4px;
+      font-size: 13px;
     }
   </style>
 </head>
@@ -100,6 +136,7 @@
          <div class="push-type-buttons">
            <button id="push-type-note" class="push-type-btn active">Note</button>
            <button id="push-type-link" class="push-type-btn">Link</button>
+           <button id="push-type-file" class="push-type-btn">Attach</button>
          </div>
        </div>
       
@@ -123,7 +160,24 @@
           <textarea id="link-body" placeholder="Comment (optional)"></textarea>
         </div>
       </div>
-      
+
+      <div id="file-form" style="display: none;">
+        <div class="form-group">
+          <div class="file-input-wrapper">
+            <input type="file" id="file-input" accept="*/*">
+            <label for="file-input" class="file-input-label">
+              📎 Click to select a file
+            </label>
+          </div>
+          <div id="file-selected" class="file-selected" style="display: none;">
+            <strong>Selected:</strong> <span id="file-name"></span> (<span id="file-size"></span>)
+          </div>
+        </div>
+        <div class="form-group">
+          <textarea id="file-body" placeholder="Description (optional)"></textarea>
+        </div>
+      </div>
+
       <div class="form-group">
         <label for="target-device">Send to:</label>
         <select id="target-device">

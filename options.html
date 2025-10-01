@@ -50,6 +50,21 @@
       </section>
 
       <section class="settings-section">
+        <h2>End-to-End Encryption</h2>
+        <div class="setting-item">
+          <label for="encryption-password">Encryption Password</label>
+          <input type="password" id="encryption-password" placeholder="Enter your Pushbullet E2EE password">
+          <p class="help-text">
+            Enter your Pushbullet End-to-End Encryption password to decrypt SMS and mirrored notifications.
+            This password is stored locally and never synced. Leave blank to receive notifications without decryption.
+          </p>
+          <p class="help-text" style="color: #ff6b6b; font-weight: 500;">
+            ⚠️ Security Note: Your password is stored in local Chrome storage (not synced). Only enter this if you trust this device.
+          </p>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h2>Debug Settings</h2>
         <div class="setting-item">
           <label class="checkbox-label">
@@ -73,7 +88,7 @@
 
     <footer>
       <p class="disclaimer">This is an unofficial extension and is not affiliated with Pushbullet Inc.</p>
-      <p class="version">Version <span id="version">1.0.17</span></p>
+      <p class="version">Version <span id="version">1.0.25</span></p>
     </footer>
   </div>
 

@@ -13,8 +13,14 @@ const userName = document.getElementById('user-name');
 const connectionIndicator = document.getElementById('connection-indicator');
 const pushTypeNoteBtn = document.getElementById('push-type-note');
 const pushTypeLinkBtn = document.getElementById('push-type-link');
+const pushTypeFileBtn = document.getElementById('push-type-file');
 const noteForm = document.getElementById('note-form');
 const linkForm = document.getElementById('link-form');
+const fileForm = document.getElementById('file-form');
+const fileInput = document.getElementById('file-input');
+const fileSelected = document.getElementById('file-selected');
+const fileName = document.getElementById('file-name');
+const fileSize = document.getElementById('file-size');
 const noteTitleInput = document.getElementById('note-title');
 const noteBodyInput = document.getElementById('note-body');
 const linkTitleInput = document.getElementById('link-title');
@@ -267,6 +273,10 @@ function setupEventListeners() {
   // Push type buttons
   pushTypeNoteBtn.addEventListener('click', () => togglePushType('note'));
   pushTypeLinkBtn.addEventListener('click', () => togglePushType('link'));
+  pushTypeFileBtn.addEventListener('click', () => togglePushType('file'));
+
+  // File input change
+  fileInput.addEventListener('change', handleFileSelect);
 
   // Send push button
   sendPushButton.addEventListener('click', sendPush);
@@ -627,6 +637,27 @@ function formatTimestamp(date) {
   }
 }
 
+// Handle file selection
+function handleFileSelect(event) {
+  const file = event.target.files[0];
+  if (file) {
+    fileName.textContent = file.name;
+    fileSize.textContent = formatFileSize(file.size);
+    fileSelected.style.display = 'block';
+  } else {
+    fileSelected.style.display = 'none';
+  }
+}
+
+// Format file size for display
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
+
 // Toggle between push types
 async function togglePushType(type) {
   currentPushType = type;
@@ -634,13 +665,16 @@ async function togglePushType(type) {
   // Update button styles
   pushTypeNoteBtn.classList.toggle('active', type === 'note');
   pushTypeLinkBtn.classList.toggle('active', type === 'link');
+  pushTypeFileBtn.classList.toggle('active', type === 'file');
 
   if (type === 'note') {
     noteForm.style.display = 'block';
     linkForm.style.display = 'none';
+    fileForm.style.display = 'none';
   } else if (type === 'link') {
     noteForm.style.display = 'none';
     linkForm.style.display = 'block';
+    fileForm.style.display = 'none';
 
     // Auto-populate link fields with current tab info
     try {
@@ -655,6 +689,10 @@ async function togglePushType(type) {
     } catch (error) {
       console.error('Error getting current tab info:', error);
     }
+  } else if (type === 'file') {
+    noteForm.style.display = 'none';
+    linkForm.style.display = 'none';
+    fileForm.style.display = 'block';
   }
 }
 
@@ -700,6 +738,67 @@ async function sendPush() {
 
       if (!pushData.url) {
         showStatus('Please enter a URL for the link.', 'error');
+        return;
+      }
+    } else if (pushType === 'file') {
+      const file = fileInput.files[0];
+      if (!file) {
+        showStatus('Please select a file to attach.', 'error');
+        return;
+      }
+
+      // Show uploading status
+      showStatus('Uploading file...', 'info');
+
+      try {
+        // Step 1: Request upload authorization
+        const uploadRequestResponse = await fetch('https://api.pushbullet.com/v2/upload-request', {
+          method: 'POST',
+          headers: {
+            'Access-Token': apiKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            file_name: file.name,
+            file_type: file.type || 'application/octet-stream'
+          })
+        });
+
+        if (!uploadRequestResponse.ok) {
+          throw new Error('Failed to request file upload authorization');
+        }
+
+        const uploadData = await uploadRequestResponse.json();
+
+        // Step 2: Upload file to S3
+        const formData = new FormData();
+        // Add all the data fields from the upload request
+        Object.keys(uploadData.data).forEach(key => {
+          formData.append(key, uploadData.data[key]);
+        });
+        // Add the file last
+        formData.append('file', file);
+
+        const uploadResponse = await fetch(uploadData.upload_url, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error('Failed to upload file to server');
+        }
+
+        // Step 3: Create file push with the uploaded file
+        pushData.type = 'file';
+        pushData.file_name = uploadData.file_name;
+        pushData.file_type = uploadData.file_type;
+        pushData.file_url = uploadData.file_url;
+        pushData.body = document.getElementById('file-body').value.trim();
+
+        showStatus('File uploaded, sending push...', 'info');
+      } catch (uploadError) {
+        console.error('File upload error:', uploadError);
+        showStatus('Failed to upload file: ' + uploadError.message, 'error');
         return;
       }
     }
@@ -751,6 +850,9 @@ function clearPushForm() {
   linkTitleInput.value = '';
   linkUrlInput.value = '';
   linkBodyInput.value = '';
+  fileInput.value = '';
+  document.getElementById('file-body').value = '';
+  fileSelected.style.display = 'none';
 }
 
 // Show status message

@@ -7,6 +7,7 @@ const deviceNicknameInput = document.getElementById('device-nickname');
 const updateNicknameButton = document.getElementById('update-nickname');
 const notificationTimeoutInput = document.getElementById('notification-timeout');
 const autoOpenLinksCheckbox = document.getElementById('auto-open-links');
+const encryptionPasswordInput = document.getElementById('encryption-password');
 const debugModeCheckbox = document.getElementById('debug-mode');
 const saveSettingsButton = document.getElementById('save-settings');
 const resetSettingsButton = document.getElementById('reset-settings');
@@ -18,6 +19,7 @@ const DEFAULT_SETTINGS = {
   deviceNickname: 'Chrome',
   notificationTimeout: 10000, // 10 seconds in milliseconds
   autoOpenLinks: true,
+  encryptionPassword: '', // E2EE password (stored in local storage only)
   debugMode: true
 };
 
@@ -38,6 +40,7 @@ notificationTimeoutInput.addEventListener('change', () => {
 });
 
 autoOpenLinksCheckbox.addEventListener('change', saveAutoOpenLinks);
+encryptionPasswordInput.addEventListener('change', saveEncryptionPassword);
 debugModeCheckbox.addEventListener('change', saveDebugMode);
 
 // Load settings from storage
@@ -48,9 +51,9 @@ async function loadSettings() {
       chrome.storage.sync.get(['deviceNickname', 'notificationTimeout', 'autoOpenLinks'], resolve);
     });
 
-    // Load debug config from local storage
+    // Load encryption password and debug config from LOCAL storage (not synced!)
     const localResult = await new Promise(resolve => {
-      chrome.storage.local.get(['debugConfig'], resolve);
+      chrome.storage.local.get(['encryptionPassword', 'debugConfig'], resolve);
     });
 
     // Set device nickname
@@ -72,6 +75,13 @@ async function loadSettings() {
       autoOpenLinksCheckbox.checked = syncResult.autoOpenLinks;
     } else {
       autoOpenLinksCheckbox.checked = DEFAULT_SETTINGS.autoOpenLinks;
+    }
+
+    // Set encryption password (from local storage)
+    if (localResult.encryptionPassword) {
+      encryptionPasswordInput.value = localResult.encryptionPassword;
+    } else {
+      encryptionPasswordInput.value = DEFAULT_SETTINGS.encryptionPassword;
     }
 
     // Set debug mode
@@ -157,6 +167,32 @@ async function saveAutoOpenLinks() {
   }
 }
 
+// Save encryption password (to LOCAL storage only, not synced!)
+async function saveEncryptionPassword() {
+  const password = encryptionPasswordInput.value.trim();
+
+  try {
+    await chrome.storage.local.set({
+      encryptionPassword: password
+    });
+
+    // Notify background script that encryption password changed
+    chrome.runtime.sendMessage({
+      action: 'encryptionPasswordChanged',
+      hasPassword: password.length > 0
+    });
+
+    if (password.length > 0) {
+      showStatus('Encryption password saved (stored locally only)', 'success');
+    } else {
+      showStatus('Encryption password cleared', 'success');
+    }
+  } catch (error) {
+    console.error('Error saving encryption password:', error);
+    showStatus('Error saving encryption password', 'error');
+  }
+}
+
 // Save debug mode setting
 async function saveDebugMode() {
   const enabled = debugModeCheckbox.checked;
@@ -171,7 +207,7 @@ async function saveDebugMode() {
     debugConfig.enabled = enabled;
 
     await chrome.storage.local.set({ debugConfig });
-    
+
     // Notify background script
     chrome.runtime.sendMessage({
       action: 'debugModeChanged',

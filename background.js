@@ -1,5 +1,8 @@
 'use strict';
 
+// Import crypto library for E2EE decryption
+importScripts('js/crypto.js');
+
 // WebSocket ready state constants (WebSocket global not available in service worker)
 const WS_READY_STATE = {
   CONNECTING: 0,
@@ -675,21 +678,14 @@ class GlobalErrorTracker {
         this.criticalErrors.shift();
       }
 
-      debugLogger.error('CRITICAL ERROR DETECTED', {
+      // Use console.error directly to avoid infinite recursion
+      console.error('[CRITICAL ERROR]', {
         errorId: errorInfo.id,
         category,
         message: error.message,
         context
       }, error);
     }
-
-    debugLogger.error('Error tracked globally', {
-      errorId: errorInfo.id,
-      category,
-      message: error.message,
-      totalErrors: this.errors.length,
-      errorCount: this.errorCounts.get(errorKey)
-    }, error);
 
     // Generate periodic error reports
     this.maybeGenerateReport();
@@ -858,6 +854,9 @@ const shownPushIds = new Set();
 const SHOWN_PUSH_RETENTION = 1000; // Keep track of last 1000 pushes
 const shownPushTimestamps = new Map(); // Track when each push was shown
 
+// Track encrypted notifications for click handling
+const encryptedNotifications = new Map(); // notificationId -> URL to open
+
 // Helper function to ensure initialization is complete
 function ensureInitialized(operation = 'operation') {
   if (!initializationState.completed) {
@@ -885,10 +884,17 @@ function ensureInitialized(operation = 'operation') {
 // Helper function to check if push was already shown
 function wasPushAlreadyShown(pushId) {
   if (!pushId) {
+    debugLogger.notifications('WARN', 'wasPushAlreadyShown called with null/undefined pushId');
     return false;
   }
 
   const wasShown = shownPushIds.has(pushId);
+
+  debugLogger.notifications('DEBUG', 'Checking if push was already shown', {
+    pushId,
+    wasShown,
+    totalTracked: shownPushIds.size
+  });
 
   if (wasShown) {
     const shownTime = shownPushTimestamps.get(pushId);
@@ -1255,79 +1261,36 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-// TODO: Implement proper API key encryption
-// For now, store plain text to avoid decryption issues
+// Simple key obfuscation (not real encryption - Chrome storage is already protected)
+// XOR with a constant key for basic obfuscation
+const OBFUSCATION_KEY = 'pushbullet-chrome-extension-key-v1';
+
 function encryptKey(key) {
-  return key; // No encryption
+  if (!key) return key;
+  let result = '';
+  for (let i = 0; i < key.length; i++) {
+    result += String.fromCharCode(key.charCodeAt(i) ^ OBFUSCATION_KEY.charCodeAt(i % OBFUSCATION_KEY.length));
+  }
+  return btoa(result); // Base64 encode
 }
 
 function decryptKey(encryptedKey) {
-  return encryptedKey; // No decryption
-}
-
-// Pushbullet service class for better state management
-class PushbulletService {
-  constructor() {
-    this.state = {
-      apiKey: null,
-      deviceIden: null,
-      deviceNickname: 'Chrome',
-      websocket: null,
-      reconnectAttempts: 0,
-      reconnectTimeout: null,
-      autoOpenLinks: true,
-      sessionCache: {
-        userInfo: null,
-        devices: [],
-        recentPushes: [],
-        isAuthenticated: false,
-        lastUpdated: 0,
-        autoOpenLinks: true,
-        deviceNickname: 'Chrome'
-      }
-    };
-  }
-
-  async initialize() {
-    const result = await new Promise(resolve => {
-      chrome.storage.local.get(['apiKey', 'deviceIden', 'autoOpenLinks', 'deviceNickname'], resolve);
-    });
-
-    this.state.apiKey = decryptKey(result.apiKey);
-    this.state.deviceIden = result.deviceIden;
-    this.state.autoOpenLinks = result.autoOpenLinks !== undefined ? result.autoOpenLinks : true;
-    this.state.deviceNickname = result.deviceNickname || 'Chrome';
-    this.state.sessionCache.autoOpenLinks = this.state.autoOpenLinks;
-    this.state.sessionCache.deviceNickname = this.state.deviceNickname;
-
-    if (this.state.apiKey) {
-      // Fetch and set session data
-      await this.refreshSessionCache();
-      await this.registerDevice();
-      this.connectWebSocket();
+  if (!encryptedKey) return encryptedKey;
+  try {
+    const decoded = atob(encryptedKey); // Base64 decode
+    let result = '';
+    for (let i = 0; i < decoded.length; i++) {
+      result += String.fromCharCode(decoded.charCodeAt(i) ^ OBFUSCATION_KEY.charCodeAt(i % OBFUSCATION_KEY.length));
     }
-  }
-
-  // Add methods for other operations...
-  async refreshSessionCache() {
-    // Implementation similar to the original function
-    // This would be a big refactor, so for now, keep it simple
-    console.log('Refresh session cache called');
-  }
-
-  async registerDevice() {
-    // Implementation
-    console.log('Register device called');
-  }
-
-  connectWebSocket() {
-    // Implementation
-    console.log('Connect WebSocket called');
+    return result;
+  } catch (error) {
+    // If decryption fails, assume it's already decrypted (backward compatibility)
+    debugLogger.general('WARN', 'Failed to decrypt API key, assuming plain text', {
+      error: error.message
+    });
+    return encryptedKey;
   }
 }
-
-// Instantiate service
-const pbService = new PushbulletService();
 
 // Initialize extension on install/update
 chrome.runtime.onInstalled.addListener(() => {
@@ -2380,6 +2343,8 @@ function connectWebSocket() {
               debugLogger.websocket('INFO', 'Processing latest push from tickle', {
                 pushId: latestPush.iden,
                 pushType: latestPush.type,
+                sourceDevice: latestPush.source_device_iden,
+                thisDevice: deviceIden,
                 trackingId
               });
 
@@ -2415,6 +2380,92 @@ function connectWebSocket() {
       case 'push':
         // Handle push message directly
         if (data.push) {
+          // Check if this is an encrypted push (E2EE SMS)
+          if (data.push.encrypted && data.push.ciphertext) {
+            debugLogger.websocket('INFO', 'Encrypted push received (E2EE enabled)', {
+              pushId: data.push.iden,
+              encrypted: true,
+              timestamp: new Date().toISOString()
+            });
+
+            // Try to decrypt if encryption password is available
+            try {
+              const result = await new Promise(resolve => {
+                chrome.storage.local.get(['encryptionPassword'], resolve);
+              });
+
+              if (result.encryptionPassword && result.encryptionPassword.length > 0) {
+                debugLogger.websocket('INFO', 'Attempting to decrypt encrypted push', {
+                  pushId: data.push.iden
+                });
+
+                // Get user iden for key derivation
+                const userIden = sessionCache.userInfo?.iden;
+                if (!userIden) {
+                  throw new Error('User iden not available for decryption');
+                }
+
+                // Decrypt the push
+                const decryptedPush = await PushbulletCrypto.decryptPush(
+                  data.push,
+                  result.encryptionPassword,
+                  userIden
+                );
+
+                debugLogger.websocket('INFO', 'Successfully decrypted push', {
+                  pushId: decryptedPush.iden,
+                  type: decryptedPush.type,
+                  hasTitle: !!decryptedPush.title,
+                  hasBody: !!decryptedPush.body
+                });
+
+                // Replace encrypted push with decrypted version
+                data.push = decryptedPush;
+
+                // Continue processing as normal push (don't break!)
+              } else {
+                // No encryption password - show notification to view in Pushbullet
+                debugLogger.websocket('INFO', 'No encryption password available, showing fallback notification');
+
+                const notificationId = 'encrypted_' + Date.now();
+                chrome.notifications.create(notificationId, {
+                  type: 'basic',
+                  iconUrl: 'icons/icon128.png',
+                  title: 'Encrypted Message Received',
+                  message: 'Click to view in Pushbullet. Set encryption password in options to decrypt automatically.',
+                  priority: 1,
+                  requireInteraction: true
+                });
+
+                // Store notification ID for click handler
+                encryptedNotifications.set(notificationId, 'https://www.pushbullet.com');
+
+                break; // Skip further processing
+              }
+            } catch (error) {
+              debugLogger.websocket('ERROR', 'Failed to decrypt push', {
+                pushId: data.push.iden,
+                error: error.message
+              }, error);
+
+              // Show error notification
+              const notificationId = 'decrypt_error_' + Date.now();
+              chrome.notifications.create(notificationId, {
+                type: 'basic',
+                iconUrl: 'icons/icon128.png',
+                title: 'Decryption Failed',
+                message: 'Failed to decrypt message. Check your encryption password in options.',
+                priority: 2,
+                requireInteraction: true
+              });
+
+              // Store notification ID for click handler
+              encryptedNotifications.set(notificationId, 'https://www.pushbullet.com');
+
+              break; // Skip further processing
+            }
+          }
+
           const trackingId = performanceMonitor.startNotificationProcessing(data.push.iden, 'direct_push');
 
           debugLogger.websocket('INFO', 'Direct push message received', {
@@ -2423,7 +2474,13 @@ function connectWebSocket() {
             sourceDevice: data.push.source_device_iden,
             targetDevice: data.push.target_device_iden,
             trackingId,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            // Debug: Log structure to identify mirror notifications
+            pushKeys: Object.keys(data.push).join(', '),
+            hasType: 'type' in data.push,
+            hasNotificationId: 'notification_id' in data.push,
+            hasApplicationName: 'application_name' in data.push,
+            hasPackageName: 'package_name' in data.push
           });
 
           performanceMonitor.markNotificationStage(trackingId, 'parsed', {
@@ -2729,6 +2786,57 @@ function showPushNotification(push, trackingId = null) {
       trackingId
     });
     break;
+  case 'mirror':
+    // Mirrored notification from Android (e.g., SMS)
+    notificationOptions.title = push.title || push.application_name || 'Notification';
+    notificationOptions.message = push.body || '';
+
+    // Add icon if available (base64 encoded image)
+    if (push.icon) {
+      notificationOptions.iconUrl = 'data:image/png;base64,' + push.icon;
+    }
+
+    debugLogger.notifications('DEBUG', 'Mirror notification configured', {
+      title: notificationOptions.title,
+      applicationName: push.application_name,
+      packageName: push.package_name,
+      hasBody: !!push.body,
+      hasIcon: !!push.icon,
+      trackingId
+    });
+    break;
+  case 'sms_changed':
+    // SMS database changed - extract SMS from notifications array
+    if (push.notifications && push.notifications.length > 0) {
+      // Get the first (most recent) SMS notification
+      const smsNotification = push.notifications[0];
+      notificationOptions.title = smsNotification.title || 'SMS';
+      notificationOptions.message = smsNotification.body || '';
+
+      // Add icon if available
+      if (smsNotification.icon) {
+        notificationOptions.iconUrl = 'data:image/png;base64,' + smsNotification.icon;
+      }
+
+      debugLogger.notifications('DEBUG', 'SMS notification configured', {
+        title: notificationOptions.title,
+        hasBody: !!notificationOptions.message,
+        hasIcon: !!smsNotification.icon,
+        notificationCount: push.notifications.length,
+        trackingId
+      });
+    } else {
+      // No notifications in the array - skip
+      debugLogger.notifications('WARN', 'sms_changed push has no notifications', {
+        pushId: push.iden,
+        trackingId
+      });
+      if (trackingId) {
+        performanceMonitor.completeNotificationProcessing(trackingId, false, new Error('No SMS notifications in sms_changed push'));
+      }
+      return;
+    }
+    break;
   default:
     debugLogger.notifications('WARN', 'Unknown push type - skipping notification', {
       pushType: push.type,
@@ -2928,6 +3036,20 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   });
 
   notificationTracker.recordClick(notificationId);
+
+  // Check if this is an encrypted notification
+  if (encryptedNotifications.has(notificationId)) {
+    const url = encryptedNotifications.get(notificationId);
+    debugLogger.notifications('INFO', 'Opening Pushbullet for encrypted message', {
+      notificationId,
+      url
+    });
+
+    chrome.tabs.create({ url });
+    chrome.notifications.clear(notificationId);
+    encryptedNotifications.delete(notificationId);
+    return;
+  }
 
   // Check if this is a push notification
   if (notificationId.startsWith('push_')) {

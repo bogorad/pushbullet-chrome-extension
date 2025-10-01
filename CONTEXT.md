@@ -17,9 +17,13 @@
 10. ❌ NEVER skip deduplication checks
 
 ### Current State
-- **Version**: 1.0.17
-- **Status**: All critical bugs fixed
-- **Last Issue**: Duplicate push notifications (FIXED)
+- **Version**: 1.0.20
+- **Status**: All critical bugs fixed + File attachment + SMS mirroring
+- **Last Issue**: Ghost repeating pushes (investigating with enhanced logging)
+- **Latest Features**:
+  - File attachment with upload to Pushbullet API (v1.0.18)
+  - SMS/mirrored notification support (v1.0.20)
+  - Dead code removed (v1.0.19)
 - **Next Steps**: Testing and deployment
 
 ### If User Reports Bug
@@ -231,6 +235,13 @@ const SHOWN_PUSH_RETENTION = 1000;        // Keep last 1000
 
 ## VERSION HISTORY
 
+- **1.0.24**: Fixed SMS display by handling sms_changed type and extracting from notifications array
+- **1.0.23**: Implemented full E2EE decryption support with password storage in options
+- **1.0.22**: Added encrypted message detection and notification (E2EE SMS)
+- **1.0.21**: Enhanced logging for push message structure debugging
+- **1.0.20**: Added SMS/mirrored notification support (type='mirror')
+- **1.0.19**: Removed dead code (PushbulletService class), implemented real XOR obfuscation, enhanced logging
+- **1.0.18**: Added file attachment feature with Pushbullet API upload, improved button contrast
 - **1.0.17**: Fixed duplicate push notifications
 - **1.0.16**: Fixed notification timeout, removed fallbacks, added null checks
 - **1.0.15**: Fixed orange dot, fixed total logs display
