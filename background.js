@@ -3301,6 +3301,10 @@ async function fetchRecentPushes() {
   }
 }
 
+// Setup context menu at top level to avoid race condition
+// This ensures the menu is available even if onInstalled hasn't fired yet
+setupContextMenu();
+
 // Listen for storage changes
 chrome.storage.onChanged.addListener((changes, namespace) => {
   debugLogger.storage('INFO', 'Storage changes detected', {

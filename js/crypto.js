@@ -17,6 +17,11 @@ class PushbulletCrypto {
    * @returns {Promise<CryptoKey>} - Derived key for AES-GCM
    */
   static async deriveKey(password, userIden) {
+    // Check if Web Crypto API is available
+    if (!self.crypto || !crypto.subtle) {
+      throw new Error('Web Crypto API unavailable - requires HTTPS or localhost');
+    }
+
     // Convert password to bytes
     const encoder = new TextEncoder();
     const passwordBytes = encoder.encode(password);

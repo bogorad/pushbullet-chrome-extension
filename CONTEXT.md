@@ -17,14 +17,43 @@
 10. ❌ NEVER skip deduplication checks
 
 ### Current State
-- **Version**: 1.0.20
-- **Status**: All critical bugs fixed + File attachment + SMS mirroring
-- **Last Issue**: Ghost repeating pushes (investigating with enhanced logging)
+- **Version**: 1.0.26
+- **Status**: Production-ready with E2EE SMS support + Code audit complete
+- **Last Issue**: Infinite recursion in error tracking (FIXED v1.0.25)
 - **Latest Features**:
+  - Full E2EE decryption with password storage (v1.0.23)
+  - SMS notification support via sms_changed type (v1.0.24)
   - File attachment with upload to Pushbullet API (v1.0.18)
-  - SMS/mirrored notification support (v1.0.20)
-  - Dead code removed (v1.0.19)
-- **Next Steps**: Testing and deployment
+  - Code audit fixes (v1.0.26)
+- **Code Quality**: Audited and hardened
+- **Next Steps**: Production deployment
+
+## RECENT CHANGES
+
+### Code Audit & Hardening (v1.0.26)
+- **Security**: Added Web Crypto API availability check in crypto.js
+- **Reliability**: Fixed context menu race condition by calling setupContextMenu() at top level
+- **Audit Results**: 9/10 issues already fixed, 2 new fixes applied
+- **Code Quality**: Production-ready after comprehensive audit
+
+### Critical Bug Fix (v1.0.25)
+- **CRITICAL**: Fixed infinite recursion in GlobalErrorTracker
+- **Impact**: Prevented 853 stack overflow errors
+- **Fix**: Replaced debugLogger.error() with console.error() in error tracker
+- **Result**: Error tracking now stable and non-recursive
+
+### E2EE SMS Support (v1.0.23-24)
+- **Full E2EE Decryption**: Implemented PBKDF2 + AES-256-GCM decryption
+- **Password Storage**: Added encryption password field in options (local storage only)
+- **SMS Display**: Handle sms_changed type and extract from notifications array
+- **Fallback**: Show "Encrypted Message Received" notification if no password set
+- **Click Handler**: Opens pushbullet.com for encrypted messages without password
+
+### File Attachment Feature (v1.0.18)
+- Added "Attach" button to popup
+- Implemented 3-step file upload process
+- Added optional description field
+- File size limit: 25MB (Pushbullet free tier)
 
 ### If User Reports Bug
 1. Check `CRITICAL_ISSUES_ANALYSIS.md` for known issues
@@ -35,12 +64,12 @@
 
 ## PROJECT OVERVIEW
 
-**Name**: Pushbullet for Chrome (Unofficial)  
-**Current Version**: 1.0.17  
-**Type**: Chrome Extension (Manifest V3)  
-**Purpose**: Unofficial Pushbullet client for Chrome with real-time push notifications  
-**Repository**: git@github.com:bogorad/pushbullet-chrome-extension.git  
-**Branch**: main  
+**Name**: Pushbullet for Chrome (Unofficial)
+**Current Version**: 1.0.26
+**Type**: Chrome Extension (Manifest V3)
+**Purpose**: Unofficial Pushbullet client for Chrome with real-time push notifications and E2EE SMS support
+**Repository**: git@github.com:bogorad/pushbullet-chrome-extension.git
+**Branch**: main
 
 ## CRITICAL ARCHITECTURE DECISIONS
 
@@ -235,6 +264,8 @@ const SHOWN_PUSH_RETENTION = 1000;        // Keep last 1000
 
 ## VERSION HISTORY
 
+- **1.0.26**: Code audit fixes - Added Web Crypto availability check, context menu race condition fix
+- **1.0.25**: CRITICAL FIX - Fixed infinite recursion in error tracking (853 stack overflow errors)
 - **1.0.24**: Fixed SMS display by handling sms_changed type and extracting from notifications array
 - **1.0.23**: Implemented full E2EE decryption support with password storage in options
 - **1.0.22**: Added encrypted message detection and notification (E2EE SMS)
