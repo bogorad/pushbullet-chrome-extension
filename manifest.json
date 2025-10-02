@@ -1,6 +1,6 @@
 {
   "name": "Pushbullet for Chrome (Unofficial)",
-  "version": "1.0.26",
+  "version": "1.0.30",
   "description": "Unofficial Manifest V3 compatible Pushbullet client - not affiliated with Pushbullet Inc.",
   "manifest_version": 3,
   "icons": {
@@ -27,7 +27,7 @@
     "https://api.pushbullet.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "dist/background.js"
   },
   "options_page": "options.html",
   "content_security_policy": {

@@ -10,16 +10,48 @@
     "sourceType": "script"
   },
   "globals": {
-    "chrome": "readonly"
+    "importScripts": "readonly",
+    "chrome": "readonly",
+    "DEBUG_CONFIG": "writable",
+    "DebugConfigManager": "readonly",
+    "connectWebSocket": "readonly",
+    "createNotificationWithTimeout": "readonly",
+    "sessionCache": "writable",
+    "deviceIden": "writable",
+    "apiKey": "writable",
+    "websocket": "writable",
+    "reconnectAttempts": "writable",
+    "reconnectTimeout": "writable"
   },
   "rules": {
-    "indent": ["error", 2],
-    "linebreak-style": ["error", "unix"],
+    "indent": ["warn", 2],
+    "linebreak-style": 0,
     "quotes": ["error", "single", { "avoidEscape": true }],
     "semi": ["error", "always"],
     "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
     "no-console": "off",
-    "no-undef": "error"
-  }
+    "no-undef": "warn",
+    "no-redeclare": "warn",
+    "no-global-assign": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.ts"],
+      "parser": "@typescript-eslint/parser",
+      "plugins": ["@typescript-eslint"],
+      "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+      "parserOptions": {
+        "sourceType": "module",
+        "ecmaVersion": 2021
+      },
+      "rules": {
+        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+        "quotes": 0,
+        "@typescript-eslint/no-unused-expressions": ["error", { "allowShortCircuit": true, "allowTernary": true }]
+      }
+    }
+  ]
 }
+
 

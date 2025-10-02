@@ -1,0 +1,179 @@
+/* Logging and debug configuration (TypeScript)
+   Mirrors js/logging.js without changing behavior. */
+
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+export type LogCategory = 'WEBSOCKET' | 'NOTIFICATIONS' | 'API' | 'STORAGE' | 'GENERAL' | 'PERFORMANCE' | 'ERROR';
+
+export interface DebugConfig {
+  enabled: boolean;
+  categories: Record<LogCategory, boolean>;
+  logLevel: LogLevel;
+  maxLogEntries: number;
+  sanitizeData: boolean;
+}
+
+export const DEBUG_CONFIG: DebugConfig = {
+  enabled: true,
+  categories: { WEBSOCKET: true, NOTIFICATIONS: true, API: true, STORAGE: true, GENERAL: true, PERFORMANCE: true, ERROR: true },
+  logLevel: 'DEBUG',
+  maxLogEntries: 1000,
+  sanitizeData: true,
+};
+
+export interface LogEntry {
+  timestamp: string;
+  category: LogCategory;
+  level: LogLevel;
+  message: string;
+  data: unknown | null;
+  error: { name: string; message: string; stack?: string } | null;
+}
+
+export class DebugLogger {
+  private logs: LogEntry[] = [];
+  private startTime = Date.now();
+  private performanceMarkers = new Map<string, number>();
+
+  private sanitize(data: unknown): unknown {
+    if (!DEBUG_CONFIG.sanitizeData) return data;
+    if (typeof data === 'string') {
+      if (data.length > 20 && /^[a-zA-Z0-9_-]+$/.test(data)) {
+        return data.substring(0, 4) + '***' + data.substring(data.length - 4);
+      }
+      return data;
+    }
+    if (data && typeof data === 'object') {
+      const sanitized: Record<string, unknown> | unknown[] = Array.isArray(data) ? [] : {};
+      for (const key in data as Record<string, unknown>) {
+        if (key.toLowerCase().includes('token') || key.toLowerCase().includes('key') || key.toLowerCase().includes('password')) {
+          (sanitized as any)[key] = this.sanitize((data as any)[key]);
+        } else {
+          (sanitized as any)[key] = (data as any)[key];
+        }
+      }
+      return sanitized;
+    }
+    return data;
+  }
+
+  private getTimestamp(): string {
+    const now = new Date();
+    const elapsed = Date.now() - this.startTime;
+    return `${now.toISOString()} (+${elapsed}ms)`;
+  }
+
+  log(category: LogCategory, level: LogLevel, message: string, data: unknown = null, error: Error | null = null) {
+    if (!DEBUG_CONFIG.enabled || !DEBUG_CONFIG.categories[category]) return;
+    const timestamp = this.getTimestamp();
+    const entry: LogEntry = {
+      timestamp,
+      category,
+      level,
+      message,
+      data: data ? this.sanitize(data) : null,
+      error: error ? { name: error.name, message: error.message, stack: (error as any).stack } : null,
+    };
+    if (error && level === 'ERROR') {
+      globalErrorTracker.trackError(error, { category, message, data: data ? this.sanitize(data) : null }, category);
+    }
+    this.logs.push(entry);
+    if (this.logs.length > DEBUG_CONFIG.maxLogEntries) this.logs.shift();
+
+    const prefix = `[${category}:${level}] ${timestamp}`;
+    const full = `${prefix} ${message}`;
+    const sanitized = data ? this.sanitize(data) : null;
+    switch (level) {
+      case 'ERROR':
+        if (sanitized && error) { console.error(full); console.error('  Data:', sanitized); console.error('  Error:', error); }
+        else if (sanitized) { console.error(full); console.error('  Data:', sanitized); }
+        else if (error) { console.error(full); console.error('  Error:', error); }
+        else { console.error(full); }
+        break;
+      case 'WARN':
+        if (sanitized) { console.warn(full); console.warn('  Data:', sanitized); } else { console.warn(full); }
+        break;
+      case 'INFO':
+        if (sanitized) { console.info(full); console.info('  Data:', sanitized); } else { console.info(full); }
+        break;
+      default:
+        if (sanitized) { console.log(full); console.log('  Data:', sanitized); } else { console.log(full); }
+    }
+  }
+
+  websocket(level: LogLevel, message: string, data?: unknown, error?: Error) { this.log('WEBSOCKET', level, message, data, error || null); }
+  notifications(level: LogLevel, message: string, data?: unknown, error?: Error) { this.log('NOTIFICATIONS', level, message, data, error || null); }
+  api(level: LogLevel, message: string, data?: unknown, error?: Error) { this.log('API', level, message, data, error || null); }
+  storage(level: LogLevel, message: string, data?: unknown, error?: Error) { this.log('STORAGE', level, message, data, error || null); }
+  general(level: LogLevel, message: string, data?: unknown, error?: Error) { this.log('GENERAL', level, message, data, error || null); }
+  performance(level: LogLevel, message: string, data?: unknown, error?: Error) { this.log('PERFORMANCE', level, message, data, error || null); }
+  error(message: string, data?: unknown, error?: Error) { this.log('ERROR', 'ERROR', message, data, error || null); }
+
+  startTimer(name: string) { this.performanceMarkers.set(name, Date.now()); this.performance('DEBUG', `Timer started: ${name}`); }
+  endTimer(name: string): number | null {
+    const start = this.performanceMarkers.get(name);
+    if (start) { const duration = Date.now() - start; this.performanceMarkers.delete(name); this.performance('INFO', `Timer ended: ${name}`, { duration: `${duration}ms` }); return duration; }
+    this.performance('WARN', `Timer not found: ${name}`); return null;
+  }
+  getRecentLogs(count = 50, category: LogCategory | null = null) {
+    let logs = this.logs; if (category) logs = logs.filter(l => l.category === category); return logs.slice(-count);
+  }
+  exportLogs() {
+    return {
+      config: DEBUG_CONFIG,
+      logs: this.logs,
+      summary: {
+        totalLogs: this.logs.length,
+        categories: (Object.keys(DEBUG_CONFIG.categories) as LogCategory[]).reduce((acc: Record<string, number>, cat) => { acc[cat] = this.logs.filter(l => l.category === cat).length; return acc; }, {}),
+        errors: this.logs.filter(l => l.level === 'ERROR').length,
+      }
+    };
+  }
+}
+
+export const debugLogger = new DebugLogger();
+
+export class DebugConfigManager {
+  async loadConfig() {
+    try {
+      debugLogger.storage('DEBUG', 'Loading debug configuration from storage');
+      const result = await new Promise<any>(resolve => { chrome.storage.local.get(['debugConfig'], (items) => resolve(items)); });
+      if (result.debugConfig) { Object.assign(DEBUG_CONFIG, result.debugConfig as Partial<DebugConfig>); debugLogger.storage('INFO', 'Debug configuration loaded from storage', DEBUG_CONFIG); }
+      else { debugLogger.storage('INFO', 'No stored debug configuration found - using defaults', DEBUG_CONFIG); }
+    } catch (error: any) { debugLogger.storage('ERROR', 'Failed to load debug configuration', null, error); }
+  }
+  async saveConfig() {
+    try { debugLogger.storage('DEBUG', 'Saving debug configuration to storage'); await new Promise(resolve => { chrome.storage.local.set({ debugConfig: DEBUG_CONFIG }, () => resolve(null)); }); debugLogger.storage('INFO', 'Debug configuration saved to storage'); }
+    catch (error: any) { debugLogger.storage('ERROR', 'Failed to save debug configuration', null, error); }
+  }
+  updateConfig(updates: Partial<DebugConfig>) { Object.assign(DEBUG_CONFIG, updates); void this.saveConfig(); debugLogger.general('INFO', 'Debug configuration updated', updates); }
+  toggleCategory(category: LogCategory) { if (Object.prototype.hasOwnProperty.call(DEBUG_CONFIG.categories, category)) { DEBUG_CONFIG.categories[category] = !DEBUG_CONFIG.categories[category]; void this.saveConfig(); debugLogger.general('INFO', `Debug category ${category} toggled`, { category, enabled: DEBUG_CONFIG.categories[category] }); } }
+  setLogLevel(level: LogLevel) { const valid: LogLevel[] = ['DEBUG','INFO','WARN','ERROR']; if (valid.includes(level)) { DEBUG_CONFIG.logLevel = level; void this.saveConfig(); debugLogger.general('INFO', `Debug log level set to ${level}`); } }
+  getConfig(): DebugConfig { return { ...DEBUG_CONFIG }; }
+  resetConfig() { const def: DebugConfig = { enabled: true, categories: { WEBSOCKET: true, NOTIFICATIONS: true, API: true, STORAGE: true, GENERAL: true, PERFORMANCE: true, ERROR: true }, logLevel: 'DEBUG', maxLogEntries: 1000, sanitizeData: true }; Object.assign(DEBUG_CONFIG, def); void this.saveConfig(); debugLogger.general('INFO', 'Debug configuration reset to defaults'); }
+}
+
+export const debugConfigManager = new DebugConfigManager();
+void debugConfigManager.loadConfig();
+
+export class GlobalErrorTracker {
+  private errors: Array<{ timestamp: string; category: string; message: string; name: string; stack?: string; context: any }>
+    = [];
+  private errorCounts = new Map<string, number>();
+  private criticalErrors: any[] = [];
+
+  trackError(error: Error, context: any = {}, category = 'GENERAL') {
+    const entry = { timestamp: new Date().toISOString(), category, message: error.message, name: error.name, stack: (error as any).stack, context };
+    this.errors.push(entry);
+    const count = (this.errorCounts.get(category) || 0) + 1; this.errorCounts.set(category, count);
+    if (count >= 5) this.criticalErrors.push(entry);
+  }
+  getErrorSummary() { const byCat: Record<string, number> = {}; this.errorCounts.forEach((v, k) => byCat[k] = v); return { total: this.errors.length, byCategory: byCat, critical: this.criticalErrors.length }; }
+  exportErrorData() { return { errors: this.errors.slice(-200), summary: this.getErrorSummary() }; }
+}
+
+export const globalErrorTracker = new GlobalErrorTracker();
+
+// Attach listeners in SW environment; swallow if not available
+try { self.addEventListener('error', (event: ErrorEvent) => { globalErrorTracker.trackError((event as any).error || new Error(event.message), { filename: event.filename, lineno: event.lineno, colno: event.colno, type: 'unhandled' }, 'GLOBAL'); }); } catch (_) { /* noop */ }
+try { self.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => { globalErrorTracker.trackError((event as any).reason || new Error('Unhandled promise rejection'), { type: 'unhandled_promise' }, 'GLOBAL'); }); } catch (_) { /* noop */ }
+

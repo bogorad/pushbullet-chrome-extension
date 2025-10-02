@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/background/index.ts"],
+  "sourcesContent": ["/*\nBackground service worker (TypeScript shim)\n- Hybrid phase: load the legacy background.js via importScripts to preserve behavior.\n- Allows manifest to point to dist/background.js while we migrate internals to TS.\n*/\n\n// Declare global to satisfy TS\ndeclare function importScripts(...urls: string[]): void;\n\ntry {\n  importScripts('background.js');\n} catch (e) {\n  // Fallback log; avoid throwing in SW\n  // eslint-disable-next-line no-console\n  console.error('Failed to import legacy background.js', e);\n}\n\n"],
+  "mappings": ";;;AASA,MAAI;AACF,kBAAc,eAAe;AAAA,EAC/B,SAAS,GAAG;AAGV,YAAQ,MAAM,yCAAyC,CAAC;AAAA,EAC1D;",
+  "names": []
+}

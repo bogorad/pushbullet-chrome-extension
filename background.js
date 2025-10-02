@@ -608,7 +608,7 @@ class InitializationTracker {
     }
 
     // Update stats
-    if (this.stats.hasOwnProperty(source)) {
+    if (Object.prototype.hasOwnProperty.call(this.stats, source)) {
       this.stats[source]++;
     } else {
       this.stats.unknown++;
