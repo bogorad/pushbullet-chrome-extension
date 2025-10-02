@@ -8,8 +8,7 @@
     "lint:fix": "eslint *.js js/*.js src/**/*.ts --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:background": "esbuild src/background/index.ts --bundle --format=iife --platform=browser --outfile=dist/background.js --sourcemap --target=es2022",
-    "build:popup": "esbuild src/popup/index.ts --bundle --format=esm --platform=browser --outfile=dist/popup.js --sourcemap --target=es2022",
-    "build": "npm run build:background && npm run build:popup"
+    "build": "npm run build:background"
   },
   "keywords": [
     "pushbullet",
