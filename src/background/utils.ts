@@ -25,6 +25,15 @@ export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 /**
  * Sanitize text to prevent XSS attacks
  * Removes HTML tags and dangerous characters
+ *
+ * DEFENSE-IN-DEPTH STRATEGY:
+ * 1. This function provides basic sanitization for Chrome notification content
+ * 2. The extension's CSP (Content Security Policy) provides strong XSS protection
+ * 3. UI code (popup, options, etc.) uses textContent instead of innerHTML for user data
+ * 4. This regex-based approach is sufficient for notification text (not rendered as HTML)
+ *
+ * NOTE: For HTML rendering, use textContent or a library like DOMPurify.
+ * The popup's displayPushes() function correctly uses textContent for all user data.
  */
 function sanitizeText(text: string): string {
   if (!text) return '';

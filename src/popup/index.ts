@@ -9,7 +9,8 @@ import { getElementById, formatTimestamp as formatTimestampUtil } from '../lib/u
 const USER_INFO_URL = 'https://api.pushbullet.com/v2/users/me';
 const DEVICES_URL = 'https://api.pushbullet.com/v2/devices';
 const PUSHES_URL = 'https://api.pushbullet.com/v2/pushes';
-const WEBSOCKET_URL = 'wss://stream.pushbullet.com/websocket/';
+// WEBSOCKET_URL removed - popup no longer maintains its own WebSocket connection
+// The background script manages the single, persistent WebSocket connection
 
 // Type definitions
 interface SessionData {
@@ -83,7 +84,7 @@ let deviceNickname = 'Chrome';
 let devices: Device[] = [];
 let hasInitialized = false;
 let currentPushType: PushType = 'note';
-let websocket: WebSocket | null = null;
+// websocket variable removed - background script manages the single WebSocket connection
 
 /**
  * Initialize popup
@@ -124,9 +125,7 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
   showSection('main');
 
   // Connection status is now shown via badge icon (no UI indicator needed)
-
-  // Connect to WebSocket
-  connectWebSocket();
+  // WebSocket connection is managed by background script - popup receives updates via chrome.runtime.onMessage
 
   hasInitialized = true;
 }
@@ -277,6 +276,8 @@ async function saveApiKey(): Promise<void> {
       action: 'apiKeyChanged',
       apiKey: newApiKey,
       deviceNickname: newNickname,
+    }).catch((error) => {
+      console.warn('Could not notify background of API key change:', error.message);
     });
 
     await initializeAuthenticated();
@@ -292,11 +293,17 @@ async function saveApiKey(): Promise<void> {
  * Logout
  */
 function logout(): void {
-  disconnectWebSocket();
+  // WebSocket disconnection is handled by background script
   chrome.storage.sync.remove(['apiKey']);
   chrome.storage.local.remove(['deviceIden']);
   apiKey = null;
   hasInitialized = false;
+
+  // Notify background script to disconnect WebSocket
+  chrome.runtime.sendMessage({ action: 'logout' }).catch((error) => {
+    console.warn('Could not notify background of logout:', error.message);
+  });
+
   showSection('login');
   apiKeyInput.value = '';
   deviceNicknameInput.value = '';
@@ -325,8 +332,8 @@ async function initializeAuthenticated(): Promise<boolean> {
     // Update UI
     updateUserInfo(userInfo);
 
-    // Connect to WebSocket
-    connectWebSocket();
+    // WebSocket connection is managed by background script
+    // Popup receives updates via chrome.runtime.onMessage
 
     return true;
   } catch (error) {
@@ -409,69 +416,18 @@ async function fetchRecentPushes(): Promise<Push[]> {
 }
 
 /**
- * Connect to WebSocket
+ * REMOVED: connectWebSocket() and disconnectWebSocket()
+ *
+ * The popup no longer maintains its own WebSocket connection.
+ * The background service worker manages a single, persistent WebSocket connection
+ * and sends push updates to the popup via chrome.runtime.sendMessage with action 'pushesUpdated'.
+ *
+ * This architectural change:
+ * - Eliminates dual state (popup and background having separate connections)
+ * - Reduces resource consumption (only one WebSocket connection)
+ * - Ensures connection persists when popup is closed
+ * - Makes background script the single source of truth for WebSocket state
  */
-function connectWebSocket(): void {
-  disconnectWebSocket();
-
-  if (!apiKey) return;
-
-  try {
-    const wsUrl = WEBSOCKET_URL + apiKey;
-    websocket = new WebSocket(wsUrl);
-
-    websocket.onopen = () => {
-      console.log('Connected to Pushbullet WebSocket from popup');
-    };
-
-    websocket.onmessage = async (event) => {
-      const data = JSON.parse(event.data) as { type: string; subtype?: string; push?: Push };
-      console.log('WebSocket message received in popup:', data);
-
-      switch (data.type) {
-        case 'tickle':
-          if (data.subtype === 'push') {
-            console.log('Push tickle received in popup, fetching latest pushes');
-            const pushes = await fetchRecentPushes();
-            displayPushes(pushes);
-          }
-          break;
-        case 'push':
-          if (data.push) {
-            console.log('Push message received directly in popup:', data.push);
-            const pushes = await fetchRecentPushes();
-            displayPushes(pushes);
-          }
-          break;
-      }
-    };
-
-    websocket.onerror = (error) => {
-      console.error('WebSocket error in popup:', error);
-    };
-
-    websocket.onclose = () => {
-      console.log('Disconnected from Pushbullet WebSocket in popup');
-      setTimeout(() => {
-        if (apiKey && hasInitialized) {
-          connectWebSocket();
-        }
-      }, 5000);
-    };
-  } catch (error) {
-    console.error('Error connecting to WebSocket from popup:', error);
-  }
-}
-
-/**
- * Disconnect WebSocket
- */
-function disconnectWebSocket(): void {
-  if (websocket) {
-    websocket.close();
-    websocket = null;
-  }
-}
 
 /**
  * Update user info
@@ -524,7 +480,7 @@ function displayPushes(pushes: Push[]): void {
   recentPushes.forEach((push) => {
     let title = push.title;
     let body = push.body;
-    let url = push.url;
+    const url = push.url;
 
     // Handle SMS pushes
     if (push.type === 'sms_changed' && push.notifications && push.notifications.length > 0) {

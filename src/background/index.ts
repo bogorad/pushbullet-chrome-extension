@@ -7,7 +7,7 @@ import { debugLogger, debugConfigManager } from '../lib/logging';
 import { performanceMonitor } from '../lib/perf';
 import { initTracker, wsStateMonitor } from '../lib/monitoring';
 import { WebSocketClient } from '../app/ws/client';
-import { sessionCache, initializeSessionCache, refreshSessionCache, initializationState } from '../app/session';
+import { sessionCache, initializeSessionCache, refreshSessionCache, initializationState, getInitPromise } from '../app/session';
 import { fetchDevices, updateDeviceNickname } from '../app/api/client';
 import { ensureConfigLoaded } from '../app/reconnect';
 import { PushbulletCrypto } from '../lib/crypto';
@@ -364,12 +364,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (initializationState.inProgress) {
         debugLogger.general('DEBUG', 'Initialization already in progress - waiting for completion');
 
-        // Wait for initialization to complete (max 10 seconds)
-        const maxWait = 10000;
-        const startTime = Date.now();
-        const checkInterval = setInterval(() => {
-          if (initializationState.completed || Date.now() - startTime > maxWait) {
-            clearInterval(checkInterval);
+        // Await the existing initialization promise directly (no polling needed)
+        const initPromise = getInitPromise();
+        if (initPromise) {
+          initPromise.then(() => {
             sendResponse({
               isAuthenticated: sessionCache.isAuthenticated,
               userInfo: sessionCache.userInfo,
@@ -379,9 +377,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               deviceNickname: sessionCache.deviceNickname,
               websocketConnected: websocketClient ? websocketClient.isConnected() : false
             });
-          }
-        }, 100);
-        return true; // Keep message channel open
+          }).catch((error) => {
+            debugLogger.general('ERROR', 'Initialization failed while waiting', null, error);
+            sendResponse({ isAuthenticated: false });
+          });
+          return true; // Keep message channel open for async response
+        }
       }
 
       debugLogger.general('WARN', 'Service worker wake-up detected - session cache not initialized', {

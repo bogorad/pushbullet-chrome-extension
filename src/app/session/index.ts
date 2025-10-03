@@ -25,6 +25,14 @@ export const initializationState: InitializationState = {
 // Prevents race conditions when multiple events trigger initialization concurrently
 let initPromise: Promise<string | null> | null = null;
 
+/**
+ * Get the current initialization promise (if any)
+ * This allows callers to await ongoing initialization instead of polling
+ */
+export function getInitPromise(): Promise<string | null> | null {
+  return initPromise;
+}
+
 // NO DECRYPTION - API key is stored in plain text in chrome.storage.sync
 // The crypto module is ONLY for decrypting E2EE push messages, NOT the API key!
 
