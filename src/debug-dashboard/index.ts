@@ -127,6 +127,8 @@ const exportTextBtn = getElementById<HTMLButtonElement>('export-text-btn');
 const clearLogsBtn = getElementById<HTMLButtonElement>('clear-logs-btn');
 const closeBtn = getElementById<HTMLButtonElement>('close-btn');
 const autoRefreshToggle = getElementById<HTMLInputElement>('auto-refresh-toggle');
+const debugToggle = getElementById<HTMLInputElement>('debug-toggle');
+const debugStatusText = getElementById<HTMLSpanElement>('debug-status-text');
 const lastUpdatedSpan = getElementById<HTMLSpanElement>('last-updated');
 
 // Summary elements
@@ -194,6 +196,28 @@ function setupEventListeners(): void {
         }
       });
     }
+  });
+
+  // Debug toggle switch
+  debugToggle.addEventListener('change', () => {
+    const enabled = debugToggle.checked;
+    debugStatusText.textContent = enabled ? 'Enabled' : 'Disabled';
+
+    // Send message to background to update debug config
+    chrome.runtime.sendMessage({
+      action: 'updateDebugConfig',
+      config: { enabled }
+    }, (response) => {
+      if (response && response.success) {
+        // Refresh dashboard to reflect new config
+        loadDashboardData();
+      } else {
+        showError('Failed to update debug config.');
+        // Revert toggle on failure
+        debugToggle.checked = !enabled;
+        debugStatusText.textContent = !enabled ? 'Enabled' : 'Disabled';
+      }
+    });
   });
 
   // Close button
@@ -298,16 +322,13 @@ function updateDashboard(data: DebugSummary['summary']): void {
  * Update summary cards
  */
 function updateSummary(data: DebugSummary['summary']): void {
-  // Debug status
-  const statusDot = querySelector<HTMLSpanElement>('.status-dot');
-  const statusText = querySelector<HTMLSpanElement>('.status-text');
-
+  // Debug status - update toggle switch and text
   if (data.config && data.config.enabled) {
-    statusDot.classList.remove('disabled');
-    statusText.textContent = 'Enabled';
+    debugToggle.checked = true;
+    debugStatusText.textContent = 'Enabled';
   } else {
-    statusDot.classList.add('disabled');
-    statusText.textContent = 'Disabled';
+    debugToggle.checked = false;
+    debugStatusText.textContent = 'Disabled';
   }
 
   // Total logs

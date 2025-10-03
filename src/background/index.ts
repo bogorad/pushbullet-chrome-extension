@@ -766,6 +766,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
     });
     return true; // Async response
+  } else if (message.action === 'updateDebugConfig') {
+    // Update debug configuration
+    if (message.config) {
+      debugConfigManager.updateConfig(message.config).then(() => {
+        sendResponse({ success: true });
+      }).catch((error) => {
+        debugLogger.general('ERROR', 'Failed to update debug config', null, error);
+        sendResponse({ success: false, error: error.message });
+      });
+    } else {
+      sendResponse({ success: false, error: 'No config provided' });
+    }
+    return true; // Async response
   } else if (message.action === 'exportDebugData') {
     // This handler gathers all debug data for exporting
     debugLogger.general('INFO', 'Exporting full debug data');

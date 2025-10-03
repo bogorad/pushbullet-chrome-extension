@@ -117,27 +117,61 @@ body {
   gap: 10px;
 }
 
-.status-dot {
-  width: 12px;
-  height: 12px;
+/* Debug Toggle Switch */
+.debug-toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+  margin: 0 10px;
+}
+
+.debug-toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.debug-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #f44336; /* Red when disabled */
+  transition: 0.3s;
+  border-radius: 24px;
+}
+
+.debug-toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
   border-radius: 50%;
-  background-color: #4CAF50;
-  animation: pulse 2s infinite;
 }
 
-.status-dot.disabled {
-  background-color: #f44336;
-  animation: none;
+.debug-toggle-switch input:checked + .debug-toggle-slider {
+  background-color: #4CAF50; /* Green when enabled */
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+.debug-toggle-switch input:checked + .debug-toggle-slider:before {
+  transform: translateX(26px);
+}
+
+.debug-toggle-switch input:focus + .debug-toggle-slider {
+  box-shadow: 0 0 1px #4CAF50;
 }
 
 .status-text {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 500;
+  vertical-align: middle;
 }
 
 /* Tabs */

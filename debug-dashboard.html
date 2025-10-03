@@ -31,8 +31,11 @@
         <div class="summary-card">
           <h3>Debug Status</h3>
           <div id="debug-status" class="status-indicator">
-            <span class="status-dot"></span>
-            <span class="status-text">Loading...</span>
+            <label class="debug-toggle-switch">
+              <input type="checkbox" id="debug-toggle">
+              <span class="debug-toggle-slider"></span>
+            </label>
+            <span class="status-text" id="debug-status-text">Disabled</span>
           </div>
         </div>
         <div class="summary-card">

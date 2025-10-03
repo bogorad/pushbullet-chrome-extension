@@ -8,13 +8,6 @@
     }
     return element;
   }
-  function querySelector(selector) {
-    const element = document.querySelector(selector);
-    if (!element) {
-      throw new Error(`Element with selector "${selector}" not found`);
-    }
-    return element;
-  }
 
   // src/debug-dashboard/index.ts
   var refreshBtn = getElementById("refresh-btn");
@@ -23,6 +16,8 @@
   var clearLogsBtn = getElementById("clear-logs-btn");
   var closeBtn = getElementById("close-btn");
   var autoRefreshToggle = getElementById("auto-refresh-toggle");
+  var debugToggle = getElementById("debug-toggle");
+  var debugStatusText = getElementById("debug-status-text");
   var lastUpdatedSpan = getElementById("last-updated");
   var debugStatusEl = getElementById("debug-status");
   var totalLogsEl = getElementById("total-logs");
@@ -65,6 +60,22 @@
           }
         });
       }
+    });
+    debugToggle.addEventListener("change", () => {
+      const enabled = debugToggle.checked;
+      debugStatusText.textContent = enabled ? "Enabled" : "Disabled";
+      chrome.runtime.sendMessage({
+        action: "updateDebugConfig",
+        config: { enabled }
+      }, (response) => {
+        if (response && response.success) {
+          loadDashboardData();
+        } else {
+          showError("Failed to update debug config.");
+          debugToggle.checked = !enabled;
+          debugStatusText.textContent = !enabled ? "Enabled" : "Disabled";
+        }
+      });
     });
     closeBtn.addEventListener("click", () => {
       window.close();
@@ -138,14 +149,12 @@
     renderConfig(data.config, data.websocketState);
   }
   function updateSummary(data) {
-    const statusDot = querySelector(".status-dot");
-    const statusText = querySelector(".status-text");
     if (data.config && data.config.enabled) {
-      statusDot.classList.remove("disabled");
-      statusText.textContent = "Enabled";
+      debugToggle.checked = true;
+      debugStatusText.textContent = "Enabled";
     } else {
-      statusDot.classList.add("disabled");
-      statusText.textContent = "Disabled";
+      debugToggle.checked = false;
+      debugStatusText.textContent = "Disabled";
     }
     if (data.totalLogs !== void 0) {
       totalLogsEl.textContent = data.totalLogs.toString();

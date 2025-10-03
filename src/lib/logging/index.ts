@@ -23,8 +23,9 @@ export interface DebugConfig {
   sanitizeData: boolean;
 }
 
+// DEBUG TOGGLE: Default to disabled to prevent unnecessary log accumulation
 export const DEBUG_CONFIG: DebugConfig = {
-  enabled: true,
+  enabled: false,
   categories: {
     WEBSOCKET: true,
     NOTIFICATIONS: true,

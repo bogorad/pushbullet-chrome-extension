@@ -4,7 +4,7 @@
   var STORAGE_KEY = "persistentDebugLogs";
   var MAX_PERSISTENT_LOGS = 5e3;
   var DEBUG_CONFIG = {
-    enabled: true,
+    enabled: false,
     categories: {
       WEBSOCKET: true,
       NOTIFICATIONS: true,
@@ -2821,6 +2821,18 @@
       debugLogger.clearLogs().then(() => {
         sendResponse({ success: true });
       });
+      return true;
+    } else if (message.action === "updateDebugConfig") {
+      if (message.config) {
+        debugConfigManager.updateConfig(message.config).then(() => {
+          sendResponse({ success: true });
+        }).catch((error) => {
+          debugLogger.general("ERROR", "Failed to update debug config", null, error);
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: "No config provided" });
+      }
       return true;
     } else if (message.action === "exportDebugData") {
       debugLogger.general("INFO", "Exporting full debug data");
