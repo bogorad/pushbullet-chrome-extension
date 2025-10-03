@@ -105,40 +105,7 @@ h2 {
   gap: 8px;
 }
 
-.connection-indicator {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-}
-
-.connection-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background-color: #ccc;
-  transition: background-color 0.3s ease;
-}
-
-.connection-indicator.connected .connection-dot {
-  background-color: #4caf50;
-  box-shadow: 0 0 4px rgba(76, 175, 80, 0.6);
-}
-
-.connection-indicator.connecting .connection-dot {
-  background-color: #ff9800;
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.connection-indicator.disconnected .connection-dot {
-  background-color: #f44336;
-}
-
-.connection-indicator.polling .connection-dot {
-  background-color: #2196f3;
-  animation: pulse 2s ease-in-out infinite;
-}
+/* Connection indicator removed - no longer needed */
 
 @keyframes pulse {
   0%, 100% {

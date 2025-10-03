@@ -38,13 +38,37 @@ import {
   pushNote,
   updateConnectionIcon
 } from './utils';
+import { validatePrivilegedMessage } from '../lib/security/message-validation';
 import type { Push } from '../types/domain';
 
 // Load debug configuration
 debugConfigManager.loadConfig();
 
 // Store notification data for detail view
+// SECURITY FIX (M-06): Limit store size to prevent memory leak
 const notificationDataStore = new Map<string, Push>();
+const MAX_NOTIFICATION_STORE_SIZE = 100;
+
+/**
+ * Add notification to store with size limit
+ */
+export function addToNotificationStore(id: string, push: Push): void {
+  // Remove oldest entries if at capacity
+  if (notificationDataStore.size >= MAX_NOTIFICATION_STORE_SIZE) {
+    const firstKey = notificationDataStore.keys().next().value;
+    if (firstKey) {
+      notificationDataStore.delete(firstKey);
+    }
+  }
+  notificationDataStore.set(id, push);
+}
+
+/**
+ * Get notification store (for passing to utils)
+ */
+export function getNotificationStore(): Map<string, Push> {
+  return notificationDataStore;
+}
 
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
@@ -56,12 +80,18 @@ function connectWebSocket(): void {
   // Set connecting status
   updateConnectionIcon('connecting');
 
-  if (!websocketClient) {
-    websocketClient = new WebSocketClient(WEBSOCKET_URL, getApiKey);
-    setWebSocketClient(websocketClient);
+  // SECURITY FIX (H-02): Dispose existing socket before creating new one
+  if (websocketClient) {
+    debugLogger.websocket('INFO', 'Disposing existing WebSocket before reconnecting');
+    websocketClient.disconnect();
+    websocketClient = null;
+  }
 
-    // Set up handlers
-    websocketClient.setHandlers({
+  websocketClient = new WebSocketClient(WEBSOCKET_URL, getApiKey);
+  setWebSocketClient(websocketClient);
+
+  // Set up handlers
+  websocketClient.setHandlers({
       onTicklePush: async () => {
         await refreshPushes(notificationDataStore);
       },
@@ -128,7 +158,11 @@ function connectWebSocket(): void {
           }).catch(() => {});
         }
 
-        await showPushNotification(decryptedPush, notificationDataStore);
+        // FIX: Don't await - let notifications show immediately without blocking
+        // This allows multiple notifications to appear concurrently
+        showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+          debugLogger.general('ERROR', 'Failed to show notification', null, error);
+        });
       },
       onConnected: () => {
         stopPollingMode();
@@ -147,7 +181,6 @@ function connectWebSocket(): void {
         updatePopupConnectionState(state);
       }
     });
-  }
 
   websocketClient.connect();
 }
@@ -302,6 +335,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hasApiKey: !!message.apiKey,
     timestamp: new Date().toISOString()
   });
+
+  // SECURITY FIX (C-04): Validate sender for privileged actions
+  // Prevents external extensions/pages from sending privileged messages
+  if (!validatePrivilegedMessage(message.action, sender)) {
+    debugLogger.general('ERROR', 'Rejected privileged message from untrusted sender', {
+      action: message.action,
+      senderId: sender?.id,
+      senderUrl: sender?.url
+    });
+    sendResponse({ success: false, error: 'Unauthorized' });
+    return false;
+  }
 
   if (message.action === 'getSessionData') {
     // Detect service worker wake-up: if we have an API key but session cache is not initialized

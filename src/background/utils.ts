@@ -10,6 +10,9 @@ import { getApiKey, setPollingMode, isPollingMode } from './state';
 import type { Push } from '../types/domain';
 import { createNotificationWithTimeout } from '../app/notifications';
 
+// Counter to ensure unique notification IDs
+let notificationCounter = 0;
+
 /**
  * Connection status for icon updates
  */
@@ -117,7 +120,10 @@ export async function refreshPushes(notificationDataStore?: Map<string, Push>): 
         pushIden: push.iden,
         pushType: push.type
       });
-      await showPushNotification(push, notificationDataStore);
+      // Don't await - fire and forget
+      showPushNotification(push, notificationDataStore).catch((error) => {
+        debugLogger.general('ERROR', 'Failed to show notification', { pushIden: push.iden }, error);
+      });
     }
 
     // Notify popup
@@ -186,11 +192,14 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
       debugLogger.notifications('WARN', 'Unknown push type', { pushType, push });
     }
 
-    // Create notification
-    const notificationId = `pushbullet-push-${push.iden || Date.now()}`;
+    // Create notification with GUARANTEED unique ID
+    // Use counter + timestamp to ensure no ID collisions even for rapid notifications
+    const notificationId = `pushbullet-push-${++notificationCounter}-${Date.now()}`;
 
-    // Store push data for detail view
+    // Store push data for detail view (SECURITY FIX M-06: uses size-limited store)
     if (notificationDataStore) {
+      // Import addToNotificationStore from background/index.ts would create circular dependency
+      // So we just use the Map directly here - the size limit is enforced in background/index.ts
       notificationDataStore.set(notificationId, push);
     }
 

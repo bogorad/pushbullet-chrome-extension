@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- SECURITY FIX (H-01): Content Security Policy -->
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'none';">
   <title>Pushbullet</title>
   <link rel="stylesheet" href="css/popup.css">
   <style>
@@ -119,9 +121,6 @@
   <div id="main-section">
     <div class="header">
       <div class="user-info">
-        <div class="connection-indicator" id="connection-indicator" title="Connection status">
-          <span class="connection-dot"></span>
-        </div>
         <img id="user-image" src="" alt="User Image">
         <span id="user-name">User Name</span>
       </div>
@@ -207,6 +206,6 @@
     <p class="disclaimer">This is an unofficial extension and is not affiliated with Pushbullet Inc.</p>
   </div>
   
-  <script src="js/popup.js"></script>
+  <script src="dist/popup.js"></script>
 </body>
-</html> 
+</html>

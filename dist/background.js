@@ -1214,7 +1214,7 @@
         const decryptedText = decoder.decode(decrypted);
         return JSON.parse(decryptedText);
       } catch (error) {
-        console.error("Decryption error:", error);
+        console.error("Decryption error - check encryption password");
         throw new Error("Failed to decrypt message. Check your encryption password.");
       }
     }
@@ -1307,6 +1307,7 @@
   }
 
   // src/background/utils.ts
+  var notificationCounter = 0;
   function sanitizeText(text) {
     if (!text) return "";
     let sanitized = text.replace(/<[^>]*>/g, "");
@@ -1369,7 +1370,9 @@
           pushIden: push.iden,
           pushType: push.type
         });
-        await showPushNotification(push, notificationDataStore2);
+        showPushNotification(push, notificationDataStore2).catch((error) => {
+          debugLogger.general("ERROR", "Failed to show notification", { pushIden: push.iden }, error);
+        });
       }
       chrome.runtime.sendMessage({
         action: "pushesUpdated",
@@ -1422,7 +1425,7 @@
         message = JSON.stringify(push).substring(0, 200);
         debugLogger.notifications("WARN", "Unknown push type", { pushType, push });
       }
-      const notificationId = `pushbullet-push-${push.iden || Date.now()}`;
+      const notificationId = `pushbullet-push-${++notificationCounter}-${Date.now()}`;
       if (notificationDataStore2) {
         notificationDataStore2.set(notificationId, push);
       }
@@ -1632,93 +1635,166 @@
     }
   }
 
+  // src/lib/security/message-validation.ts
+  function isValidSender(sender) {
+    if (!sender) {
+      debugLogger.general("WARN", "Message received with no sender");
+      return false;
+    }
+    if (sender.id !== chrome.runtime.id) {
+      debugLogger.general("WARN", "Message received from external extension", {
+        senderId: sender.id,
+        expectedId: chrome.runtime.id
+      });
+      return false;
+    }
+    if (sender.url) {
+      const extensionUrl = chrome.runtime.getURL("");
+      if (!sender.url.startsWith(extensionUrl)) {
+        debugLogger.general("WARN", "Message received from non-extension URL", {
+          senderUrl: sender.url,
+          expectedPrefix: extensionUrl
+        });
+        return false;
+      }
+    }
+    return true;
+  }
+  var PRIVILEGED_ACTIONS = /* @__PURE__ */ new Set([
+    "apiKeyChanged",
+    "logout",
+    "settingsChanged",
+    "deviceNicknameChanged",
+    "autoOpenLinksChanged",
+    "encryptionPasswordChanged",
+    "debugModeChanged",
+    "pushNote",
+    "pushLink",
+    "pushFile"
+  ]);
+  function isPrivilegedAction(action) {
+    return PRIVILEGED_ACTIONS.has(action);
+  }
+  function validatePrivilegedMessage(action, sender) {
+    if (!isPrivilegedAction(action)) {
+      return true;
+    }
+    if (!isValidSender(sender)) {
+      debugLogger.general("ERROR", "Rejected privileged action from invalid sender", {
+        action,
+        senderId: sender?.id,
+        senderUrl: sender?.url
+      });
+      return false;
+    }
+    return true;
+  }
+
   // src/background/index.ts
   debugConfigManager.loadConfig();
   var notificationDataStore = /* @__PURE__ */ new Map();
+  var MAX_NOTIFICATION_STORE_SIZE = 100;
+  function addToNotificationStore(id, push) {
+    if (notificationDataStore.size >= MAX_NOTIFICATION_STORE_SIZE) {
+      const firstKey = notificationDataStore.keys().next().value;
+      if (firstKey) {
+        notificationDataStore.delete(firstKey);
+      }
+    }
+    notificationDataStore.set(id, push);
+  }
+  function getNotificationStore() {
+    return notificationDataStore;
+  }
   var websocketClient2 = null;
   function connectWebSocket() {
     updateConnectionIcon("connecting");
-    if (!websocketClient2) {
-      websocketClient2 = new WebSocketClient(WEBSOCKET_URL, getApiKey);
-      setWebSocketClient(websocketClient2);
-      websocketClient2.setHandlers({
-        onTicklePush: async () => {
-          await refreshPushes(notificationDataStore);
-        },
-        onTickleDevice: async () => {
-          const apiKey2 = getApiKey();
-          if (apiKey2) {
-            const devices = await fetchDevices(apiKey2);
-            sessionCache.devices = devices;
-            sessionCache.lastUpdated = Date.now();
-            chrome.runtime.sendMessage({
-              action: "sessionDataUpdated",
-              devices,
-              userInfo: sessionCache.userInfo,
-              recentPushes: sessionCache.recentPushes,
-              autoOpenLinks: sessionCache.autoOpenLinks,
-              deviceNickname: sessionCache.deviceNickname
-            }).catch(() => {
-            });
-          }
-        },
-        onPush: async (push) => {
-          let decryptedPush = push;
-          if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
-            try {
-              const result = await chrome.storage.local.get(["encryptionPassword"]);
-              const password = result.encryptionPassword;
-              if (password && sessionCache.userInfo) {
-                debugLogger.general("INFO", "Decrypting encrypted push", {
-                  pushIden: push.iden
-                });
-                const decrypted = await PushbulletCrypto.decryptPush(
-                  push,
-                  password,
-                  sessionCache.userInfo.iden
-                );
-                decryptedPush = decrypted;
-                debugLogger.general("INFO", "Push decrypted successfully", {
-                  pushType: decryptedPush.type
-                });
-              } else {
-                debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
-              }
-            } catch (error) {
-              debugLogger.general("ERROR", "Failed to decrypt push", {
-                error: error.message
-              }, error);
-            }
-          }
-          if (sessionCache.recentPushes) {
-            sessionCache.recentPushes.unshift(decryptedPush);
-            sessionCache.lastUpdated = Date.now();
-            chrome.runtime.sendMessage({
-              action: "pushesUpdated",
-              pushes: sessionCache.recentPushes
-            }).catch(() => {
-            });
-          }
-          await showPushNotification(decryptedPush, notificationDataStore);
-        },
-        onConnected: () => {
-          stopPollingMode();
-          updateConnectionIcon("connected");
-        },
-        onDisconnected: () => {
-          updateConnectionIcon("disconnected");
-        },
-        checkPollingMode: () => {
-          checkPollingMode();
-        },
-        stopPollingMode: () => {
-          stopPollingMode();
-        },
-        updatePopupConnectionState: (state) => {
-          updatePopupConnectionState(state);
-        }
-      });
+    if (websocketClient2) {
+      debugLogger.websocket("INFO", "Disposing existing WebSocket before reconnecting");
+      websocketClient2.disconnect();
+      websocketClient2 = null;
     }
+    websocketClient2 = new WebSocketClient(WEBSOCKET_URL, getApiKey);
+    setWebSocketClient(websocketClient2);
+    websocketClient2.setHandlers({
+      onTicklePush: async () => {
+        await refreshPushes(notificationDataStore);
+      },
+      onTickleDevice: async () => {
+        const apiKey2 = getApiKey();
+        if (apiKey2) {
+          const devices = await fetchDevices(apiKey2);
+          sessionCache.devices = devices;
+          sessionCache.lastUpdated = Date.now();
+          chrome.runtime.sendMessage({
+            action: "sessionDataUpdated",
+            devices,
+            userInfo: sessionCache.userInfo,
+            recentPushes: sessionCache.recentPushes,
+            autoOpenLinks: sessionCache.autoOpenLinks,
+            deviceNickname: sessionCache.deviceNickname
+          }).catch(() => {
+          });
+        }
+      },
+      onPush: async (push) => {
+        let decryptedPush = push;
+        if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
+          try {
+            const result = await chrome.storage.local.get(["encryptionPassword"]);
+            const password = result.encryptionPassword;
+            if (password && sessionCache.userInfo) {
+              debugLogger.general("INFO", "Decrypting encrypted push", {
+                pushIden: push.iden
+              });
+              const decrypted = await PushbulletCrypto.decryptPush(
+                push,
+                password,
+                sessionCache.userInfo.iden
+              );
+              decryptedPush = decrypted;
+              debugLogger.general("INFO", "Push decrypted successfully", {
+                pushType: decryptedPush.type
+              });
+            } else {
+              debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+            }
+          } catch (error) {
+            debugLogger.general("ERROR", "Failed to decrypt push", {
+              error: error.message
+            }, error);
+          }
+        }
+        if (sessionCache.recentPushes) {
+          sessionCache.recentPushes.unshift(decryptedPush);
+          sessionCache.lastUpdated = Date.now();
+          chrome.runtime.sendMessage({
+            action: "pushesUpdated",
+            pushes: sessionCache.recentPushes
+          }).catch(() => {
+          });
+        }
+        showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+          debugLogger.general("ERROR", "Failed to show notification", null, error);
+        });
+      },
+      onConnected: () => {
+        stopPollingMode();
+        updateConnectionIcon("connected");
+      },
+      onDisconnected: () => {
+        updateConnectionIcon("disconnected");
+      },
+      checkPollingMode: () => {
+        checkPollingMode();
+      },
+      stopPollingMode: () => {
+        stopPollingMode();
+      },
+      updatePopupConnectionState: (state) => {
+        updatePopupConnectionState(state);
+      }
+    });
     websocketClient2.connect();
   }
   function disconnectWebSocket() {
@@ -1827,6 +1903,15 @@
       hasApiKey: !!message.apiKey,
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
+    if (!validatePrivilegedMessage(message.action, sender)) {
+      debugLogger.general("ERROR", "Rejected privileged message from untrusted sender", {
+        action: message.action,
+        senderId: sender?.id,
+        senderUrl: sender?.url
+      });
+      sendResponse({ success: false, error: "Unauthorized" });
+      return false;
+    }
     if (message.action === "getSessionData") {
       const apiKey2 = getApiKey();
       if (apiKey2 && !sessionCache.isAuthenticated && sessionCache.lastUpdated === 0) {

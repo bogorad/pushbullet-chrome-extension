@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- SECURITY FIX (H-01): Content Security Policy -->
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'none';">
   <title>Pushbullet Debug Dashboard</title>
   <link rel="stylesheet" href="css/debug-dashboard.css">
 </head>
@@ -166,7 +168,7 @@
     </footer>
   </div>
 
-  <script src="js/debug-dashboard.js"></script>
+  <script src="dist/debug-dashboard.js"></script>
 </body>
 </html>
 
