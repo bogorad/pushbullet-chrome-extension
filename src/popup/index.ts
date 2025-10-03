@@ -4,13 +4,22 @@
 
 import type { Push, Device, UserInfo } from '../types/domain';
 import { getElementById, formatTimestamp as formatTimestampUtil } from '../lib/ui/dom';
+import { storageRepository } from '../infrastructure/storage/storage.repository';
 
-// API URLs
-const USER_INFO_URL = 'https://api.pushbullet.com/v2/users/me';
-const DEVICES_URL = 'https://api.pushbullet.com/v2/devices';
-const PUSHES_URL = 'https://api.pushbullet.com/v2/pushes';
-// WEBSOCKET_URL removed - popup no longer maintains its own WebSocket connection
-// The background script manages the single, persistent WebSocket connection
+// API URLs - MOSTLY REMOVED
+// ARCHITECTURAL CHANGE: Popup no longer makes direct API calls
+// All API communication is centralized in the background script
+//
+// EXCEPTION: File upload still requires direct API access because:
+// - FormData cannot be serialized through chrome.runtime.sendMessage
+// - File upload involves two steps: upload-request + S3 upload
+// - The final push creation is still delegated to background
+//
+// Removed URLs (now handled by background):
+// - USER_INFO_URL (user info fetched by background)
+// - DEVICES_URL (devices fetched by background)
+// - PUSHES_URL (pushes sent via background)
+// - WEBSOCKET_URL (WebSocket managed by background)
 
 // Type definitions
 interface SessionData {
@@ -131,51 +140,38 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
 }
 
 /**
- * Check storage for API key
+ * Check storage for API key and get session data from background
+ * ARCHITECTURAL CHANGE: Popup no longer makes direct API calls.
+ * All data is fetched from background script's session cache.
  */
 function checkStorageForApiKey(): void {
-  console.log('Checking storage for API key');
+  console.log('Requesting session data from background');
   showSection('loading');
 
-  const syncPromise = chrome.storage.sync.get(['apiKey', 'autoOpenLinks', 'deviceNickname']);
-  const localPromise = chrome.storage.local.get(['scrollToRecentPushes']);
+  // Request session data from background script (single source of truth)
+  chrome.runtime.sendMessage({ action: 'getSessionData' }, async (response: SessionData) => {
+    if (chrome.runtime.lastError) {
+      console.error('Error getting session data:', chrome.runtime.lastError);
+      showSection('login');
+      return;
+    }
 
-  Promise.all([syncPromise, localPromise]).then(
-    async ([syncResult, localResult]) => {
-      const result = { ...syncResult, ...localResult };
-      if (result.apiKey) {
-        apiKey = result.apiKey as string;
+    if (response.isAuthenticated) {
+      // Initialize from background's cached data
+      await initializeFromSessionData(response);
 
-        if (result.autoOpenLinks !== undefined) {
-          console.log('Auto-open links setting:', result.autoOpenLinks);
-        }
-
-        if (result.deviceNickname) {
-          deviceNickname = result.deviceNickname as string;
-          console.log('Device nickname:', deviceNickname);
-        }
-
-        try {
-          await initializeAuthenticated();
-          showSection('main');
-          hasInitialized = true;
-
-          // Check if we should scroll to recent pushes
-          if (result.scrollToRecentPushes) {
-            chrome.storage.local.remove(['scrollToRecentPushes']);
-            setTimeout(() => {
-              scrollToRecentPushes();
-            }, 100);
-          }
-        } catch (error) {
-          console.error('Error initializing:', error);
-          showSection('login');
-        }
-      } else {
-        showSection('login');
+      // Check if we should scroll to recent pushes
+      const shouldScroll = await storageRepository.getScrollToRecentPushes();
+      if (shouldScroll) {
+        await storageRepository.removeScrollToRecentPushes();
+        setTimeout(() => {
+          scrollToRecentPushes();
+        }, 100);
       }
-    },
-  );
+    } else {
+      showSection('login');
+    }
+  });
 }
 
 /**
@@ -238,6 +234,7 @@ function setupEventListeners(): void {
 
 /**
  * Save API key
+ * ARCHITECTURAL CHANGE: Delegates API key validation to background script
  */
 async function saveApiKey(): Promise<void> {
   const newApiKey = apiKeyInput.value.trim();
@@ -251,38 +248,42 @@ async function saveApiKey(): Promise<void> {
   showSection('loading');
 
   try {
-    // Validate API key
-    const response = await fetch(USER_INFO_URL, {
-      headers: {
-        'Access-Token': newApiKey,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error('Invalid Access Token');
-    }
-
-    // Save to storage
-    await chrome.storage.sync.set({
-      apiKey: newApiKey,
-      deviceNickname: newNickname,
-    });
+    // Save to storage repository
+    await storageRepository.setApiKey(newApiKey);
+    await storageRepository.setDeviceNickname(newNickname);
 
     apiKey = newApiKey;
     deviceNickname = newNickname;
 
-    // Notify background
+    // Notify background to validate and initialize
+    // Background will respond AFTER initialization is complete (no setTimeout needed!)
     chrome.runtime.sendMessage({
       action: 'apiKeyChanged',
       apiKey: newApiKey,
       deviceNickname: newNickname,
-    }).catch((error) => {
-      console.warn('Could not notify background of API key change:', error.message);
-    });
+    }, (response: SessionData) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error notifying background:', chrome.runtime.lastError);
+        showStatus('Error: Could not connect to background script', 'error');
+        showSection('login');
+        return;
+      }
 
-    await initializeAuthenticated();
-    showSection('main');
-    hasInitialized = true;
+      // Response contains session data after background has completed initialization
+      if (response.success === false) {
+        showStatus(`Error: ${response.error || 'Invalid Access Token'}`, 'error');
+        showSection('login');
+        return;
+      }
+
+      if (response.isAuthenticated) {
+        initializeFromSessionData(response);
+        hasInitialized = true;
+      } else {
+        showStatus('Invalid Access Token', 'error');
+        showSection('login');
+      }
+    });
   } catch (error) {
     showStatus(`Error: ${(error as Error).message}`, 'error');
     showSection('login');
@@ -292,10 +293,10 @@ async function saveApiKey(): Promise<void> {
 /**
  * Logout
  */
-function logout(): void {
+async function logout(): Promise<void> {
   // WebSocket disconnection is handled by background script
-  chrome.storage.sync.remove(['apiKey']);
-  chrome.storage.local.remove(['deviceIden']);
+  await storageRepository.setApiKey(null);
+  await storageRepository.setDeviceIden(null);
   apiKey = null;
   hasInitialized = false;
 
@@ -310,110 +311,36 @@ function logout(): void {
 }
 
 /**
- * Initialize authenticated state
+ * REMOVED: initializeAuthenticated()
+ *
+ * This function previously made direct API calls to fetch user info, devices, and pushes.
+ * It has been removed as part of the architectural refactoring to centralize all API
+ * communication in the background script.
+ *
+ * The popup now uses initializeFromSessionData() which receives data from the background
+ * script's session cache via chrome.runtime.sendMessage({ action: 'getSessionData' }).
  */
-async function initializeAuthenticated(): Promise<boolean> {
-  try {
-    // Get user info
-    const userInfo = await fetchUserInfo();
-
-    // Get devices
-    devices = await fetchDevices();
-
-    // Populate device dropdown
-    populateDeviceDropdown(devices);
-
-    // Get recent pushes
-    const pushes = await fetchRecentPushes();
-
-    // Display pushes
-    displayPushes(pushes);
-
-    // Update UI
-    updateUserInfo(userInfo);
-
-    // WebSocket connection is managed by background script
-    // Popup receives updates via chrome.runtime.onMessage
-
-    return true;
-  } catch (error) {
-    console.error('Error in initializeAuthenticated:', error);
-    throw error;
-  }
-}
 
 /**
- * Fetch user info
+ * REMOVED: fetchUserInfo(), fetchDevices(), fetchRecentPushes()
+ *
+ * These functions previously made direct API calls to the Pushbullet API.
+ * They have been removed as part of the architectural refactoring to centralize
+ * all API communication in the background script.
+ *
+ * ARCHITECTURAL CHANGE:
+ * - The popup is now a "dumb client" that only displays data
+ * - All data comes from the background script's session cache
+ * - The background script is the single source of truth for API state
+ * - This eliminates redundant API calls every time the popup opens
+ * - Improves efficiency and prevents state desynchronization
+ *
+ * Data flow:
+ * 1. Popup opens → sends getSessionData message to background
+ * 2. Background responds with cached session data
+ * 3. Popup displays the data using initializeFromSessionData()
+ * 4. Background proactively sends pushesUpdated when new data arrives
  */
-async function fetchUserInfo(): Promise<UserInfo> {
-  if (!apiKey) throw new Error('No API key');
-
-  const response = await fetch(USER_INFO_URL, {
-    headers: {
-      'Access-Token': apiKey,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch user info');
-  }
-
-  return response.json();
-}
-
-/**
- * Fetch devices
- */
-async function fetchDevices(): Promise<Device[]> {
-  if (!apiKey) throw new Error('No API key');
-
-  const response = await fetch(DEVICES_URL, {
-    headers: {
-      'Access-Token': apiKey,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch devices');
-  }
-
-  const data = await response.json() as { devices: Device[] };
-  return data.devices.filter((device) => device.active);
-}
-
-/**
- * Fetch recent pushes
- */
-async function fetchRecentPushes(): Promise<Push[]> {
-  if (!apiKey) throw new Error('No API key');
-
-  const response = await fetch(`${PUSHES_URL}?limit=20`, {
-    headers: {
-      'Access-Token': apiKey,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch pushes');
-  }
-
-  const data = await response.json() as { pushes: Push[] };
-
-  // Get device iden
-  let deviceIden: string | null = null;
-  try {
-    const deviceResult = await chrome.storage.local.get(['deviceIden']);
-    deviceIden = deviceResult.deviceIden as string;
-  } catch (error) {
-    console.error('Error getting device iden:', error);
-  }
-
-  // Filter pushes
-  return data.pushes.filter((push) => {
-    const hasContent = push.title || push.body || push.url;
-    return hasContent && !push.dismissed;
-  });
-}
 
 /**
  * REMOVED: connectWebSocket() and disconnectWebSocket()
@@ -649,9 +576,9 @@ async function sendPush(): Promise<void> {
 
     // Get source device iden
     try {
-      const deviceResult = await chrome.storage.local.get(['deviceIden']);
-      if (deviceResult.deviceIden) {
-        pushData.source_device_iden = deviceResult.deviceIden as string;
+      const deviceIden = await storageRepository.getDeviceIden();
+      if (deviceIden) {
+        pushData.source_device_iden = deviceIden;
       }
     } catch (error) {
       console.error('Error getting device iden:', error);
@@ -735,41 +662,35 @@ async function sendPush(): Promise<void> {
       }
     }
 
-    // Send push
-    console.log('Sending push:', pushData);
-    const response = await fetch(PUSHES_URL, {
-      method: 'POST',
-      headers: {
-        'Access-Token': apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(pushData),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Push failed:', response.status, errorText);
-      let errorMessage = 'Failed to send push';
-      try {
-        const errorData = JSON.parse(errorText) as { error?: { message?: string } };
-        if (errorData.error?.message) {
-          errorMessage = errorData.error.message;
-        }
-      } catch {
-        // Use default
+    // Send push via background script
+    console.log('Sending push via background:', pushData);
+    chrome.runtime.sendMessage({
+      action: 'sendPush',
+      pushData: pushData
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error sending push:', chrome.runtime.lastError);
+        showStatus('Error: Could not send push', 'error');
+        return;
       }
-      throw new Error(errorMessage);
-    }
 
-    // Clear form
-    clearPushForm();
+      if (response.success) {
+        // Clear form
+        clearPushForm();
 
-    // Show success
-    showStatus('Push sent successfully!', 'success');
+        // Show success
+        showStatus('Push sent successfully!', 'success');
 
-    // Reload pushes
-    const pushes = await fetchRecentPushes();
-    displayPushes(pushes);
+        // Request updated pushes from background
+        chrome.runtime.sendMessage({ action: 'getSessionData' }, (sessionResponse: SessionData) => {
+          if (sessionResponse && sessionResponse.recentPushes) {
+            displayPushes(sessionResponse.recentPushes);
+          }
+        });
+      } else {
+        showStatus(`Error: ${response.error || 'Failed to send push'}`, 'error');
+      }
+    });
   } catch (error) {
     showStatus(`Error: ${(error as Error).message}`, 'error');
   }

@@ -134,12 +134,269 @@ More reliable and eliminates arbitrary timeout.
 - [ ] manifest.json (version bumps: 1.0.61 → 1.0.65)
 - [ ] tests/popup/communication.test.ts (NEW - test popup-background messaging)
 
-## Version History (Phase 6)
+## Version History (Phase 6-7)
 - 1.0.61: Starting version (after unit test implementation)
 - 1.0.62: Redundant WebSocket removed from popup
 - 1.0.63: XSS sanitization enhanced (textContent usage)
 - 1.0.64: getSessionData timeout logic simplified
 - 1.0.65: Promise rejection handlers added to popup sendMessage calls
+- 1.0.66: Complete API centralization - popup is now a "dumb client"
+- 1.0.67: Removed setTimeout hack - proper async response handling
+- 1.0.68: Storage Repository Pattern - core modules refactored
+- 1.0.69: Event Bus Pattern - components decoupled with event-driven architecture
+- 1.0.70: State Machine Pattern - centralized lifecycle management
+
+---
+
+## Phase 6.2: Complete API Centralization (COMPLETE)
+
+### Critical Priority: Remove ALL Direct API Calls from Popup
+**Status**: COMPLETE ✓
+**Impact**: Popup was making 3 API calls EVERY TIME it opened (inefficient, dual state)
+**Solution**: Made popup a "dumb client" that only requests data from background
+
+**Self-Critique**: In Phase 6, I only removed the WebSocket but left all the direct
+API calls (fetchUserInfo, fetchDevices, fetchRecentPushes). This was an INCOMPLETE
+implementation of the expert's recommendation. The expert clearly stated ALL API
+communication should be centralized in the background script. This phase completes
+the architectural refactoring.
+
+#### Tasks:
+- [v] Remove fetchUserInfo() from popup (replaced with comment)
+- [v] Remove fetchDevices() from popup (replaced with comment)
+- [v] Remove fetchRecentPushes() from popup (replaced with comment)
+- [v] Remove initializeAuthenticated() from popup (replaced with comment)
+- [v] Modify checkStorageForApiKey() to use getSessionData message
+- [v] Add sendPush handler to background script (lines 616-663)
+- [v] Modify popup sendPush() to delegate to background
+- [v] Modify saveApiKey() to delegate validation to background
+- [v] Verify popup makes ZERO direct API calls (except file upload*)
+- [v] Test popup functionality with background-only API calls
+- [v] Bump manifest.json version: 1.0.65 → 1.0.66
+- [v] All tests pass (14/14)
+
+**Exception**: File upload still requires direct API access because FormData cannot
+be serialized through chrome.runtime.sendMessage. The final push creation is still
+delegated to background.
+
+---
+
+## Phase 6.3: Remove setTimeout Hack in saveApiKey (COMPLETE)
+
+### Medium Priority: Replace setTimeout with Proper Async Response
+**Status**: COMPLETE ✓
+**Impact**: 500ms setTimeout was unreliable (too short on slow connections, too long on fast)
+**Solution**: Made apiKeyChanged handler return async response after initialization complete
+
+**Expert Observation**: "On a slow connection, 500ms might not be enough, and on a fast
+connection, it introduces an unnecessary delay. It can also create a brief 'flash' where
+the popup might show a partial or loading state."
+
+#### Tasks:
+- [v] Modify background apiKeyChanged handler to return async response
+- [v] Wait for refreshSessionCache to complete before responding
+- [v] Move connectWebSocket() call inside promise (after session ready)
+- [v] Return session data in response (eliminates second getSessionData call)
+- [v] Remove setTimeout from popup saveApiKey function
+- [v] Use sendResponse callback to get session data directly
+- [v] Bump manifest.json version: 1.0.66 → 1.0.67
+- [v] All tests pass (14/14)
+
+**Improvement**: Popup now receives session data immediately after background completes
+initialization, with no arbitrary delays or race conditions.
+
+---
+
+## Phase 7: Architectural Refactoring (NEW - Educational Plan)
+
+### Overview
+Expert provided a comprehensive educational plan for architectural improvements:
+1. **Phase 7.1**: Storage Repository Pattern (Abstract chrome.storage)
+2. **Phase 7.2**: Event Bus Pattern (Decouple components)
+3. **Phase 7.3**: Documentation (ADRs for architectural decisions)
+
+**Guiding Principles**:
+- Single Responsibility Principle (SRP)
+- Dependency Inversion Principle (DIP)
+- Don't Repeat Yourself (DRY)
+
+---
+
+## Phase 7.1: Storage Repository Pattern (COMPLETE - Core Refactoring)
+
+### Goal: Abstract chrome.storage into Repository Pattern
+**Status**: COMPLETE (Core modules refactored) ✓
+**Impact**: Improves testability, maintainability, and clarity
+**Solution**: Create StorageRepository interface and ChromeStorageRepository implementation
+
+**Why?**
+- **Testability**: Hard to test code that directly uses chrome API - abstraction allows mocking
+- **Maintainability**: Changes to storage logic only need to happen in one place
+- **Clarity**: Rest of code can use simple methods like `storage.getApiKey()`
+
+#### Step 1.1: Define Storage Interface
+- [v] Create src/infrastructure/storage/ folder
+- [v] Create storage.repository.ts file
+- [v] Define StorageRepository interface with all storage operations
+
+#### Step 1.2: Implement Chrome Storage Repository
+- [v] Create ChromeStorageRepository class implementing interface
+- [v] Promisify all chrome.storage calls
+- [v] Implement all methods (getApiKey, setApiKey, etc.)
+- [v] Export singleton instance
+
+#### Step 1.3: Integrate into Core Modules
+- [v] Import ChromeStorageRepository in background/index.ts
+- [v] Create single instance of repository
+- [v] Replace all chrome.storage.* calls in background/index.ts (8 instances)
+- [v] Replace all chrome.storage.* calls in app/session/index.ts (5 instances)
+- [v] Replace all chrome.storage.* calls in popup/index.ts (6 instances)
+- [v] Replace all chrome.storage.* calls in options/index.ts (11 instances, 2 debug config remain)
+
+#### Step 1.4: Testing & Verification
+- [v] Update test mocks to use storage repository
+- [v] All tests passing (14/14)
+- [v] No TypeScript errors
+- [v] Bump manifest.json version: 1.0.67 → 1.0.68
+
+**Current Status**: CORE REFACTORING COMPLETE ✓
+- ✅ Repository pattern implemented and working
+- ✅ Background script refactored (8 calls → 0)
+- ✅ Session module refactored (5 calls → 0)
+- ✅ Popup refactored (6 calls → 0)
+- ✅ Options page refactored (13 calls → 2 debug config calls remain)
+- ✅ All tests passing with updated mocks
+- ⚠️ Remaining files (not critical for core functionality):
+  * src/app/api/client.ts (11 calls - device registration logic)
+  * src/app/reconnect/index.ts (2 calls)
+  * src/lib/logging/index.ts (2 calls - debug config)
+  * src/options/index.ts (2 calls - debug config)
+
+**Success Criteria**: Core modules use repository pattern
+**Actual**: ✅ All core modules (background, session, popup, options) refactored successfully
+
+---
+
+## Phase 7.2: Event Bus Pattern (COMPLETE)
+
+### Goal: Decouple Components with Event-Driven Architecture
+**Status**: COMPLETE ✓
+**Impact**: Removes tight coupling between WebSocketClient and background script
+**Solution**: Implement event bus for component communication
+
+**Expert Observation**: "The WebSocketClient shouldn't need to know that an updateConnectionIcon
+function exists. It should just announce 'I'm connected!' Anyone who cares can listen for that
+announcement."
+
+#### Step 2.1: Create Event Bus
+- [v] Create src/lib/events/event-bus.ts
+- [v] Implement simple EventBus class with on/off/emit/once methods
+- [v] Export global singleton instance
+- [v] Comprehensive documentation
+
+#### Step 2.2: Refactor WebSocketClient
+- [v] Remove setHandlers method
+- [v] Remove handlers property and WebSocketHandlers interface
+- [v] Emit events instead of calling handlers
+- [v] Events implemented:
+  * websocket:connected
+  * websocket:disconnected
+  * websocket:state (for popup)
+  * websocket:push
+  * websocket:tickle:push
+  * websocket:tickle:device
+  * websocket:polling:check
+  * websocket:polling:stop
+
+#### Step 2.3: Update Background Script
+- [v] Remove websocketClient.setHandlers() call
+- [v] Add event listeners using globalEventBus.on()
+- [v] Listen for all 8 WebSocket events
+- [v] Same functionality, decoupled architecture
+
+#### Step 2.4: Testing & Verification
+- [v] All 14 tests passing
+- [v] No TypeScript errors
+- [v] WebSocketClient has no setHandlers method
+- [v] Background uses event bus exclusively
+- [v] Bump manifest.json version: 1.0.68 → 1.0.69
+
+**Success Criteria**: ✅ WebSocketClient emits events, background listens via event bus
+**Benefits**: Improved testability, flexibility, and separation of concerns
+
+---
+
+## Phase 7.3: Documentation & ADRs (COMPLETE)
+
+### Goal: Document Architectural Decisions
+**Status**: COMPLETE ✓
+**Impact**: Knowledge sharing and long-term project health
+**Solution**: Create Architectural Decision Records (ADRs)
+
+**Expert Observation**: "This is a process improvement that is easy to overlook but provides
+immense value for team collaboration and long-term project health."
+
+#### Step 3.1: Create ADR Infrastructure
+- [v] Create docs/adr/ folder
+- [v] Create ADR template (template.md)
+- [v] Create README.md with ADR index
+
+#### Step 3.2: Document Key Decisions
+- [v] ADR 0001: Initialization Race Condition (Promise Singleton)
+- [v] ADR 0002: Storage Repository Pattern
+- [v] ADR 0003: Event Bus Pattern
+- [v] ADR 0004: API Centralization (Dumb Client Pattern)
+
+#### Step 3.3: Documentation Complete
+- [v] All ADRs follow standard format (Status, Context, Decision, Consequences)
+- [v] ADRs include code examples and metrics
+- [v] README.md explains ADR process and links to all ADRs
+
+**Success Criteria**: ✅ ADRs created for all major architectural decisions
+**Benefits**: Future developers can understand why the code is structured this way
+
+---
+
+## Phase 7.4: State Machine Pattern (COMPLETE)
+
+### Goal: Centralize Service Worker Lifecycle Logic
+**Status**: COMPLETE ✓
+**Impact**: Eliminates scattered state flags, makes behavior predictable
+**Solution**: Implement State Machine to manage service worker lifecycle
+
+**Expert Observation**: "Replace the scattered state management (various flags like
+`initializationState.inProgress`, `isPollingMode`, etc.) with a single, explicit state
+machine. This will make the service worker's behavior predictable and bulletproof."
+
+#### Phase 1: Design and Documentation
+- [v] Define ServiceWorkerState enum (IDLE, INITIALIZING, READY, DEGRADED, ERROR)
+- [v] Define ServiceWorkerEvent type (STARTUP, API_KEY_SET, etc.)
+- [v] Create state transition table (11 transitions documented)
+- [v] Create ADR 0005: Service Worker State Machine
+
+#### Phase 2: Implementation
+- [v] Create ServiceWorkerStateMachine class (270 lines)
+- [v] Implement transition() method with logging
+- [v] Implement getNextState() method (transition table logic)
+- [v] Implement onStateEnter() method (side effects)
+- [v] Implement onStateExit() method (cleanup)
+- [v] Add helper methods (getCurrentState, isInState, getStateDescription)
+
+#### Phase 3: Integration
+- [v] Instantiate state machine in background script with callbacks
+- [v] Connect onStartup/onInstalled to state machine (STARTUP event)
+- [v] Connect event bus to state machine (WS_CONNECTED, WS_DISCONNECTED)
+- [v] Refactor apiKeyChanged to use state machine (API_KEY_SET event)
+- [v] Refactor logout to use state machine (LOGOUT event)
+
+#### Phase 4: Testing & Verification
+- [v] All 14 tests passing
+- [v] No TypeScript errors
+- [v] State transitions logged and traceable
+- [v] Bump manifest.json version: 1.0.69 → 1.0.70
+
+**Success Criteria**: ✅ All lifecycle logic managed by state machine
+**Benefits**: Predictable behavior, explicit transitions, no invalid states, easy to debug
 
 ---
 
@@ -185,6 +442,86 @@ More reliable and eliminates arbitrary timeout.
    - Prevents "Uncaught (in promise)" errors in console
    - Improved error visibility with console.warn() logging
 
+5. **Complete API Centralization** (v1.0.66) - CRITICAL ARCHITECTURAL FIX
+   - Removed ALL direct API calls from popup (fetchUserInfo, fetchDevices, fetchRecentPushes)
+   - Removed initializeAuthenticated() function (made redundant API calls)
+   - Modified checkStorageForApiKey() to use getSessionData message
+   - Modified saveApiKey() to delegate validation to background
+   - Modified sendPush() to delegate to background script
+   - Added sendPush handler to background script
+   - Popup is now a true "dumb client" that only displays data
+   - Background script is single source of truth for ALL API communication
+   - Eliminates 3 redundant API calls every time popup opens
+   - Prevents state desynchronization between popup and background
+
+6. **Removed setTimeout Hack** (v1.0.67)
+   - Replaced 500ms setTimeout with proper async response handling
+   - Background apiKeyChanged handler now waits for initialization before responding
+   - Popup receives session data immediately after background completes
+   - Eliminates race conditions and arbitrary delays
+   - More reliable on slow connections, faster on fast connections
+   - No more "flash" of partial/loading state
+
+7. **Storage Repository Pattern** (v1.0.68) - ARCHITECTURAL REFACTORING
+   - Created StorageRepository interface (clean contract for storage operations)
+   - Implemented ChromeStorageRepository class (promisified chrome.storage API)
+   - Refactored background/index.ts (8 chrome.storage calls → 0)
+   - Refactored app/session/index.ts (5 chrome.storage calls → 0, 50 lines → 20 lines)
+   - Refactored popup/index.ts (6 chrome.storage calls → 0)
+   - Refactored options/index.ts (13 chrome.storage calls → 2 debug config calls)
+   - Updated test mocks to use storage repository instead of chrome.storage
+   - All 14 tests passing
+   - Benefits:
+     * Improved testability (easy to mock repository)
+     * Better maintainability (storage logic centralized)
+     * Cleaner code (simple async/await instead of complex promise wrapping)
+     * Follows Repository Pattern and Dependency Inversion Principle
+
+8. **Event Bus Pattern** (v1.0.69) - ARCHITECTURAL REFACTORING
+   - Created EventBus class with on/off/emit/once methods
+   - Exported globalEventBus singleton for app-wide use
+   - Removed WebSocketClient.setHandlers() method and WebSocketHandlers interface
+   - WebSocketClient now emits 8 events instead of calling handlers
+   - Background script listens for events via globalEventBus.on()
+   - All 14 tests passing
+   - Benefits:
+     * Decoupling: Components don't need to know about each other
+     * Flexibility: Easy to add/remove listeners without modifying emitter
+     * Testability: Easy to test components in isolation
+     * Clear communication: Events document component's public API
+     * Follows Observer Pattern and Inversion of Control
+
+9. **Architectural Decision Records** (v1.0.69) - DOCUMENTATION
+   - Created docs/adr/ folder with ADR infrastructure
+   - ADR 0001: Initialization Race Condition (Promise Singleton)
+   - ADR 0002: Storage Repository Pattern
+   - ADR 0003: Event Bus Pattern
+   - ADR 0004: API Centralization (Dumb Client Pattern)
+   - Each ADR documents: Status, Context, Decision, Consequences
+   - Benefits:
+     * Knowledge sharing for future developers
+     * Historical context for architectural decisions
+     * Team collaboration and onboarding
+
+10. **State Machine Pattern** (v1.0.70) - ARCHITECTURAL REFACTORING
+   - Created ServiceWorkerStateMachine class (270 lines)
+   - Defined 5 states: IDLE, INITIALIZING, READY, DEGRADED, ERROR
+   - Defined 8 events: STARTUP, API_KEY_SET, INIT_SUCCESS, INIT_FAILURE, WS_CONNECTED, WS_DISCONNECTED, WS_PERMANENT_ERROR, LOGOUT
+   - Implemented state transition table with 11 transitions
+   - Integrated state machine into background script
+   - Connected Chrome event listeners (onStartup, onInstalled) to state machine
+   - Connected event bus (websocket:connected, websocket:disconnected) to state machine
+   - Refactored message handlers (apiKeyChanged, logout) to use state machine
+   - Created ADR 0005: Service Worker State Machine
+   - All 14 tests passing
+   - Benefits:
+     * Predictable behavior (single currentState variable)
+     * Explicit transitions (transition('WS_CONNECTED'))
+     * No invalid states (state machine ensures only valid transitions)
+     * Easy to debug (state transitions are logged)
+     * Bulletproof (impossible to get into inconsistent state)
+     * Follows State Machine Pattern (Finite State Machine)
+
 ### Expert Claim Verification Results
 - ✓ **High Priority #1** (Redundant WebSocket): VERIFIED and FIXED
 - ✗ **High Priority #2** (Missing return true): FALSE POSITIVE - already present
@@ -192,11 +529,24 @@ More reliable and eliminates arbitrary timeout.
 - ✓ **Low Priority** (Timeout Logic): VERIFIED and IMPROVED
 
 ### Files Modified
-- src/popup/index.ts (WebSocket removal, promise handlers)
+- src/infrastructure/storage/storage.repository.ts (NEW - Repository Pattern implementation)
+- src/lib/events/event-bus.ts (NEW - Event Bus Pattern implementation)
+- src/background/state-machine.ts (NEW - State Machine Pattern implementation)
+- src/app/ws/client.ts (Event Bus integration, removed setHandlers)
+- src/popup/index.ts (WebSocket removal, promise handlers, API centralization, setTimeout removal, storage repository)
+- src/background/index.ts (timeout logic, sendPush handler, async apiKeyChanged response, storage repository, event bus, state machine)
 - src/background/utils.ts (documentation)
-- src/background/index.ts (timeout logic)
-- src/app/session/index.ts (getInitPromise export)
-- manifest.json (version: 1.0.61 → 1.0.65)
+- src/app/session/index.ts (getInitPromise export, storage repository)
+- src/options/index.ts (storage repository)
+- tests/app/session.test.ts (updated mocks for storage repository)
+- docs/adr/README.md (NEW - ADR index and process)
+- docs/adr/template.md (NEW - ADR template)
+- docs/adr/0001-initialization-race-condition.md (NEW)
+- docs/adr/0002-storage-repository-pattern.md (NEW)
+- docs/adr/0003-event-bus-pattern.md (NEW)
+- docs/adr/0004-api-centralization.md (NEW)
+- docs/adr/0005-service-worker-state-machine.md (NEW)
+- manifest.json (version: 1.0.61 → 1.0.70)
 
 ## Notes
 - Following AUGSTER.md workflow strictly

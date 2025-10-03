@@ -4,6 +4,7 @@ import { wsStateMonitor } from '../../lib/monitoring';
 import type { WebSocketMessage, Push } from '../../types/domain';
 import { WS_READY_STATE } from '../../types/domain';
 import { clearErrorBadge, showPermanentWebSocketError } from '../notifications';
+import { globalEventBus } from '../../lib/events/event-bus';
 
 export interface CloseInfo {
   code: number;
@@ -11,37 +12,34 @@ export interface CloseInfo {
   wasClean?: boolean;
 }
 
-export interface WebSocketHandlers {
-  onTicklePush?: () => Promise<void>;
-  onTickleDevice?: () => Promise<void>;
-  onPush?: (push: Push) => Promise<void>;
-  onConnected?: () => void;
-  onDisconnected?: () => void;
-  checkPollingMode?: () => void;
-  stopPollingMode?: () => void;
-  updatePopupConnectionState?: (state: string) => void;
-}
-
 /**
  * WebSocket client for Pushbullet streaming API
+ *
+ * ARCHITECTURAL CHANGE: Event-Driven Architecture
+ * This class now uses the global event bus to emit events instead of
+ * calling handler functions directly. This decouples the WebSocketClient
+ * from the background script and makes it more flexible and testable.
+ *
+ * Events emitted:
+ * - websocket:connected - When WebSocket connection is established
+ * - websocket:disconnected - When WebSocket connection is closed
+ * - websocket:message - When a message is received
+ * - websocket:tickle:push - When a push tickle is received
+ * - websocket:tickle:device - When a device tickle is received
+ * - websocket:push - When a push is received
+ * - websocket:polling:check - When polling mode should be checked
+ * - websocket:polling:stop - When polling mode should be stopped
+ * - websocket:state - When connection state changes (for popup)
  */
 export class WebSocketClient {
   private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  private handlers: WebSocketHandlers = {};
 
   constructor(
     private websocketUrl: string,
     private getApiKey: () => string | null
   ) {}
-
-  /**
-   * Set event handlers
-   */
-  setHandlers(handlers: WebSocketHandlers): void {
-    this.handlers = handlers;
-  }
 
   /**
    * Get current WebSocket instance
@@ -92,9 +90,8 @@ export class WebSocketClient {
         performanceMonitor.recordWebSocketConnection(true);
         wsStateMonitor.startMonitoring();
 
-        if (this.handlers.stopPollingMode) {
-          this.handlers.stopPollingMode();
-        }
+        // Emit event to stop polling mode
+        globalEventBus.emit('websocket:polling:stop');
 
         try {
           clearErrorBadge();
@@ -109,13 +106,11 @@ export class WebSocketClient {
           this.reconnectTimeout = null;
         }
 
-        if (this.handlers.onConnected) {
-          this.handlers.onConnected();
-        }
+        // Emit connected event
+        globalEventBus.emit('websocket:connected');
 
-        if (this.handlers.updatePopupConnectionState) {
-          this.handlers.updatePopupConnectionState('connected');
-        }
+        // Emit state change for popup
+        globalEventBus.emit('websocket:state', 'connected');
       };
 
       this.socket.onmessage = async (event) => {
@@ -129,16 +124,19 @@ export class WebSocketClient {
 
           switch (data.type) {
             case 'tickle':
-              if (data.subtype === 'push' && this.handlers.onTicklePush) {
-                await this.handlers.onTicklePush();
-              } else if (data.subtype === 'device' && this.handlers.onTickleDevice) {
-                await this.handlers.onTickleDevice();
+              if (data.subtype === 'push') {
+                // Emit tickle:push event
+                globalEventBus.emit('websocket:tickle:push');
+              } else if (data.subtype === 'device') {
+                // Emit tickle:device event
+                globalEventBus.emit('websocket:tickle:device');
               }
               break;
 
             case 'push':
-              if ('push' in data && data.push && this.handlers.onPush) {
-                await this.handlers.onPush(data.push);
+              if ('push' in data && data.push) {
+                // Emit push event with push data
+                globalEventBus.emit('websocket:push', data.push);
               } else {
                 debugLogger.websocket('WARN', 'Push message received without push payload');
               }
@@ -181,13 +179,15 @@ export class WebSocketClient {
           reconnectAttempts: this.reconnectAttempts
         });
 
-        if (this.handlers.onDisconnected) {
-          this.handlers.onDisconnected();
-        }
+        // Emit disconnected event
+        globalEventBus.emit('websocket:disconnected', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean
+        });
 
-        if (this.handlers.updatePopupConnectionState) {
-          this.handlers.updatePopupConnectionState('disconnected');
-        }
+        // Emit state change for popup
+        globalEventBus.emit('websocket:state', 'disconnected');
 
         // Permanent error: stop and notify
         if (event.code === 1008 || event.code === 4001 || (event.code >= 4000 && event.code < 5000)) {
@@ -204,9 +204,8 @@ export class WebSocketClient {
         this.reconnectAttempts++;
         performanceMonitor.recordWebSocketReconnection();
 
-        if (this.handlers.checkPollingMode) {
-          this.handlers.checkPollingMode();
-        }
+        // Emit event to check polling mode
+        globalEventBus.emit('websocket:polling:check');
 
         debugLogger.websocket('INFO', 'Scheduling WebSocket reconnection (30s one-shot)', {
           attempt: this.reconnectAttempts,

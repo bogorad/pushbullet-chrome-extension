@@ -1,6 +1,7 @@
 import type { SessionCache, InitializationState } from '../../types/domain';
 import { debugLogger } from '../../lib/logging';
 import { fetchUserInfo, fetchDevices, fetchRecentPushes, registerDevice } from '../api/client';
+import { storageRepository } from '../../infrastructure/storage/storage.repository';
 
 // Session cache state
 export const sessionCache: SessionCache = {
@@ -76,51 +77,21 @@ export async function initializeSessionCache(
       });
 
     // Load core settings from sync storage
-    debugLogger.storage('DEBUG', 'Loading initial configuration from sync storage');
-    const result = await new Promise<{
-      apiKey?: string;
-      deviceIden?: string;
-      autoOpenLinks?: boolean;
-      deviceNickname?: string;
-      notificationTimeout?: number;
-    }>(resolve => {
-      chrome.storage.sync.get(
-        ['apiKey', 'deviceIden', 'autoOpenLinks', 'deviceNickname', 'notificationTimeout'],
-        (items) => resolve(items as any)
-      );
-    });
+    debugLogger.storage('DEBUG', 'Loading initial configuration from storage repository');
 
-    // Get API key (stored in plain text)
-    const apiKeyValue = result.apiKey || null;
-    const deviceIdenValue = result.deviceIden || null;
+    // Get API key and device iden from storage repository
+    const apiKeyValue = await storageRepository.getApiKey();
+    const deviceIdenValue = await storageRepository.getDeviceIden();
 
     if (stateSetters) {
       stateSetters.setApiKey(apiKeyValue);
       stateSetters.setDeviceIden(deviceIdenValue);
     }
 
-    // Set defaults for missing values
-    let autoOpenLinksValue = true;
-    let notificationTimeoutValue = 10000;
-    let deviceNicknameValue = 'Chrome';
-
-    if (result.autoOpenLinks === undefined) {
-      await chrome.storage.sync.set({ autoOpenLinks: true });
-    } else {
-      autoOpenLinksValue = result.autoOpenLinks;
-    }
-
-    if (result.notificationTimeout === undefined) {
-      await chrome.storage.sync.set({ notificationTimeout: 10000 });
-    } else {
-      notificationTimeoutValue = result.notificationTimeout;
-    }
-
-    if (result.deviceNickname === undefined || result.deviceNickname === null) {
-      await chrome.storage.sync.set({ deviceNickname: 'Chrome' });
-    } else {
-      deviceNicknameValue = result.deviceNickname;
-    }
+    // Get settings with defaults from storage repository
+    const autoOpenLinksValue = await storageRepository.getAutoOpenLinks();
+    const notificationTimeoutValue = await storageRepository.getNotificationTimeout();
+    const deviceNicknameValue = await storageRepository.getDeviceNickname() || 'Chrome';
 
     if (stateSetters) {
       stateSetters.setAutoOpenLinks(autoOpenLinksValue);
@@ -131,9 +102,9 @@ export async function initializeSessionCache(
     sessionCache.autoOpenLinks = autoOpenLinksValue;
     sessionCache.deviceNickname = deviceNicknameValue;
 
-    debugLogger.storage('INFO', 'Loaded configuration from sync storage', {
-      hasApiKey: !!result.apiKey,
-      hasDeviceIden: !!result.deviceIden,
+    debugLogger.storage('INFO', 'Loaded configuration from storage repository', {
+      hasApiKey: !!apiKeyValue,
+      hasDeviceIden: !!deviceIdenValue,
       autoOpenLinks: autoOpenLinksValue,
       deviceNickname: deviceNicknameValue,
       notificationTimeout: notificationTimeoutValue

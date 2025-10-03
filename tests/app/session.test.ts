@@ -30,33 +30,47 @@ vi.mock('../../src/app/api/client', () => ({
   registerDevice: vi.fn().mockResolvedValue({ iden: 'device123' })
 }));
 
+// Mock the storage repository
+vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
+  storageRepository: {
+    getApiKey: vi.fn().mockResolvedValue('test-api-key-123'),
+    getDeviceIden: vi.fn().mockResolvedValue('device-iden-456'),
+    getDeviceNickname: vi.fn().mockResolvedValue('Test Chrome'),
+    getAutoOpenLinks: vi.fn().mockResolvedValue(true),
+    getNotificationTimeout: vi.fn().mockResolvedValue(5000),
+    setApiKey: vi.fn().mockResolvedValue(undefined),
+    setDeviceIden: vi.fn().mockResolvedValue(undefined),
+    setDeviceNickname: vi.fn().mockResolvedValue(undefined),
+    setAutoOpenLinks: vi.fn().mockResolvedValue(undefined),
+    setNotificationTimeout: vi.fn().mockResolvedValue(undefined)
+  }
+}));
+
 describe('initializeSessionCache - Race Condition Prevention', () => {
   beforeEach(async () => {
-    // Reset module state by re-importing
+    // Reset all mocks
+    vi.clearAllMocks();
     vi.resetModules();
-    
+
     // Re-import the module to get fresh state
     const module = await import('../../src/app/session/index');
     initializeSessionCache = module.initializeSessionCache;
     sessionCache = module.sessionCache;
     initializationState = module.initializationState;
-    
+
     // Reset initialization state
     initializationState.inProgress = false;
     initializationState.completed = false;
     initializationState.error = null;
     initializationState.timestamp = null;
-    
-    // Mock chrome.storage.sync.get to return a valid API key
-    chrome.storage.sync.get.mockImplementation((keys, callback) => {
-      callback({
-        apiKey: 'test-api-key-123',
-        deviceIden: 'device-iden-456',
-        autoOpenLinks: true,
-        deviceNickname: 'Test Chrome',
-        notificationTimeout: 5000
-      });
-    });
+
+    // Reset storage repository mocks to default values
+    const { storageRepository } = await import('../../src/infrastructure/storage/storage.repository');
+    vi.spyOn(storageRepository, 'getApiKey').mockResolvedValue('test-api-key-123');
+    vi.spyOn(storageRepository, 'getDeviceIden').mockResolvedValue('device-iden-456');
+    vi.spyOn(storageRepository, 'getDeviceNickname').mockResolvedValue('Test Chrome');
+    vi.spyOn(storageRepository, 'getAutoOpenLinks').mockResolvedValue(true);
+    vi.spyOn(storageRepository, 'getNotificationTimeout').mockResolvedValue(5000);
   });
 
   it('should complete initialization successfully on first call', async () => {
@@ -87,8 +101,9 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     expect(initializationState.completed).toBe(true);
     expect(initializationState.inProgress).toBe(false);
 
-    // Verify chrome.storage.sync.get was only called once (proving promise reuse)
-    expect(chrome.storage.sync.get).toHaveBeenCalledTimes(1);
+    // Verify storage repository methods were only called once (proving promise reuse)
+    const { storageRepository } = await import('../../src/infrastructure/storage/storage.repository');
+    expect(storageRepository.getApiKey).toHaveBeenCalledTimes(1);
   });
 
   it('should return null on subsequent calls after completion', async () => {
@@ -107,33 +122,28 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
   });
 
   it('should clear promise and allow retry after initialization failure', async () => {
-    // Mock storage to fail on first call
+    // Re-import to get fresh mocks
+    const { storageRepository } = await import('../../src/infrastructure/storage/storage.repository');
+
+    // Mock storage to fail on first call, succeed on second
     let callCount = 0;
-    chrome.storage.sync.get.mockImplementation((keys, callback) => {
+    vi.spyOn(storageRepository, 'getApiKey').mockImplementation(() => {
       callCount++;
       if (callCount === 1) {
-        // First call fails
-        throw new Error('Storage error');
+        return Promise.reject(new Error('Storage error'));
       } else {
-        // Second call succeeds
-        callback({
-          apiKey: 'test-api-key-retry',
-          deviceIden: 'device-iden-retry',
-          autoOpenLinks: true,
-          deviceNickname: 'Test Chrome',
-          notificationTimeout: 5000
-        });
+        return Promise.resolve('test-api-key-retry');
       }
     });
-    
+
     // First call should fail
     await expect(initializeSessionCache('first-attempt')).rejects.toThrow('Storage error');
-    
+
     // State should be reset (not in progress, not completed)
     expect(initializationState.inProgress).toBe(false);
     expect(initializationState.completed).toBe(false);
     expect(initializationState.error).toBeTruthy();
-    
+
     // Second call should succeed (promise was cleared)
     const retryResult = await initializeSessionCache('retry-attempt');
     expect(retryResult).toBe('test-api-key-retry');

@@ -1,0 +1,212 @@
+/**
+ * Storage Repository Pattern
+ * 
+ * This module implements the Repository Pattern for storage operations.
+ * It abstracts away the chrome.storage API, making the code more testable
+ * and maintainable.
+ * 
+ * Benefits:
+ * - Testability: Easy to mock storage in tests
+ * - Maintainability: Storage logic centralized in one place
+ * - Clarity: Simple, clear API for storage operations
+ */
+
+/**
+ * Storage Repository Interface
+ * 
+ * This interface defines the contract for storage operations.
+ * Any implementation must provide these methods.
+ */
+export interface StorageRepository {
+  // API Key
+  getApiKey(): Promise<string | null>;
+  setApiKey(key: string | null): Promise<void>;
+
+  // Device Information
+  getDeviceIden(): Promise<string | null>;
+  setDeviceIden(iden: string | null): Promise<void>;
+
+  getDeviceNickname(): Promise<string | null>;
+  setDeviceNickname(nickname: string): Promise<void>;
+
+  // Settings
+  getAutoOpenLinks(): Promise<boolean>;
+  setAutoOpenLinks(enabled: boolean): Promise<void>;
+
+  getNotificationTimeout(): Promise<number>;
+  setNotificationTimeout(timeout: number): Promise<void>;
+
+  // Encryption
+  getEncryptionPassword(): Promise<string | null>;
+  setEncryptionPassword(password: string | null): Promise<void>;
+
+  // UI State
+  getScrollToRecentPushes(): Promise<boolean>;
+  setScrollToRecentPushes(scroll: boolean): Promise<void>;
+  removeScrollToRecentPushes(): Promise<void>;
+
+  // Bulk Operations
+  clear(): Promise<void>;
+  remove(keys: string[]): Promise<void>;
+}
+
+/**
+ * Chrome Storage Repository Implementation
+ * 
+ * This class implements the StorageRepository interface using the
+ * chrome.storage API. It handles the promisification of the callback-based
+ * chrome.storage API.
+ */
+export class ChromeStorageRepository implements StorageRepository {
+  /**
+   * Get API Key from sync storage
+   */
+  async getApiKey(): Promise<string | null> {
+    const result = await chrome.storage.sync.get(['apiKey']);
+    return result.apiKey || null;
+  }
+
+  /**
+   * Set API Key in sync storage
+   */
+  async setApiKey(key: string | null): Promise<void> {
+    if (key === null) {
+      await chrome.storage.sync.remove(['apiKey']);
+    } else {
+      await chrome.storage.sync.set({ apiKey: key });
+    }
+  }
+
+  /**
+   * Get Device Identifier from local storage
+   */
+  async getDeviceIden(): Promise<string | null> {
+    const result = await chrome.storage.local.get(['deviceIden']);
+    return result.deviceIden || null;
+  }
+
+  /**
+   * Set Device Identifier in local storage
+   */
+  async setDeviceIden(iden: string | null): Promise<void> {
+    if (iden === null) {
+      await chrome.storage.local.remove(['deviceIden']);
+    } else {
+      await chrome.storage.local.set({ deviceIden: iden });
+    }
+  }
+
+  /**
+   * Get Device Nickname from sync storage
+   */
+  async getDeviceNickname(): Promise<string | null> {
+    const result = await chrome.storage.sync.get(['deviceNickname']);
+    return result.deviceNickname || null;
+  }
+
+  /**
+   * Set Device Nickname in sync storage
+   */
+  async setDeviceNickname(nickname: string): Promise<void> {
+    await chrome.storage.sync.set({ deviceNickname: nickname });
+  }
+
+  /**
+   * Get Auto Open Links setting from sync storage
+   */
+  async getAutoOpenLinks(): Promise<boolean> {
+    const result = await chrome.storage.sync.get(['autoOpenLinks']);
+    return result.autoOpenLinks !== undefined ? result.autoOpenLinks : false;
+  }
+
+  /**
+   * Set Auto Open Links setting in sync storage
+   */
+  async setAutoOpenLinks(enabled: boolean): Promise<void> {
+    await chrome.storage.sync.set({ autoOpenLinks: enabled });
+  }
+
+  /**
+   * Get Notification Timeout from sync storage
+   */
+  async getNotificationTimeout(): Promise<number> {
+    const result = await chrome.storage.sync.get(['notificationTimeout']);
+    return result.notificationTimeout !== undefined ? result.notificationTimeout : 5000;
+  }
+
+  /**
+   * Set Notification Timeout in sync storage
+   */
+  async setNotificationTimeout(timeout: number): Promise<void> {
+    await chrome.storage.sync.set({ notificationTimeout: timeout });
+  }
+
+  /**
+   * Get Encryption Password from local storage
+   */
+  async getEncryptionPassword(): Promise<string | null> {
+    const result = await chrome.storage.local.get(['encryptionPassword']);
+    return result.encryptionPassword || null;
+  }
+
+  /**
+   * Set Encryption Password in local storage
+   */
+  async setEncryptionPassword(password: string | null): Promise<void> {
+    if (password === null) {
+      await chrome.storage.local.remove(['encryptionPassword']);
+    } else {
+      await chrome.storage.local.set({ encryptionPassword: password });
+    }
+  }
+
+  /**
+   * Get Scroll to Recent Pushes flag from local storage
+   */
+  async getScrollToRecentPushes(): Promise<boolean> {
+    const result = await chrome.storage.local.get(['scrollToRecentPushes']);
+    return result.scrollToRecentPushes || false;
+  }
+
+  /**
+   * Set Scroll to Recent Pushes flag in local storage
+   */
+  async setScrollToRecentPushes(scroll: boolean): Promise<void> {
+    await chrome.storage.local.set({ scrollToRecentPushes: scroll });
+  }
+
+  /**
+   * Remove Scroll to Recent Pushes flag from local storage
+   */
+  async removeScrollToRecentPushes(): Promise<void> {
+    await chrome.storage.local.remove(['scrollToRecentPushes']);
+  }
+
+  /**
+   * Clear all storage (both sync and local)
+   */
+  async clear(): Promise<void> {
+    await Promise.all([
+      chrome.storage.sync.clear(),
+      chrome.storage.local.clear()
+    ]);
+  }
+
+  /**
+   * Remove specific keys from storage
+   * Removes from both sync and local storage
+   */
+  async remove(keys: string[]): Promise<void> {
+    await Promise.all([
+      chrome.storage.sync.remove(keys),
+      chrome.storage.local.remove(keys)
+    ]);
+  }
+}
+
+/**
+ * Create a singleton instance of the storage repository
+ * This ensures we have a single point of access throughout the application
+ */
+export const storageRepository = new ChromeStorageRepository();
+

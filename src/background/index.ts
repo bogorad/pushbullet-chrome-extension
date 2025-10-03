@@ -11,6 +11,9 @@ import { sessionCache, initializeSessionCache, refreshSessionCache, initializati
 import { fetchDevices, updateDeviceNickname } from '../app/api/client';
 import { ensureConfigLoaded } from '../app/reconnect';
 import { PushbulletCrypto } from '../lib/crypto';
+import { storageRepository } from '../infrastructure/storage/storage.repository';
+import { globalEventBus } from '../lib/events/event-bus';
+import { ServiceWorkerStateMachine, ServiceWorkerState } from './state-machine';
 import {
   getApiKey,
   setApiKey,
@@ -73,6 +76,48 @@ export function getNotificationStore(): Map<string, Push> {
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
 
+// Initialize State Machine
+// ARCHITECTURAL CHANGE: Centralized lifecycle management
+// All service worker state is now managed by the state machine
+const stateMachine = new ServiceWorkerStateMachine({
+  onInitialize: async (data) => {
+    // Initialize session cache
+    const apiKey = data?.apiKey || getApiKey();
+    if (apiKey) {
+      await initializeSessionCache('state-machine', {
+        setApiKey,
+        setDeviceIden,
+        setAutoOpenLinks,
+        setNotificationTimeout,
+        setDeviceNickname
+      });
+    }
+  },
+  onConnectWebSocket: () => {
+    connectWebSocket();
+  },
+  onStartPolling: () => {
+    checkPollingMode();
+  },
+  onStopPolling: () => {
+    stopPollingMode();
+  },
+  onShowError: (error) => {
+    debugLogger.general('ERROR', '[StateMachine] Error state', { error });
+    updateConnectionIcon('disconnected');
+  },
+  onClearData: async () => {
+    // Clear session cache
+    sessionCache.userInfo = null;
+    sessionCache.devices = [];
+    sessionCache.recentPushes = [];
+    sessionCache.lastUpdated = null;
+  },
+  onDisconnectWebSocket: () => {
+    disconnectWebSocket();
+  }
+});
+
 /**
  * Connect to WebSocket
  */
@@ -90,37 +135,40 @@ function connectWebSocket(): void {
   websocketClient = new WebSocketClient(WEBSOCKET_URL, getApiKey);
   setWebSocketClient(websocketClient);
 
-  // Set up handlers
-  websocketClient.setHandlers({
-      onTicklePush: async () => {
-        await refreshPushes(notificationDataStore);
-      },
-      onTickleDevice: async () => {
-        const apiKey = getApiKey();
-        if (apiKey) {
-          const devices = await fetchDevices(apiKey);
-          sessionCache.devices = devices;
-          sessionCache.lastUpdated = Date.now();
+  // Set up event listeners using event bus
+  // ARCHITECTURAL CHANGE: Using event-driven architecture instead of direct handler calls
+  // This decouples the WebSocketClient from the background script
 
-          chrome.runtime.sendMessage({
-            action: 'sessionDataUpdated',
-            devices: devices,
-            userInfo: sessionCache.userInfo,
-            recentPushes: sessionCache.recentPushes,
-            autoOpenLinks: sessionCache.autoOpenLinks,
-            deviceNickname: sessionCache.deviceNickname
-          }).catch(() => {});
-        }
-      },
-      onPush: async (push: Push) => {
+  globalEventBus.on('websocket:tickle:push', async () => {
+    await refreshPushes(notificationDataStore);
+  });
+
+  globalEventBus.on('websocket:tickle:device', async () => {
+    const apiKey = getApiKey();
+    if (apiKey) {
+      const devices = await fetchDevices(apiKey);
+      sessionCache.devices = devices;
+      sessionCache.lastUpdated = Date.now();
+
+      chrome.runtime.sendMessage({
+        action: 'sessionDataUpdated',
+        devices: devices,
+        userInfo: sessionCache.userInfo,
+        recentPushes: sessionCache.recentPushes,
+        autoOpenLinks: sessionCache.autoOpenLinks,
+        deviceNickname: sessionCache.deviceNickname
+      }).catch(() => {});
+    }
+  });
+
+  globalEventBus.on('websocket:push', async (push: Push) => {
         let decryptedPush = push;
 
         // Check if push is encrypted
         if ('encrypted' in push && push.encrypted && 'ciphertext' in push) {
           try {
-            // Get encryption password from local storage
-            const result = await chrome.storage.local.get(['encryptionPassword']);
-            const password = result.encryptionPassword;
+            // Get encryption password from storage repository
+            const password = await storageRepository.getEncryptionPassword();
 
             if (password && sessionCache.userInfo) {
               debugLogger.general('INFO', 'Decrypting encrypted push', {
@@ -163,24 +211,31 @@ function connectWebSocket(): void {
         showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
           debugLogger.general('ERROR', 'Failed to show notification', null, error);
         });
-      },
-      onConnected: () => {
-        stopPollingMode();
-        updateConnectionIcon('connected');
-      },
-      onDisconnected: () => {
-        updateConnectionIcon('disconnected');
-      },
-      checkPollingMode: () => {
-        checkPollingMode();
-      },
-      stopPollingMode: () => {
-        stopPollingMode();
-      },
-      updatePopupConnectionState: (state: string) => {
-        updatePopupConnectionState(state);
-      }
-    });
+  });
+
+  globalEventBus.on('websocket:connected', () => {
+    // Trigger state machine transition
+    stateMachine.transition('WS_CONNECTED');
+    updateConnectionIcon('connected');
+  });
+
+  globalEventBus.on('websocket:disconnected', () => {
+    // Trigger state machine transition
+    stateMachine.transition('WS_DISCONNECTED');
+    updateConnectionIcon('disconnected');
+  });
+
+  globalEventBus.on('websocket:polling:check', () => {
+    checkPollingMode();
+  });
+
+  globalEventBus.on('websocket:polling:stop', () => {
+    stopPollingMode();
+  });
+
+  globalEventBus.on('websocket:state', (state: string) => {
+    updatePopupConnectionState(state);
+  });
 
   websocketClient.connect();
 }
@@ -201,7 +256,7 @@ function disconnectWebSocket(): void {
 /**
  * Extension installed/updated
  */
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
   debugLogger.general('INFO', 'Pushbullet extension installed/updated', {
     reason: 'onInstalled',
     timestamp: new Date().toISOString()
@@ -212,23 +267,16 @@ chrome.runtime.onInstalled.addListener(() => {
 
   initTracker.recordInitialization('onInstalled');
   setupContextMenu();
-  initializeSessionCache('onInstalled', connectWebSocket, {
-    setApiKey,
-    setDeviceIden,
-    setAutoOpenLinks,
-    setDeviceNickname,
-    setNotificationTimeout
-  }).catch(error => {
-    debugLogger.general('WARN', 'Initialization failed during onInstalled (this may be expected if already in progress)', {
-      error: error.message
-    });
-  });
+
+  // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
+  const apiKey = getApiKey();
+  await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
 });
 
 /**
  * Browser startup
  */
-chrome.runtime.onStartup.addListener(() => {
+chrome.runtime.onStartup.addListener(async () => {
   debugLogger.general('INFO', 'Browser started - reinitializing Pushbullet extension', {
     reason: 'onStartup',
     timestamp: new Date().toISOString()
@@ -239,17 +287,10 @@ chrome.runtime.onStartup.addListener(() => {
 
   initTracker.recordInitialization('onStartup');
   setupContextMenu();
-  initializeSessionCache('onStartup', connectWebSocket, {
-    setApiKey,
-    setDeviceIden,
-    setAutoOpenLinks,
-    setDeviceNickname,
-    setNotificationTimeout
-  }).catch(error => {
-    debugLogger.general('WARN', 'Initialization failed during onStartup (this may be expected if already in progress)', {
-      error: error.message
-    });
-  });
+
+  // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
+  const apiKey = getApiKey();
+  await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
 });
 
 /**
@@ -465,51 +506,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Update API key
     setApiKey(message.apiKey);
 
-    // Save API key to storage (plain text)
-    chrome.storage.sync.set({ apiKey: message.apiKey });
+    // Save API key to storage (plain text) via repository
+    await storageRepository.setApiKey(message.apiKey);
 
     // Update device nickname if provided
     if (message.deviceNickname) {
       setDeviceNickname(message.deviceNickname);
       sessionCache.deviceNickname = message.deviceNickname;
-      chrome.storage.local.set({ deviceNickname: message.deviceNickname });
+      await storageRepository.setDeviceNickname(message.deviceNickname);
     }
 
-    // Refresh session cache
-    refreshSessionCache(message.apiKey).then(() => {
-      // Notify popup that session data has been updated
-      chrome.runtime.sendMessage({
-        action: 'sessionDataUpdated',
-        isAuthenticated: true,
-        userInfo: sessionCache.userInfo,
-        devices: sessionCache.devices,
-        recentPushes: sessionCache.recentPushes,
-        autoOpenLinks: sessionCache.autoOpenLinks,
-        deviceNickname: sessionCache.deviceNickname
-      });
-    }).catch((error) => {
-      debugLogger.general('ERROR', 'Error refreshing session cache after API key change', null, error);
+    // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
+    await stateMachine.transition('API_KEY_SET', { apiKey: message.apiKey });
+
+    // Send response with session data after state machine completes
+    sendResponse({
+      success: true,
+      isAuthenticated: stateMachine.isInState(ServiceWorkerState.READY) || stateMachine.isInState(ServiceWorkerState.DEGRADED),
+      userInfo: sessionCache.userInfo,
+      devices: sessionCache.devices,
+      recentPushes: sessionCache.recentPushes,
+      autoOpenLinks: sessionCache.autoOpenLinks,
+      deviceNickname: sessionCache.deviceNickname,
+      websocketConnected: websocketClient ? websocketClient.isConnected() : false
     });
 
-    // Connect WebSocket
-    connectWebSocket();
-
-    sendResponse({ success: true });
+    return true; // Keep message channel open for async response
   } else if (message.action === 'logout') {
-    // Clear API key and session data
-    setApiKey(null);
-    setDeviceIden(null);
-    sessionCache.isAuthenticated = false;
-    sessionCache.userInfo = null;
-    sessionCache.devices = [];
-    sessionCache.recentPushes = [];
+    // ARCHITECTURAL CHANGE: Use state machine for logout
+    await stateMachine.transition('LOGOUT');
 
-    // Clear storage
-    chrome.storage.sync.remove(['apiKey']);
-    chrome.storage.local.remove(['deviceIden']);
-
-    // Disconnect WebSocket
-    disconnectWebSocket();
+    // Clear storage via repository
+    await storageRepository.setApiKey(null);
+    await storageRepository.setDeviceIden(null);
 
     sendResponse({ success: true });
   } else if (message.action === 'refreshSession') {
@@ -537,12 +566,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.autoOpenLinks !== undefined) {
       setAutoOpenLinks(message.autoOpenLinks);
       sessionCache.autoOpenLinks = message.autoOpenLinks;
-      chrome.storage.sync.set({ autoOpenLinks: message.autoOpenLinks });
+      await storageRepository.setAutoOpenLinks(message.autoOpenLinks);
     }
 
     if (message.notificationTimeout !== undefined) {
       setNotificationTimeout(message.notificationTimeout);
-      chrome.storage.sync.set({ notificationTimeout: message.notificationTimeout });
+      await storageRepository.setNotificationTimeout(message.notificationTimeout);
     }
 
     sendResponse({ success: true });
@@ -551,10 +580,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const deviceIden = getDeviceIden();
 
     if (apiKey && deviceIden && message.nickname) {
-      updateDeviceNickname(apiKey, deviceIden, message.nickname).then(() => {
+      updateDeviceNickname(apiKey, deviceIden, message.nickname).then(async () => {
         setDeviceNickname(message.nickname);
         sessionCache.deviceNickname = message.nickname;
-        chrome.storage.sync.set({ deviceNickname: message.nickname });
+        await storageRepository.setDeviceNickname(message.nickname);
 
         sendResponse({ success: true });
       }).catch((error) => {
@@ -613,6 +642,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: 'Notification not found' });
     }
     return false; // Synchronous response
+  } else if (message.action === 'sendPush') {
+    // Handle push sending from popup
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      sendResponse({ success: false, error: 'No API key' });
+      return false;
+    }
+
+    const pushData = message.pushData;
+    if (!pushData || !pushData.type) {
+      sendResponse({ success: false, error: 'Invalid push data' });
+      return false;
+    }
+
+    // Send push via API
+    fetch('https://api.pushbullet.com/v2/pushes', {
+      method: 'POST',
+      headers: {
+        'Access-Token': apiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(pushData)
+    }).then(async (response) => {
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = 'Failed to send push';
+        try {
+          const errorData = JSON.parse(errorText) as { error?: { message?: string } };
+          if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          }
+        } catch {
+          // Use default
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Refresh pushes after sending
+      await refreshPushes(notificationDataStore);
+
+      sendResponse({ success: true });
+    }).catch((error) => {
+      debugLogger.general('ERROR', 'Failed to send push', { pushType: pushData.type }, error);
+      sendResponse({ success: false, error: error.message });
+    });
+
+    return true; // Async response
   }
 
   return false;
