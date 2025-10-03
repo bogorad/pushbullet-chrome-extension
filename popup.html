@@ -127,9 +127,16 @@
       </div>
       <button id="logout">Logout</button>
     </div>
-    
-    <div class="push-form">
+
+    <div class="action-toolbar">
       <h2>Send a Push</h2>
+      <div class="toolbar-icons">
+        <button id="open-settings" class="icon-btn" title="Settings">⚙️</button>
+        <button id="open-debug-dashboard" class="icon-btn" title="Debug Dashboard">🐛</button>
+      </div>
+    </div>
+
+    <div class="push-form">
       
        <div class="form-group">
          <label>Push Type:</label>
@@ -191,15 +198,7 @@
       
       <div id="status-message"></div>
     </div>
-    
-    <div class="settings">
-      <h2>Quick Actions</h2>
-      <div class="action-buttons">
-        <button id="open-settings" class="secondary-btn">⚙️ Settings</button>
-        <button id="open-debug-dashboard" class="secondary-btn">🐛 Debug Dashboard</button>
-      </div>
-    </div>
-    
+
     <div class="recent-pushes">
       <h2>Recent Pushes</h2>
       <div id="pushes-list"></div>

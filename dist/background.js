@@ -404,7 +404,10 @@
             });
           }, timeout);
         }
-      } catch (_) {
+      } catch (error) {
+        debugLogger.notifications("ERROR", "Failed to set notification timeout", {
+          error: error.message
+        }, error);
       }
     });
   }
@@ -1304,7 +1307,47 @@
   }
 
   // src/background/utils.ts
-  async function refreshPushes() {
+  function sanitizeText(text) {
+    if (!text) return "";
+    let sanitized = text.replace(/<[^>]*>/g, "");
+    sanitized = sanitized.replace(/javascript:/gi, "");
+    sanitized = sanitized.replace(/on\w+\s*=/gi, "");
+    sanitized = sanitized.trim().substring(0, 1e3);
+    return sanitized;
+  }
+  function sanitizeUrl(url) {
+    if (!url) return "";
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "";
+      }
+      return parsed.href;
+    } catch {
+      return "";
+    }
+  }
+  function updateConnectionIcon(status) {
+    try {
+      const badgeText = status === "connected" ? "\u25CF" : status === "connecting" ? "\u25D0" : "\u25CB";
+      const badgeColor = status === "connected" ? "#4CAF50" : (
+        // Green
+        status === "connecting" ? "#FFC107" : (
+          // Yellow
+          "#F44336"
+        )
+      );
+      chrome.action.setBadgeText({ text: badgeText });
+      chrome.action.setBadgeBackgroundColor({ color: badgeColor });
+      debugLogger.general("DEBUG", "Updated connection status badge", { status, badgeText, badgeColor });
+    } catch (error) {
+      debugLogger.general("ERROR", "Exception setting badge", {
+        status,
+        error: error.message
+      }, error);
+    }
+  }
+  async function refreshPushes(notificationDataStore2) {
     const apiKey2 = getApiKey();
     if (!apiKey2) {
       debugLogger.general("WARN", "Cannot refresh pushes - no API key");
@@ -1326,7 +1369,7 @@
           pushIden: push.iden,
           pushType: push.type
         });
-        await showPushNotification(push);
+        await showPushNotification(push, notificationDataStore2);
       }
       chrome.runtime.sendMessage({
         action: "pushesUpdated",
@@ -1337,7 +1380,7 @@
       debugLogger.general("ERROR", "Failed to refresh pushes", null, error);
     }
   }
-  async function showPushNotification(push) {
+  async function showPushNotification(push, notificationDataStore2) {
     try {
       debugLogger.notifications("INFO", "Showing push notification", {
         pushType: push.type,
@@ -1379,8 +1422,12 @@
         message = JSON.stringify(push).substring(0, 200);
         debugLogger.notifications("WARN", "Unknown push type", { pushType, push });
       }
+      const notificationId = `pushbullet-push-${push.iden || Date.now()}`;
+      if (notificationDataStore2) {
+        notificationDataStore2.set(notificationId, push);
+      }
       createNotificationWithTimeout(
-        `pushbullet-push-${push.iden || Date.now()}`,
+        notificationId,
         {
           type: "basic",
           iconUrl,
@@ -1391,9 +1438,9 @@
           // Limit message length
           priority: 1
         },
-        (notificationId) => {
+        (createdId) => {
           debugLogger.notifications("INFO", "Push notification created", {
-            notificationId,
+            notificationId: createdId,
             pushType: push.type
           });
           performanceMonitor.recordNotification("push_notification_created");
@@ -1510,6 +1557,12 @@
       debugLogger.general("WARN", "Cannot push link - no API key");
       return;
     }
+    const sanitizedUrl = sanitizeUrl(url);
+    const sanitizedTitle = sanitizeText(title || "Link");
+    if (!sanitizedUrl) {
+      debugLogger.general("ERROR", "Invalid URL provided", { url });
+      return;
+    }
     try {
       const response = await fetch("https://api.pushbullet.com/v2/pushes", {
         method: "POST",
@@ -1519,8 +1572,8 @@
         },
         body: JSON.stringify({
           type: "link",
-          title: title || "Link",
-          url
+          title: sanitizedTitle,
+          url: sanitizedUrl
         })
       });
       if (!response.ok) {
@@ -1546,6 +1599,8 @@
       debugLogger.general("WARN", "Cannot push note - no API key");
       return;
     }
+    const sanitizedTitle = sanitizeText(title);
+    const sanitizedBody = sanitizeText(body);
     try {
       const response = await fetch("https://api.pushbullet.com/v2/pushes", {
         method: "POST",
@@ -1555,8 +1610,8 @@
         },
         body: JSON.stringify({
           type: "note",
-          title,
-          body
+          title: sanitizedTitle,
+          body: sanitizedBody
         })
       });
       if (!response.ok) {
@@ -1579,14 +1634,16 @@
 
   // src/background/index.ts
   debugConfigManager.loadConfig();
+  var notificationDataStore = /* @__PURE__ */ new Map();
   var websocketClient2 = null;
   function connectWebSocket() {
+    updateConnectionIcon("connecting");
     if (!websocketClient2) {
       websocketClient2 = new WebSocketClient(WEBSOCKET_URL, getApiKey);
       setWebSocketClient(websocketClient2);
       websocketClient2.setHandlers({
         onTicklePush: async () => {
-          await refreshPushes();
+          await refreshPushes(notificationDataStore);
         },
         onTickleDevice: async () => {
           const apiKey2 = getApiKey();
@@ -1642,12 +1699,14 @@
             }).catch(() => {
             });
           }
-          await showPushNotification(decryptedPush);
+          await showPushNotification(decryptedPush, notificationDataStore);
         },
         onConnected: () => {
           stopPollingMode();
+          updateConnectionIcon("connected");
         },
         onDisconnected: () => {
+          updateConnectionIcon("disconnected");
         },
         checkPollingMode: () => {
           checkPollingMode();
@@ -1672,6 +1731,7 @@
       reason: "onInstalled",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
+    setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onInstalled");
     setupContextMenu();
     initializeSessionCache("onInstalled", connectWebSocket, {
@@ -1687,6 +1747,7 @@
       reason: "onStartup",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
+    setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onStartup");
     setupContextMenu();
     initializeSessionCache("onStartup", connectWebSocket, {
@@ -1696,6 +1757,20 @@
       setDeviceNickname,
       setNotificationTimeout
     });
+  });
+  chrome.notifications.onClicked.addListener((notificationId) => {
+    debugLogger.notifications("INFO", "Notification clicked", { notificationId });
+    const pushData = notificationDataStore.get(notificationId);
+    if (pushData) {
+      chrome.windows.create({
+        url: `notification-detail.html?id=${encodeURIComponent(notificationId)}`,
+        type: "popup",
+        width: 600,
+        height: 500,
+        focused: true
+      });
+    }
+    chrome.notifications.clear(notificationId);
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === "websocketReconnect" && getApiKey()) {
@@ -1955,6 +2030,14 @@
         websocketStateText: websocketState.current.stateText
       });
       sendResponse({ success: true, summary });
+      return false;
+    } else if (message.action === "getNotificationData") {
+      const pushData = notificationDataStore.get(message.notificationId);
+      if (pushData) {
+        sendResponse({ success: true, push: pushData });
+      } else {
+        sendResponse({ success: false, error: "Notification not found" });
+      }
       return false;
     }
     return false;

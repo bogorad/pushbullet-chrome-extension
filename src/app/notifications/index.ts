@@ -53,8 +53,10 @@ export function createNotificationWithTimeout(
           chrome.notifications.clear(createdId || notificationId, () => {});
         }, timeout);
       }
-    } catch (_) {
-      // noop
+    } catch (error) {
+      debugLogger.notifications('ERROR', 'Failed to set notification timeout', {
+        error: (error as Error).message
+      }, error as Error);
     }
   });
 }

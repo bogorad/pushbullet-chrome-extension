@@ -35,12 +35,16 @@ import {
   updatePopupConnectionState,
   setupContextMenu,
   pushLink,
-  pushNote
+  pushNote,
+  updateConnectionIcon
 } from './utils';
 import type { Push } from '../types/domain';
 
 // Load debug configuration
 debugConfigManager.loadConfig();
+
+// Store notification data for detail view
+const notificationDataStore = new Map<string, Push>();
 
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
@@ -49,6 +53,9 @@ let websocketClient: WebSocketClient | null = null;
  * Connect to WebSocket
  */
 function connectWebSocket(): void {
+  // Set connecting status
+  updateConnectionIcon('connecting');
+
   if (!websocketClient) {
     websocketClient = new WebSocketClient(WEBSOCKET_URL, getApiKey);
     setWebSocketClient(websocketClient);
@@ -56,7 +63,7 @@ function connectWebSocket(): void {
     // Set up handlers
     websocketClient.setHandlers({
       onTicklePush: async () => {
-        await refreshPushes();
+        await refreshPushes(notificationDataStore);
       },
       onTickleDevice: async () => {
         const apiKey = getApiKey();
@@ -121,13 +128,14 @@ function connectWebSocket(): void {
           }).catch(() => {});
         }
 
-        await showPushNotification(decryptedPush);
+        await showPushNotification(decryptedPush, notificationDataStore);
       },
       onConnected: () => {
         stopPollingMode();
+        updateConnectionIcon('connected');
       },
       onDisconnected: () => {
-        // Will be handled by onclose
+        updateConnectionIcon('disconnected');
       },
       checkPollingMode: () => {
         checkPollingMode();
@@ -166,6 +174,9 @@ chrome.runtime.onInstalled.addListener(() => {
     timestamp: new Date().toISOString()
   });
 
+  // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
+  setTimeout(() => updateConnectionIcon('disconnected'), 100);
+
   initTracker.recordInitialization('onInstalled');
   setupContextMenu();
   initializeSessionCache('onInstalled', connectWebSocket, {
@@ -186,6 +197,9 @@ chrome.runtime.onStartup.addListener(() => {
     timestamp: new Date().toISOString()
   });
 
+  // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
+  setTimeout(() => updateConnectionIcon('disconnected'), 100);
+
   initTracker.recordInitialization('onStartup');
   setupContextMenu();
   initializeSessionCache('onStartup', connectWebSocket, {
@@ -195,6 +209,30 @@ chrome.runtime.onStartup.addListener(() => {
     setDeviceNickname,
     setNotificationTimeout
   });
+});
+
+/**
+ * Notification click listener
+ */
+chrome.notifications.onClicked.addListener((notificationId) => {
+  debugLogger.notifications('INFO', 'Notification clicked', { notificationId });
+
+  // Get push data from store
+  const pushData = notificationDataStore.get(notificationId);
+
+  if (pushData) {
+    // Open notification detail page in a new window
+    chrome.windows.create({
+      url: `notification-detail.html?id=${encodeURIComponent(notificationId)}`,
+      type: 'popup',
+      width: 600,
+      height: 500,
+      focused: true
+    });
+  }
+
+  // Clear the notification
+  chrome.notifications.clear(notificationId);
 });
 
 /**
@@ -511,6 +549,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
 
     sendResponse({ success: true, summary });
+    return false; // Synchronous response
+  } else if (message.action === 'getNotificationData') {
+    // Return notification data for detail view
+    const pushData = notificationDataStore.get(message.notificationId);
+    if (pushData) {
+      sendResponse({ success: true, push: pushData });
+    } else {
+      sendResponse({ success: false, error: 'Notification not found' });
+    }
     return false; // Synchronous response
   }
 

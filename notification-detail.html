@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Push Notification</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+      min-width: 400px;
+      max-width: 600px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      padding: 24px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    .icon {
+      width: 48px;
+      height: 48px;
+      margin-right: 16px;
+    }
+
+    .title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #333;
+      flex: 1;
+    }
+
+    .type-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      background: #4CAF50;
+      color: white;
+    }
+
+    .content {
+      margin-bottom: 20px;
+    }
+
+    .message {
+      font-size: 16px;
+      line-height: 1.6;
+      color: #555;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      user-select: text;
+      cursor: text;
+      padding: 16px;
+      background: #f9f9f9;
+      border-radius: 4px;
+      border-left: 4px solid #4CAF50;
+    }
+
+    .metadata {
+      display: flex;
+      gap: 16px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #e0e0e0;
+      font-size: 13px;
+      color: #888;
+    }
+
+    .metadata-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    button {
+      flex: 1;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #45a049;
+    }
+
+    .btn-secondary {
+      background: #e0e0e0;
+      color: #333;
+    }
+
+    .btn-secondary:hover {
+      background: #d0d0d0;
+    }
+
+    .btn-code {
+      background: #2196F3;
+      color: white;
+      flex: 1.5;
+    }
+
+    .btn-code:hover {
+      background: #1976D2;
+    }
+
+    .btn-code strong {
+      font-size: 18px;
+      letter-spacing: 2px;
+    }
+
+    .copy-feedback {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #4CAF50;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+
+    .copy-feedback.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="icons/icon48.png" alt="Pushbullet" class="icon">
+      <div class="title" id="title">Loading...</div>
+      <span class="type-badge" id="type-badge">PUSH</span>
+    </div>
+
+    <div class="content">
+      <div class="message" id="message">Loading notification details...</div>
+    </div>
+
+    <div class="metadata">
+      <div class="metadata-item">
+        <span>⏰</span>
+        <span id="timestamp">--</span>
+      </div>
+      <div class="metadata-item">
+        <span>📱</span>
+        <span id="source">--</span>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="copy-btn">Copy Text</button>
+      <button class="btn-secondary" id="close-btn">Close</button>
+    </div>
+  </div>
+
+  <div class="copy-feedback" id="copy-feedback">✓ Copied to clipboard!</div>
+
+  <script src="dist/notification-detail.js"></script>
+</body>
+</html>
+

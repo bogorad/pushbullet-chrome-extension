@@ -574,12 +574,30 @@ function displayPushes(pushes) {
   const recentPushes = pushes.slice(0, 10);
 
   recentPushes.forEach((push) => {
-    if (!push.title && !push.body && !push.url) {
-      return; // Skip empty pushes
+    // Extract title and body based on push type
+    let title = push.title;
+    let body = push.body;
+    let url = push.url;
+
+    // Handle SMS pushes
+    if (push.type === 'sms_changed' && push.notifications && push.notifications.length > 0) {
+      const sms = push.notifications[0];
+      title = sms.title || 'SMS';
+      body = sms.body || '';
+    }
+
+    // Skip empty pushes
+    if (!title && !body && !url) {
+      return;
     }
 
     const pushItem = document.createElement('div');
     pushItem.className = 'push-item';
+
+    // Add type badge for SMS
+    if (push.type === 'sms_changed') {
+      pushItem.classList.add('push-sms');
+    }
 
     // Add a timestamp
     if (push.created) {
@@ -590,27 +608,27 @@ function displayPushes(pushes) {
       pushItem.appendChild(timeElement);
     }
 
-    if (push.title) {
-      const title = document.createElement('div');
-      title.className = 'push-title';
-      title.textContent = push.title;
-      pushItem.appendChild(title);
+    if (title) {
+      const titleEl = document.createElement('div');
+      titleEl.className = 'push-title';
+      titleEl.textContent = title;
+      pushItem.appendChild(titleEl);
     }
 
-    if (push.url) {
-      const url = document.createElement('a');
-      url.href = push.url;
-      url.target = '_blank';
-      url.className = 'push-url';
-      url.textContent = push.url;
-      pushItem.appendChild(url);
+    if (url) {
+      const urlEl = document.createElement('a');
+      urlEl.href = url;
+      urlEl.target = '_blank';
+      urlEl.className = 'push-url';
+      urlEl.textContent = url;
+      pushItem.appendChild(urlEl);
     }
 
-    if (push.body) {
-      const body = document.createElement('div');
-      body.className = 'push-body';
-      body.textContent = push.body;
-      pushItem.appendChild(body);
+    if (body) {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'push-body';
+      bodyEl.textContent = body;
+      pushItem.appendChild(bodyEl);
     }
 
     pushesList.appendChild(pushItem);

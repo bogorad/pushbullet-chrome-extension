@@ -1,7 +1,7 @@
 {
   "version": 3,
-  "sources": [],
-  "sourcesContent": [],
-  "mappings": "",
+  "sources": ["../src/debug-dashboard/index.ts"],
+  "sourcesContent": ["/**\n * Debug Dashboard - STUB FILE\n * TODO: Complete migration from js/debug-dashboard.js\n * This is a temporary stub to allow the build to succeed\n */\n\nconsole.log('Debug Dashboard TypeScript stub loaded - migration in progress');\n\n// For now, load the legacy version\nconst script = document.createElement('script');\nscript.src = '../js/debug-dashboard.js';\ndocument.head.appendChild(script);\n\n"],
+  "mappings": ";;;AAMA,UAAQ,IAAI,gEAAgE;AAG5E,MAAM,SAAS,SAAS,cAAc,QAAQ;AAC9C,SAAO,MAAM;AACb,WAAS,KAAK,YAAY,MAAM;",
   "names": []
 }

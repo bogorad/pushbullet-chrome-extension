@@ -11,9 +11,80 @@ import type { Push } from '../types/domain';
 import { createNotificationWithTimeout } from '../app/notifications';
 
 /**
+ * Connection status for icon updates
+ */
+export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
+
+/**
+ * Sanitize text to prevent XSS attacks
+ * Removes HTML tags and dangerous characters
+ */
+function sanitizeText(text: string): string {
+  if (!text) return '';
+
+  // Remove HTML tags
+  let sanitized = text.replace(/<[^>]*>/g, '');
+
+  // Remove script-like content
+  sanitized = sanitized.replace(/javascript:/gi, '');
+  sanitized = sanitized.replace(/on\w+\s*=/gi, '');
+
+  // Trim and limit length
+  sanitized = sanitized.trim().substring(0, 1000);
+
+  return sanitized;
+}
+
+/**
+ * Sanitize URL to ensure it's safe
+ */
+function sanitizeUrl(url: string): string {
+  if (!url) return '';
+
+  try {
+    const parsed = new URL(url);
+    // Only allow http and https protocols
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+    return parsed.href;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Update extension icon based on connection status
+ * Uses badge color instead of different icon files since service workers have issues loading icons
+ */
+export function updateConnectionIcon(status: ConnectionStatus): void {
+  try {
+    // Set badge text
+    const badgeText = status === 'connected' ? '●' :
+                      status === 'connecting' ? '◐' :
+                      '○';
+
+    // Set badge color
+    const badgeColor = status === 'connected' ? '#4CAF50' :  // Green
+                       status === 'connecting' ? '#FFC107' :  // Yellow
+                       '#F44336';  // Red
+
+    chrome.action.setBadgeText({ text: badgeText });
+    chrome.action.setBadgeBackgroundColor({ color: badgeColor });
+
+    debugLogger.general('DEBUG', 'Updated connection status badge', { status, badgeText, badgeColor });
+  } catch (error) {
+    debugLogger.general('ERROR', 'Exception setting badge', {
+      status,
+      error: (error as Error).message
+    }, error as Error);
+  }
+}
+
+/**
  * Refresh pushes from API and show notifications for new ones
  */
-export async function refreshPushes(): Promise<void> {
+export async function refreshPushes(notificationDataStore?: Map<string, Push>): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
     debugLogger.general('WARN', 'Cannot refresh pushes - no API key');
@@ -46,7 +117,7 @@ export async function refreshPushes(): Promise<void> {
         pushIden: push.iden,
         pushType: push.type
       });
-      await showPushNotification(push);
+      await showPushNotification(push, notificationDataStore);
     }
 
     // Notify popup
@@ -64,7 +135,7 @@ export async function refreshPushes(): Promise<void> {
 /**
  * Show push notification
  */
-export async function showPushNotification(push: Push): Promise<void> {
+export async function showPushNotification(push: Push, notificationDataStore?: Map<string, Push>): Promise<void> {
   try {
     // Log the full push object for debugging
     debugLogger.notifications('INFO', 'Showing push notification', {
@@ -116,8 +187,15 @@ export async function showPushNotification(push: Push): Promise<void> {
     }
 
     // Create notification
+    const notificationId = `pushbullet-push-${push.iden || Date.now()}`;
+
+    // Store push data for detail view
+    if (notificationDataStore) {
+      notificationDataStore.set(notificationId, push);
+    }
+
     createNotificationWithTimeout(
-      `pushbullet-push-${push.iden || Date.now()}`,
+      notificationId,
       {
         type: 'basic',
         iconUrl, // Always use local icon, never external URLs
@@ -125,9 +203,9 @@ export async function showPushNotification(push: Push): Promise<void> {
         message: message.substring(0, 200), // Limit message length
         priority: 1
       },
-      (notificationId) => {
+      (createdId) => {
         debugLogger.notifications('INFO', 'Push notification created', {
-          notificationId,
+          notificationId: createdId,
           pushType: push.type
         });
         performanceMonitor.recordNotification('push_notification_created');
@@ -294,6 +372,15 @@ export async function pushLink(url: string, title?: string): Promise<void> {
     return;
   }
 
+  // Sanitize inputs to prevent XSS
+  const sanitizedUrl = sanitizeUrl(url);
+  const sanitizedTitle = sanitizeText(title || 'Link');
+
+  if (!sanitizedUrl) {
+    debugLogger.general('ERROR', 'Invalid URL provided', { url });
+    return;
+  }
+
   try {
     const response = await fetch('https://api.pushbullet.com/v2/pushes', {
       method: 'POST',
@@ -303,8 +390,8 @@ export async function pushLink(url: string, title?: string): Promise<void> {
       },
       body: JSON.stringify({
         type: 'link',
-        title: title || 'Link',
-        url: url
+        title: sanitizedTitle,
+        url: sanitizedUrl
       })
     });
 
@@ -338,6 +425,10 @@ export async function pushNote(title: string, body: string): Promise<void> {
     return;
   }
 
+  // Sanitize inputs to prevent XSS
+  const sanitizedTitle = sanitizeText(title);
+  const sanitizedBody = sanitizeText(body);
+
   try {
     const response = await fetch('https://api.pushbullet.com/v2/pushes', {
       method: 'POST',
@@ -347,8 +438,8 @@ export async function pushNote(title: string, body: string): Promise<void> {
       },
       body: JSON.stringify({
         type: 'note',
-        title: title,
-        body: body
+        title: sanitizedTitle,
+        body: sanitizedBody
       })
     });
 
