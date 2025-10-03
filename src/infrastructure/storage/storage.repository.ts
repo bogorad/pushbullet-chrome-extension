@@ -59,21 +59,25 @@ export interface StorageRepository {
  */
 export class ChromeStorageRepository implements StorageRepository {
   /**
-   * Get API Key from sync storage
+   * Get API Key from local storage
+   * Security: API keys are stored in local storage (not synced) to prevent
+   * exposure through Chrome's sync infrastructure
    */
   async getApiKey(): Promise<string | null> {
-    const result = await chrome.storage.sync.get(['apiKey']);
+    const result = await chrome.storage.local.get(['apiKey']);
     return result.apiKey || null;
   }
 
   /**
-   * Set API Key in sync storage
+   * Set API Key in local storage
+   * Security: API keys are stored in local storage (not synced) to prevent
+   * exposure through Chrome's sync infrastructure
    */
   async setApiKey(key: string | null): Promise<void> {
     if (key === null) {
-      await chrome.storage.sync.remove(['apiKey']);
+      await chrome.storage.local.remove(['apiKey']);
     } else {
-      await chrome.storage.sync.set({ apiKey: key });
+      await chrome.storage.local.set({ apiKey: key });
     }
   }
 

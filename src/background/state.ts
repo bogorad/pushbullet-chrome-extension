@@ -34,7 +34,8 @@ export const initializationState: InitializationState = {
   timestamp: null
 };
 
-// NO ENCRYPTION/DECRYPTION - API key is stored in plain text
+// NO ENCRYPTION/DECRYPTION - API key is stored in plain text in chrome.storage.local
+// Security: API keys are stored in local storage (not synced) to prevent exposure
 // The crypto module is ONLY for decrypting E2EE push messages, NOT the API key!
 
 // Getters and setters

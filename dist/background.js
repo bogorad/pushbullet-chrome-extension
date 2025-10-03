@@ -1174,20 +1174,24 @@
   // src/infrastructure/storage/storage.repository.ts
   var ChromeStorageRepository = class {
     /**
-     * Get API Key from sync storage
+     * Get API Key from local storage
+     * Security: API keys are stored in local storage (not synced) to prevent
+     * exposure through Chrome's sync infrastructure
      */
     async getApiKey() {
-      const result = await chrome.storage.sync.get(["apiKey"]);
+      const result = await chrome.storage.local.get(["apiKey"]);
       return result.apiKey || null;
     }
     /**
-     * Set API Key in sync storage
+     * Set API Key in local storage
+     * Security: API keys are stored in local storage (not synced) to prevent
+     * exposure through Chrome's sync infrastructure
      */
     async setApiKey(key) {
       if (key === null) {
-        await chrome.storage.sync.remove(["apiKey"]);
+        await chrome.storage.local.remove(["apiKey"]);
       } else {
-        await chrome.storage.sync.set({ apiKey: key });
+        await chrome.storage.local.set({ apiKey: key });
       }
     }
     /**
@@ -1455,77 +1459,79 @@
   }
 
   // src/app/reconnect/index.ts
-  function ensureConfigLoaded(stateSetters, stateGetters) {
-    return new Promise((resolve) => {
-      try {
-        if (!stateSetters || !stateGetters) {
-          resolve();
-          return;
-        }
-        const needsApiKey = !stateGetters.getApiKey();
-        const needsNickname = stateGetters.getDeviceNickname() === null || stateGetters.getDeviceNickname() === void 0;
-        const needsAutoOpen = stateGetters.getAutoOpenLinks() === null || stateGetters.getAutoOpenLinks() === void 0;
-        const needsTimeout = stateGetters.getNotificationTimeout() === null || stateGetters.getNotificationTimeout() === void 0;
-        const needsSync = needsApiKey || needsNickname || needsAutoOpen || needsTimeout;
-        const finish = () => {
-          try {
-            debugLogger.storage("DEBUG", "ensureConfigLoaded completed", {
-              hasApiKey: !!stateGetters.getApiKey(),
-              hasDeviceIden: !!stateGetters.getDeviceIden(),
-              autoOpenLinks: stateGetters.getAutoOpenLinks(),
-              notificationTimeout: stateGetters.getNotificationTimeout(),
-              deviceNickname: stateGetters.getDeviceNickname()
-            });
-          } catch (err) {
-          }
-          resolve();
-        };
-        const loadLocal = () => {
-          chrome.storage.local.get(["deviceIden"], (lres) => {
-            try {
-              if (!stateGetters.getDeviceIden() && lres && lres.deviceIden) {
-                stateSetters.setDeviceIden(lres.deviceIden);
-              }
-            } catch (err) {
-            }
-            finish();
-          });
-        };
-        if (needsSync) {
-          chrome.storage.sync.get(
-            ["apiKey", "deviceNickname", "autoOpenLinks", "notificationTimeout"],
-            (res) => {
-              try {
-                if (!stateGetters.getApiKey() && res && res.apiKey) {
-                  stateSetters.setApiKey(res.apiKey);
-                }
-                if (needsNickname && res && res.deviceNickname !== void 0) {
-                  stateSetters.setDeviceNickname(res.deviceNickname);
-                }
-                if (needsAutoOpen && res && res.autoOpenLinks !== void 0) {
-                  stateSetters.setAutoOpenLinks(res.autoOpenLinks);
-                }
-                if (needsTimeout && res && res.notificationTimeout !== void 0) {
-                  stateSetters.setNotificationTimeout(res.notificationTimeout);
-                }
-              } catch (err) {
-              }
-              loadLocal();
-            }
-          );
-        } else {
-          loadLocal();
-        }
-      } catch (e) {
+  async function ensureConfigLoaded(stateSetters, stateGetters) {
+    try {
+      if (!stateSetters || !stateGetters) {
+        return;
+      }
+      const needsApiKey = !stateGetters.getApiKey();
+      const needsDeviceIden = !stateGetters.getDeviceIden();
+      const needsNickname = stateGetters.getDeviceNickname() === null || stateGetters.getDeviceNickname() === void 0;
+      const needsAutoOpen = stateGetters.getAutoOpenLinks() === null || stateGetters.getAutoOpenLinks() === void 0;
+      const needsTimeout = stateGetters.getNotificationTimeout() === null || stateGetters.getNotificationTimeout() === void 0;
+      if (needsApiKey) {
         try {
-          debugLogger.storage("WARN", "ensureConfigLoaded encountered an error", {
-            error: e && e.message
-          });
+          const apiKey2 = await storageRepository.getApiKey();
+          if (apiKey2) {
+            stateSetters.setApiKey(apiKey2);
+          }
         } catch (err) {
         }
-        resolve();
       }
-    });
+      if (needsDeviceIden) {
+        try {
+          const deviceIden2 = await storageRepository.getDeviceIden();
+          if (deviceIden2) {
+            stateSetters.setDeviceIden(deviceIden2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsNickname) {
+        try {
+          const deviceNickname2 = await storageRepository.getDeviceNickname();
+          if (deviceNickname2 !== null && deviceNickname2 !== void 0) {
+            stateSetters.setDeviceNickname(deviceNickname2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsAutoOpen) {
+        try {
+          const autoOpenLinks2 = await storageRepository.getAutoOpenLinks();
+          if (autoOpenLinks2 !== null && autoOpenLinks2 !== void 0) {
+            stateSetters.setAutoOpenLinks(autoOpenLinks2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsTimeout) {
+        try {
+          const notificationTimeout2 = await storageRepository.getNotificationTimeout();
+          if (notificationTimeout2 !== null && notificationTimeout2 !== void 0) {
+            stateSetters.setNotificationTimeout(notificationTimeout2);
+          }
+        } catch (err) {
+        }
+      }
+      try {
+        debugLogger.storage("DEBUG", "ensureConfigLoaded completed", {
+          hasApiKey: !!stateGetters.getApiKey(),
+          hasDeviceIden: !!stateGetters.getDeviceIden(),
+          autoOpenLinks: stateGetters.getAutoOpenLinks(),
+          notificationTimeout: stateGetters.getNotificationTimeout(),
+          deviceNickname: stateGetters.getDeviceNickname()
+        });
+      } catch (err) {
+      }
+    } catch (e) {
+      try {
+        debugLogger.storage("WARN", "ensureConfigLoaded encountered an error", {
+          error: e && e.message
+        });
+      } catch (err) {
+      }
+    }
   }
 
   // src/lib/crypto/index.ts

@@ -55,7 +55,8 @@ export interface StorageRepository {
 // Implementation
 export class ChromeStorageRepository implements StorageRepository {
   async getApiKey(): Promise<string | null> {
-    const result = await chrome.storage.sync.get(['apiKey']);
+    // Security: API keys stored in local storage (not synced)
+    const result = await chrome.storage.local.get(['apiKey']);
     return result.apiKey || null;
   }
   // ... other methods
@@ -64,6 +65,12 @@ export class ChromeStorageRepository implements StorageRepository {
 // Singleton
 export const storageRepository = new ChromeStorageRepository();
 ```
+
+### Storage Location Strategy:
+- **API Key**: `chrome.storage.local` (security: not synced across devices)
+- **Device Identifier**: `chrome.storage.local` (device-specific)
+- **Encryption Password**: `chrome.storage.local` (security: not synced)
+- **User Preferences**: `chrome.storage.sync` (deviceNickname, autoOpenLinks, notificationTimeout)
 
 ### Usage:
 ```typescript

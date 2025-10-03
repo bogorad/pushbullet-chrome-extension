@@ -56,6 +56,12 @@ const createChromeMock = () => {
         set: vi.fn(),
         remove: vi.fn(),
         clear: vi.fn()
+      },
+      local: {
+        get: vi.fn(),
+        set: vi.fn(),
+        remove: vi.fn(),
+        clear: vi.fn()
       }
     },
     contextMenus: {
