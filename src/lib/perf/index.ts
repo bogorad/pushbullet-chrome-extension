@@ -21,7 +21,11 @@ export class PerformanceMonitor {
   recordDisconnection() { this.quality.disconnections++; }
   recordPermanentError() { this.quality.permanentErrors++; }
   recordNotification(event: string) { this.notificationTimeline.push({ ts: Date.now(), event }); if (this.notificationTimeline.length > 200) this.notificationTimeline.shift(); }
-  getPerformanceSummary() { return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, metrics: Object.fromEntries(this.metrics) as Record<string, number> }; }
+  recordPushReceived() { this.notificationMetrics.pushesReceived++; }
+  recordNotificationCreated() { this.notificationMetrics.notificationsCreated++; }
+  recordNotificationFailed() { this.notificationMetrics.notificationsFailed++; }
+  recordUnknownPushType() { this.notificationMetrics.unknownTypes++; }
+  getPerformanceSummary() { return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, metrics: Object.fromEntries(this.metrics) as Record<string, number> }; }
   getQualityMetrics() { return this.quality; }
   exportPerformanceData() { return { summary: this.getPerformanceSummary(), timeline: this.notificationTimeline.slice(-200) }; }
 }

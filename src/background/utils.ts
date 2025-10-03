@@ -70,6 +70,21 @@ function sanitizeUrl(url: string): string {
 }
 
 /**
+ * Update extension icon tooltip to show current state
+ */
+export function updateExtensionTooltip(stateDescription: string): void {
+  try {
+    chrome.action.setTitle({ title: stateDescription });
+    debugLogger.general('DEBUG', 'Updated extension tooltip', { stateDescription });
+  } catch (error) {
+    debugLogger.general('ERROR', 'Exception setting tooltip', {
+      stateDescription,
+      error: (error as Error).message
+    }, error as Error);
+  }
+}
+
+/**
  * Update extension icon based on connection status
  * Uses badge color instead of different icon files since service workers have issues loading icons
  */
@@ -171,7 +186,12 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
     // Handle different push types
     const pushType = push.type;
 
-    if (pushType === 'note') {
+    // Check for mirrored SMS notifications first (before generic mirror handler)
+    // The application_name might vary between Android phones, so we check if it includes 'messaging'
+    if (pushType === 'mirror' && push.application_name?.toLowerCase().includes('messaging')) {
+      title = `SMS: ${push.title}`; // push.title contains the sender's name/number
+      message = push.body || '';
+    } else if (pushType === 'note') {
       title = push.title || 'Note';
       message = push.body || '';
     } else if (pushType === 'link') {
@@ -203,6 +223,7 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
       title = 'Push';
       message = JSON.stringify(push).substring(0, 200);
       debugLogger.notifications('WARN', 'Unknown push type', { pushType, push });
+      performanceMonitor.recordUnknownPushType();
     }
 
     // Create notification with GUARANTEED unique ID
@@ -231,6 +252,7 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
           pushType: push.type
         });
         performanceMonitor.recordNotification('push_notification_created');
+        performanceMonitor.recordNotificationCreated();
       }
     );
   } catch (error) {
@@ -238,6 +260,7 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
       error: (error as Error).message,
       pushType: push.type
     }, error as Error);
+    performanceMonitor.recordNotificationFailed();
   }
 }
 

@@ -99,7 +99,12 @@ interface DebugConfig {
 interface WebSocketState {
   current: {
     stateText: string;
+    readyState?: string;
+    stateMachineState?: string;
+    stateMachineDescription?: string;
   };
+  lastCheck?: string;
+  historyLength?: number;
   [key: string]: unknown;
 }
 
@@ -115,7 +120,7 @@ const lastUpdatedSpan = getElementById<HTMLSpanElement>('last-updated');
 const debugStatusEl = getElementById<HTMLDivElement>('debug-status');
 const totalLogsEl = getElementById<HTMLSpanElement>('total-logs');
 const errorCountEl = getElementById<HTMLSpanElement>('error-count');
-const websocketStatusEl = getElementById<HTMLSpanElement>('websocket-status');
+const websocketStatusEl = getElementById<HTMLSpanElement>('websocket-status'); // Now displays state machine status
 
 // Tab elements
 const tabBtns = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
@@ -292,9 +297,12 @@ function updateSummary(data: DebugSummary['summary']): void {
     errorCountEl.textContent = '0';
   }
 
-  // WebSocket status
+  // State Machine status (replaces generic websocket status)
   if (data.websocketState && data.websocketState.current) {
-    websocketStatusEl.textContent = data.websocketState.current.stateText || 'Unknown';
+    const stateMachineState = data.websocketState.current.stateMachineState || 'unknown';
+    const stateDescription = data.websocketState.current.stateMachineDescription || data.websocketState.current.stateText || 'Unknown';
+    websocketStatusEl.textContent = stateDescription;
+    websocketStatusEl.title = `State: ${stateMachineState}`;
   } else {
     websocketStatusEl.textContent = 'Unknown';
   }
@@ -329,7 +337,9 @@ function renderLogs(): void {
     return;
   }
 
-  logsContainer.innerHTML = filteredLogs.map(log => {
+  // By creating a copy with [...filteredLogs] and then reversing it,
+  // we ensure the newest logs are processed first without changing the original data.
+  logsContainer.innerHTML = [...filteredLogs].reverse().map(log => {
     const dataStr = log.data ? JSON.stringify(log.data, null, 2) : '';
     const errorStr = log.error ? `${log.error.name}: ${log.error.message}` : '';
 
@@ -387,6 +397,8 @@ function renderPerformanceMetrics(performance: PerformanceData | undefined): voi
       <p><strong>Reconnection Attempts:</strong> <span>${ws.reconnectionAttempts || 0}</span></p>
       <p><strong>Last Connection:</strong> <span>${ws.lastConnectionTime ? new Date(ws.lastConnectionTime).toLocaleString() : 'Never'}</span></p>
     `;
+  } else {
+    websocketMetricsEl.innerHTML = '<p class="loading">No websocket data available</p>';
   }
 
   // Connection quality metrics
@@ -401,6 +413,8 @@ function renderPerformanceMetrics(performance: PerformanceData | undefined): voi
       <p><strong>Health Checks:</strong> <span class="success">${quality.healthChecksPassed || 0} passed</span> / <span class="error">${quality.healthChecksFailed || 0} failed</span></p>
       <p><strong>Consecutive Failures:</strong> <span class="${quality.consecutiveFailures > 3 ? 'error' : ''}">${quality.consecutiveFailures || 0}</span></p>
     `;
+  } else {
+    qualityMetricsEl.innerHTML = '<p class="loading">No quality metrics available</p>';
   }
 
   // Notification metrics
@@ -412,6 +426,8 @@ function renderPerformanceMetrics(performance: PerformanceData | undefined): voi
       <p><strong>Notifications Failed:</strong> <span>${notif.notificationsFailed || 0}</span></p>
       <p><strong>Avg Processing Time:</strong> <span>${notif.averageProcessingTime ? notif.averageProcessingTime.toFixed(2) + 'ms' : 'N/A'}</span></p>
     `;
+  } else {
+    notificationMetricsEl.innerHTML = '<p class="loading">No notification metrics available</p>';
   }
 }
 

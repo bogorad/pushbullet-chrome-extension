@@ -409,7 +409,45 @@ function displayPushes(pushes: Push[]): void {
     let body = push.body;
     const url = push.url;
 
-    // Handle SMS pushes
+    // Handle mirrored SMS notifications (check before generic sms_changed)
+    // The application_name might vary between Android phones, so we check if it includes 'messaging'
+    if (push.type === 'mirror' && push.application_name?.toLowerCase().includes('messaging')) {
+      title = `SMS: ${push.title}`;
+      body = push.body || '';
+      const pushItem = document.createElement('div');
+      pushItem.className = 'push-item';
+      pushItem.classList.add('push-sms'); // Add visual indicator
+
+      // Timestamp
+      if (push.created) {
+        const timestamp = new Date(push.created * 1000);
+        const timeElement = document.createElement('div');
+        timeElement.className = 'push-time';
+        timeElement.textContent = formatTimestamp(timestamp);
+        pushItem.appendChild(timeElement);
+      }
+
+      // Title
+      if (title) {
+        const titleEl = document.createElement('div');
+        titleEl.className = 'push-title';
+        titleEl.textContent = title;
+        pushItem.appendChild(titleEl);
+      }
+
+      // Body
+      if (body) {
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'push-body';
+        bodyEl.textContent = body;
+        pushItem.appendChild(bodyEl);
+      }
+
+      pushesList.appendChild(pushItem);
+      return; // Early return to avoid duplicate processing
+    }
+
+    // Handle legacy SMS pushes (fallback)
     if (push.type === 'sms_changed' && push.notifications && push.notifications.length > 0) {
       const sms = push.notifications[0];
       title = sms.title || 'SMS';

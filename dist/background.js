@@ -1,9 +1,19 @@
 "use strict";
 (() => {
   // src/lib/logging/index.ts
+  var STORAGE_KEY = "persistentDebugLogs";
+  var MAX_PERSISTENT_LOGS = 5e3;
   var DEBUG_CONFIG = {
     enabled: true,
-    categories: { WEBSOCKET: true, NOTIFICATIONS: true, API: true, STORAGE: true, GENERAL: true, PERFORMANCE: true, ERROR: true },
+    categories: {
+      WEBSOCKET: true,
+      NOTIFICATIONS: true,
+      API: true,
+      STORAGE: true,
+      GENERAL: true,
+      PERFORMANCE: true,
+      ERROR: true
+    },
     logLevel: "DEBUG",
     maxLogEntries: 1e3,
     sanitizeData: true
@@ -12,6 +22,37 @@
     logs = [];
     startTime = Date.now();
     performanceMarkers = /* @__PURE__ */ new Map();
+    /**
+     * Rehydrate logs from persistent storage on startup
+     * This method loads logs from the previous session
+     */
+    async rehydrate() {
+      try {
+        const result = await chrome.storage.local.get(STORAGE_KEY);
+        if (result[STORAGE_KEY] && Array.isArray(result[STORAGE_KEY])) {
+          this.logs = result[STORAGE_KEY];
+          console.log(
+            `[Logger] Rehydrated ${this.logs.length} logs from persistent storage.`
+          );
+        }
+      } catch (error) {
+        console.error("[Logger] Failed to rehydrate logs:", error);
+      }
+    }
+    /**
+     * Flush logs to persistent storage
+     * This method saves the current in-memory logs with circular buffer logic
+     */
+    async flush() {
+      try {
+        if (this.logs.length > MAX_PERSISTENT_LOGS) {
+          this.logs = this.logs.slice(this.logs.length - MAX_PERSISTENT_LOGS);
+        }
+        await chrome.storage.local.set({ [STORAGE_KEY]: this.logs });
+      } catch (error) {
+        console.error("[Logger] Failed to flush logs to storage:", error);
+      }
+    }
     sanitize(data) {
       if (!DEBUG_CONFIG.sanitizeData) return data;
       if (typeof data === "string") {
@@ -47,13 +88,20 @@
         level,
         message,
         data: data ? this.sanitize(data) : null,
-        error: error ? { name: error.name, message: error.message, stack: error.stack } : null
+        error: error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        } : null
       };
       if (error && level === "ERROR") {
-        globalErrorTracker.trackError(error, { category, message, data: data ? this.sanitize(data) : null }, category);
+        globalErrorTracker.trackError(
+          error,
+          { category, message, data: data ? this.sanitize(data) : null },
+          category
+        );
       }
       this.logs.push(entry);
-      if (this.logs.length > DEBUG_CONFIG.maxLogEntries) this.logs.shift();
       const prefix = `[${category}:${level}] ${timestamp}`;
       const full = `${prefix} ${message}`;
       const sanitized = data ? this.sanitize(data) : null;
@@ -128,7 +176,9 @@
       if (start) {
         const duration = Date.now() - start;
         this.performanceMarkers.delete(name);
-        this.performance("INFO", `Timer ended: ${name}`, { duration: `${duration}ms` });
+        this.performance("INFO", `Timer ended: ${name}`, {
+          duration: `${duration}ms`
+        });
         return duration;
       }
       this.performance("WARN", `Timer not found: ${name}`);
@@ -155,6 +205,7 @@
     }
   };
   var debugLogger = new DebugLogger();
+  debugLogger.rehydrate();
   var DebugConfigManager = class {
     async loadConfig() {
       try {
@@ -164,23 +215,44 @@
         });
         if (result.debugConfig) {
           Object.assign(DEBUG_CONFIG, result.debugConfig);
-          debugLogger.storage("INFO", "Debug configuration loaded from storage", DEBUG_CONFIG);
+          debugLogger.storage(
+            "INFO",
+            "Debug configuration loaded from storage",
+            DEBUG_CONFIG
+          );
         } else {
-          debugLogger.storage("INFO", "No stored debug configuration found - using defaults", DEBUG_CONFIG);
+          debugLogger.storage(
+            "INFO",
+            "No stored debug configuration found - using defaults",
+            DEBUG_CONFIG
+          );
         }
       } catch (error) {
-        debugLogger.storage("ERROR", "Failed to load debug configuration", null, error);
+        debugLogger.storage(
+          "ERROR",
+          "Failed to load debug configuration",
+          null,
+          error
+        );
       }
     }
     async saveConfig() {
       try {
         debugLogger.storage("DEBUG", "Saving debug configuration to storage");
         await new Promise((resolve) => {
-          chrome.storage.local.set({ debugConfig: DEBUG_CONFIG }, () => resolve(null));
+          chrome.storage.local.set(
+            { debugConfig: DEBUG_CONFIG },
+            () => resolve(null)
+          );
         });
         debugLogger.storage("INFO", "Debug configuration saved to storage");
       } catch (error) {
-        debugLogger.storage("ERROR", "Failed to save debug configuration", null, error);
+        debugLogger.storage(
+          "ERROR",
+          "Failed to save debug configuration",
+          null,
+          error
+        );
       }
     }
     updateConfig(updates) {
@@ -192,7 +264,10 @@
       if (Object.prototype.hasOwnProperty.call(DEBUG_CONFIG.categories, category)) {
         DEBUG_CONFIG.categories[category] = !DEBUG_CONFIG.categories[category];
         void this.saveConfig();
-        debugLogger.general("INFO", `Debug category ${category} toggled`, { category, enabled: DEBUG_CONFIG.categories[category] });
+        debugLogger.general("INFO", `Debug category ${category} toggled`, {
+          category,
+          enabled: DEBUG_CONFIG.categories[category]
+        });
       }
     }
     setLogLevel(level) {
@@ -207,7 +282,21 @@
       return { ...DEBUG_CONFIG };
     }
     resetConfig() {
-      const def = { enabled: true, categories: { WEBSOCKET: true, NOTIFICATIONS: true, API: true, STORAGE: true, GENERAL: true, PERFORMANCE: true, ERROR: true }, logLevel: "DEBUG", maxLogEntries: 1e3, sanitizeData: true };
+      const def = {
+        enabled: true,
+        categories: {
+          WEBSOCKET: true,
+          NOTIFICATIONS: true,
+          API: true,
+          STORAGE: true,
+          GENERAL: true,
+          PERFORMANCE: true,
+          ERROR: true
+        },
+        logLevel: "DEBUG",
+        maxLogEntries: 1e3,
+        sanitizeData: true
+      };
       Object.assign(DEBUG_CONFIG, def);
       void this.saveConfig();
       debugLogger.general("INFO", "Debug configuration reset to defaults");
@@ -220,7 +309,14 @@
     errorCounts = /* @__PURE__ */ new Map();
     criticalErrors = [];
     trackError(error, context = {}, category = "GENERAL") {
-      const entry = { timestamp: (/* @__PURE__ */ new Date()).toISOString(), category, message: error.message, name: error.name, stack: error.stack, context };
+      const entry = {
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        category,
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        context
+      };
       this.errors.push(entry);
       const count = (this.errorCounts.get(category) || 0) + 1;
       this.errorCounts.set(category, count);
@@ -229,7 +325,11 @@
     getErrorSummary() {
       const byCat = {};
       this.errorCounts.forEach((v, k) => byCat[k] = v);
-      return { total: this.errors.length, byCategory: byCat, critical: this.criticalErrors.length };
+      return {
+        total: this.errors.length,
+        byCategory: byCat,
+        critical: this.criticalErrors.length
+      };
     }
     exportErrorData() {
       return { errors: this.errors.slice(-200), summary: this.getErrorSummary() };
@@ -238,14 +338,30 @@
   var globalErrorTracker = new GlobalErrorTracker();
   try {
     self.addEventListener("error", (event) => {
-      globalErrorTracker.trackError(event.error || new Error(event.message), { filename: event.filename, lineno: event.lineno, colno: event.colno, type: "unhandled" }, "GLOBAL");
+      globalErrorTracker.trackError(
+        event.error || new Error(event.message),
+        {
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+          type: "unhandled"
+        },
+        "GLOBAL"
+      );
     });
   } catch (_) {
   }
   try {
-    self.addEventListener("unhandledrejection", (event) => {
-      globalErrorTracker.trackError(event.reason || new Error("Unhandled promise rejection"), { type: "unhandled_promise" }, "GLOBAL");
-    });
+    self.addEventListener(
+      "unhandledrejection",
+      (event) => {
+        globalErrorTracker.trackError(
+          event.reason || new Error("Unhandled promise rejection"),
+          { type: "unhandled_promise" },
+          "GLOBAL"
+        );
+      }
+    );
   } catch (_) {
   }
 
@@ -310,8 +426,20 @@
       this.notificationTimeline.push({ ts: Date.now(), event });
       if (this.notificationTimeline.length > 200) this.notificationTimeline.shift();
     }
+    recordPushReceived() {
+      this.notificationMetrics.pushesReceived++;
+    }
+    recordNotificationCreated() {
+      this.notificationMetrics.notificationsCreated++;
+    }
+    recordNotificationFailed() {
+      this.notificationMetrics.notificationsFailed++;
+    }
+    recordUnknownPushType() {
+      this.notificationMetrics.unknownTypes++;
+    }
     getPerformanceSummary() {
-      return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, metrics: Object.fromEntries(this.metrics) };
+      return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, metrics: Object.fromEntries(this.metrics) };
     }
     getQualityMetrics() {
       return this.quality;
@@ -439,6 +567,156 @@
     }
   }
 
+  // src/lib/events/event-bus.ts
+  var EventBus = class {
+    /**
+     * Map of event names to sets of listener functions
+     * Using Set ensures each listener is only registered once
+     */
+    listeners = /* @__PURE__ */ new Map();
+    /**
+     * Register a listener for an event
+     * 
+     * @param event - Event name (e.g., 'websocket:connected')
+     * @param listener - Function to call when event is emitted
+     * 
+     * @example
+     * ```typescript
+     * globalEventBus.on('websocket:connected', () => {
+     *   console.log('WebSocket connected!');
+     * });
+     * ```
+     */
+    on(event, listener) {
+      if (!this.listeners.has(event)) {
+        this.listeners.set(event, /* @__PURE__ */ new Set());
+      }
+      this.listeners.get(event).add(listener);
+    }
+    /**
+     * Remove a listener for an event
+     * 
+     * @param event - Event name
+     * @param listener - Listener function to remove
+     * 
+     * @example
+     * ```typescript
+     * const handler = () => console.log('Connected');
+     * globalEventBus.on('websocket:connected', handler);
+     * globalEventBus.off('websocket:connected', handler);
+     * ```
+     */
+    off(event, listener) {
+      const eventListeners = this.listeners.get(event);
+      if (eventListeners) {
+        eventListeners.delete(listener);
+        if (eventListeners.size === 0) {
+          this.listeners.delete(event);
+        }
+      }
+    }
+    /**
+     * Emit an event to all registered listeners
+     * 
+     * @param event - Event name
+     * @param data - Optional data to pass to listeners
+     * 
+     * @example
+     * ```typescript
+     * globalEventBus.emit('websocket:message', { 
+     *   type: 'push', 
+     *   data: { title: 'Hello' } 
+     * });
+     * ```
+     */
+    emit(event, data) {
+      const eventListeners = this.listeners.get(event);
+      if (eventListeners) {
+        eventListeners.forEach((listener) => {
+          try {
+            listener(data);
+          } catch (error) {
+            console.error(`Error in event listener for '${event}':`, error);
+          }
+        });
+      }
+    }
+    /**
+     * Register a one-time listener for an event
+     * The listener will be automatically removed after being called once
+     * 
+     * @param event - Event name
+     * @param listener - Function to call when event is emitted
+     * 
+     * @example
+     * ```typescript
+     * globalEventBus.once('websocket:connected', () => {
+     *   console.log('Connected for the first time!');
+     * });
+     * ```
+     */
+    once(event, listener) {
+      const onceWrapper = (data) => {
+        listener(data);
+        this.off(event, onceWrapper);
+      };
+      this.on(event, onceWrapper);
+    }
+    /**
+     * Remove all listeners for an event
+     * If no event is specified, removes all listeners for all events
+     * 
+     * @param event - Optional event name. If not provided, clears all listeners
+     * 
+     * @example
+     * ```typescript
+     * // Remove all listeners for a specific event
+     * globalEventBus.removeAllListeners('websocket:connected');
+     * 
+     * // Remove all listeners for all events
+     * globalEventBus.removeAllListeners();
+     * ```
+     */
+    removeAllListeners(event) {
+      if (event) {
+        this.listeners.delete(event);
+      } else {
+        this.listeners.clear();
+      }
+    }
+    /**
+     * Get the number of listeners for an event
+     * 
+     * @param event - Event name
+     * @returns Number of listeners registered for the event
+     * 
+     * @example
+     * ```typescript
+     * const count = globalEventBus.listenerCount('websocket:connected');
+     * console.log(`${count} listeners registered`);
+     * ```
+     */
+    listenerCount(event) {
+      const eventListeners = this.listeners.get(event);
+      return eventListeners ? eventListeners.size : 0;
+    }
+    /**
+     * Get all event names that have listeners
+     * 
+     * @returns Array of event names
+     * 
+     * @example
+     * ```typescript
+     * const events = globalEventBus.eventNames();
+     * console.log('Events with listeners:', events);
+     * ```
+     */
+    eventNames() {
+      return Array.from(this.listeners.keys());
+    }
+  };
+  var globalEventBus = new EventBus();
+
   // src/app/ws/client.ts
   var WebSocketClient = class {
     constructor(websocketUrl, getApiKey2) {
@@ -448,13 +726,6 @@
     socket = null;
     reconnectAttempts = 0;
     reconnectTimeout = null;
-    handlers = {};
-    /**
-     * Set event handlers
-     */
-    setHandlers(handlers) {
-      this.handlers = handlers;
-    }
     /**
      * Get current WebSocket instance
      */
@@ -495,9 +766,7 @@
           debugLogger.websocket("INFO", "WebSocket connection established", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
           performanceMonitor.recordWebSocketConnection(true);
           wsStateMonitor.startMonitoring();
-          if (this.handlers.stopPollingMode) {
-            this.handlers.stopPollingMode();
-          }
+          globalEventBus.emit("websocket:polling:stop");
           try {
             clearErrorBadge();
           } catch (_) {
@@ -508,12 +777,8 @@
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = null;
           }
-          if (this.handlers.onConnected) {
-            this.handlers.onConnected();
-          }
-          if (this.handlers.updatePopupConnectionState) {
-            this.handlers.updatePopupConnectionState("connected");
-          }
+          globalEventBus.emit("websocket:connected");
+          globalEventBus.emit("websocket:state", "connected");
         };
         this.socket.onmessage = async (event) => {
           try {
@@ -525,15 +790,15 @@
             });
             switch (data.type) {
               case "tickle":
-                if (data.subtype === "push" && this.handlers.onTicklePush) {
-                  await this.handlers.onTicklePush();
-                } else if (data.subtype === "device" && this.handlers.onTickleDevice) {
-                  await this.handlers.onTickleDevice();
+                if (data.subtype === "push") {
+                  globalEventBus.emit("websocket:tickle:push");
+                } else if (data.subtype === "device") {
+                  globalEventBus.emit("websocket:tickle:device");
                 }
                 break;
               case "push":
-                if ("push" in data && data.push && this.handlers.onPush) {
-                  await this.handlers.onPush(data.push);
+                if ("push" in data && data.push) {
+                  globalEventBus.emit("websocket:push", data.push);
                 } else {
                   debugLogger.websocket("WARN", "Push message received without push payload");
                 }
@@ -570,12 +835,12 @@
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             reconnectAttempts: this.reconnectAttempts
           });
-          if (this.handlers.onDisconnected) {
-            this.handlers.onDisconnected();
-          }
-          if (this.handlers.updatePopupConnectionState) {
-            this.handlers.updatePopupConnectionState("disconnected");
-          }
+          globalEventBus.emit("websocket:disconnected", {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean
+          });
+          globalEventBus.emit("websocket:state", "disconnected");
           if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
             debugLogger.websocket("ERROR", "Permanent WebSocket error - stopping reconnection attempts", closeInfo);
             try {
@@ -586,9 +851,6 @@
           }
           this.reconnectAttempts++;
           performanceMonitor.recordWebSocketReconnection();
-          if (this.handlers.checkPollingMode) {
-            this.handlers.checkPollingMode();
-          }
           debugLogger.websocket("INFO", "Scheduling WebSocket reconnection (30s one-shot)", {
             attempt: this.reconnectAttempts,
             nextAttemptAt: new Date(Date.now() + 3e4).toISOString()
@@ -909,6 +1171,139 @@
     }
   }
 
+  // src/infrastructure/storage/storage.repository.ts
+  var ChromeStorageRepository = class {
+    /**
+     * Get API Key from sync storage
+     */
+    async getApiKey() {
+      const result = await chrome.storage.sync.get(["apiKey"]);
+      return result.apiKey || null;
+    }
+    /**
+     * Set API Key in sync storage
+     */
+    async setApiKey(key) {
+      if (key === null) {
+        await chrome.storage.sync.remove(["apiKey"]);
+      } else {
+        await chrome.storage.sync.set({ apiKey: key });
+      }
+    }
+    /**
+     * Get Device Identifier from local storage
+     */
+    async getDeviceIden() {
+      const result = await chrome.storage.local.get(["deviceIden"]);
+      return result.deviceIden || null;
+    }
+    /**
+     * Set Device Identifier in local storage
+     */
+    async setDeviceIden(iden) {
+      if (iden === null) {
+        await chrome.storage.local.remove(["deviceIden"]);
+      } else {
+        await chrome.storage.local.set({ deviceIden: iden });
+      }
+    }
+    /**
+     * Get Device Nickname from sync storage
+     */
+    async getDeviceNickname() {
+      const result = await chrome.storage.sync.get(["deviceNickname"]);
+      return result.deviceNickname || null;
+    }
+    /**
+     * Set Device Nickname in sync storage
+     */
+    async setDeviceNickname(nickname) {
+      await chrome.storage.sync.set({ deviceNickname: nickname });
+    }
+    /**
+     * Get Auto Open Links setting from sync storage
+     */
+    async getAutoOpenLinks() {
+      const result = await chrome.storage.sync.get(["autoOpenLinks"]);
+      return result.autoOpenLinks !== void 0 ? result.autoOpenLinks : false;
+    }
+    /**
+     * Set Auto Open Links setting in sync storage
+     */
+    async setAutoOpenLinks(enabled) {
+      await chrome.storage.sync.set({ autoOpenLinks: enabled });
+    }
+    /**
+     * Get Notification Timeout from sync storage
+     */
+    async getNotificationTimeout() {
+      const result = await chrome.storage.sync.get(["notificationTimeout"]);
+      return result.notificationTimeout !== void 0 ? result.notificationTimeout : 5e3;
+    }
+    /**
+     * Set Notification Timeout in sync storage
+     */
+    async setNotificationTimeout(timeout) {
+      await chrome.storage.sync.set({ notificationTimeout: timeout });
+    }
+    /**
+     * Get Encryption Password from local storage
+     */
+    async getEncryptionPassword() {
+      const result = await chrome.storage.local.get(["encryptionPassword"]);
+      return result.encryptionPassword || null;
+    }
+    /**
+     * Set Encryption Password in local storage
+     */
+    async setEncryptionPassword(password) {
+      if (password === null) {
+        await chrome.storage.local.remove(["encryptionPassword"]);
+      } else {
+        await chrome.storage.local.set({ encryptionPassword: password });
+      }
+    }
+    /**
+     * Get Scroll to Recent Pushes flag from local storage
+     */
+    async getScrollToRecentPushes() {
+      const result = await chrome.storage.local.get(["scrollToRecentPushes"]);
+      return result.scrollToRecentPushes || false;
+    }
+    /**
+     * Set Scroll to Recent Pushes flag in local storage
+     */
+    async setScrollToRecentPushes(scroll) {
+      await chrome.storage.local.set({ scrollToRecentPushes: scroll });
+    }
+    /**
+     * Remove Scroll to Recent Pushes flag from local storage
+     */
+    async removeScrollToRecentPushes() {
+      await chrome.storage.local.remove(["scrollToRecentPushes"]);
+    }
+    /**
+     * Clear all storage (both sync and local)
+     */
+    async clear() {
+      await Promise.all([
+        chrome.storage.sync.clear(),
+        chrome.storage.local.clear()
+      ]);
+    }
+    /**
+     * Remove specific keys from storage
+     * Removes from both sync and local storage
+     */
+    async remove(keys) {
+      await Promise.all([
+        chrome.storage.sync.remove(keys),
+        chrome.storage.local.remove(keys)
+      ]);
+    }
+  };
+  var storageRepository = new ChromeStorageRepository();
+
   // src/app/session/index.ts
   var sessionCache = {
     userInfo: null,
@@ -925,9 +1320,17 @@
     error: null,
     timestamp: null
   };
+  var initPromise = null;
+  function getInitPromise() {
+    return initPromise;
+  }
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
-    if (initializationState.inProgress) {
-      throw new Error("Initialization already in progress");
+    if (initializationState.inProgress && initPromise) {
+      debugLogger.general("INFO", "Initialization already in progress, returning existing promise", {
+        source,
+        existingInitialization: true
+      });
+      return initPromise;
     }
     if (initializationState.completed) {
       debugLogger.general("WARN", "Already initialized, skipping", {
@@ -937,102 +1340,82 @@
       return null;
     }
     initializationState.inProgress = true;
-    try {
-      debugLogger.general("INFO", "Initializing session cache", {
-        source,
-        timestamp: (/* @__PURE__ */ new Date()).toISOString()
-      });
-      debugLogger.storage("DEBUG", "Loading initial configuration from sync storage");
-      const result = await new Promise((resolve) => {
-        chrome.storage.sync.get(
-          ["apiKey", "deviceIden", "autoOpenLinks", "deviceNickname", "notificationTimeout"],
-          (items) => resolve(items)
-        );
-      });
-      const apiKeyValue = result.apiKey || null;
-      const deviceIdenValue = result.deviceIden || null;
-      if (stateSetters) {
-        stateSetters.setApiKey(apiKeyValue);
-        stateSetters.setDeviceIden(deviceIdenValue);
-      }
-      let autoOpenLinksValue = true;
-      let notificationTimeoutValue = 1e4;
-      let deviceNicknameValue = "Chrome";
-      if (result.autoOpenLinks === void 0) {
-        await chrome.storage.sync.set({ autoOpenLinks: true });
-      } else {
-        autoOpenLinksValue = result.autoOpenLinks;
-      }
-      if (result.notificationTimeout === void 0) {
-        await chrome.storage.sync.set({ notificationTimeout: 1e4 });
-      } else {
-        notificationTimeoutValue = result.notificationTimeout;
-      }
-      if (result.deviceNickname === void 0 || result.deviceNickname === null) {
-        await chrome.storage.sync.set({ deviceNickname: "Chrome" });
-      } else {
-        deviceNicknameValue = result.deviceNickname;
-      }
-      if (stateSetters) {
-        stateSetters.setAutoOpenLinks(autoOpenLinksValue);
-        stateSetters.setNotificationTimeout(notificationTimeoutValue);
-        stateSetters.setDeviceNickname(deviceNicknameValue);
-      }
-      sessionCache.autoOpenLinks = autoOpenLinksValue;
-      sessionCache.deviceNickname = deviceNicknameValue;
-      debugLogger.storage("INFO", "Loaded configuration from sync storage", {
-        hasApiKey: !!result.apiKey,
-        hasDeviceIden: !!result.deviceIden,
-        autoOpenLinks: autoOpenLinksValue,
-        deviceNickname: deviceNicknameValue,
-        notificationTimeout: notificationTimeoutValue
-      });
-      debugLogger.general("DEBUG", "API key status", {
-        hasApiKey: !!apiKeyValue,
-        apiKeyLength: apiKeyValue ? apiKeyValue.length : 0
-      });
-      if (apiKeyValue) {
-        debugLogger.general("INFO", "API key available - initializing session data");
-        const userInfo = await fetchUserInfo(apiKeyValue);
-        sessionCache.userInfo = userInfo;
-        const devices = await fetchDevices(apiKeyValue);
-        sessionCache.devices = devices;
-        const pushes = await fetchRecentPushes(apiKeyValue);
-        sessionCache.recentPushes = pushes;
-        sessionCache.isAuthenticated = true;
-        sessionCache.lastUpdated = Date.now();
-        debugLogger.general("INFO", "Session cache populated successfully", {
-          hasUserInfo: !!sessionCache.userInfo,
-          deviceCount: sessionCache.devices.length,
-          pushCount: sessionCache.recentPushes.length,
-          lastUpdated: new Date(sessionCache.lastUpdated).toISOString()
+    initPromise = (async () => {
+      try {
+        debugLogger.general("INFO", "Initializing session cache", {
+          source,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
-        await registerDevice(apiKeyValue, deviceIdenValue, deviceNicknameValue);
-        if (connectWebSocketFn) {
-          connectWebSocketFn();
+        debugLogger.storage("DEBUG", "Loading initial configuration from storage repository");
+        const apiKeyValue = await storageRepository.getApiKey();
+        const deviceIdenValue = await storageRepository.getDeviceIden();
+        if (stateSetters) {
+          stateSetters.setApiKey(apiKeyValue);
+          stateSetters.setDeviceIden(deviceIdenValue);
         }
-        chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 5 });
-        debugLogger.general("DEBUG", "WebSocket health check alarm created", { interval: "5 minutes" });
-      } else {
-        debugLogger.general("WARN", "No API key available - session cache not initialized");
+        const autoOpenLinksValue = await storageRepository.getAutoOpenLinks();
+        const notificationTimeoutValue = await storageRepository.getNotificationTimeout();
+        const deviceNicknameValue = await storageRepository.getDeviceNickname() || "Chrome";
+        if (stateSetters) {
+          stateSetters.setAutoOpenLinks(autoOpenLinksValue);
+          stateSetters.setNotificationTimeout(notificationTimeoutValue);
+          stateSetters.setDeviceNickname(deviceNicknameValue);
+        }
+        sessionCache.autoOpenLinks = autoOpenLinksValue;
+        sessionCache.deviceNickname = deviceNicknameValue;
+        debugLogger.storage("INFO", "Loaded configuration from storage repository", {
+          hasApiKey: !!apiKeyValue,
+          hasDeviceIden: !!deviceIdenValue,
+          autoOpenLinks: autoOpenLinksValue,
+          deviceNickname: deviceNicknameValue,
+          notificationTimeout: notificationTimeoutValue
+        });
+        debugLogger.general("DEBUG", "API key status", {
+          hasApiKey: !!apiKeyValue,
+          apiKeyLength: apiKeyValue ? apiKeyValue.length : 0
+        });
+        if (apiKeyValue) {
+          debugLogger.general("INFO", "API key available - initializing session data");
+          const userInfo = await fetchUserInfo(apiKeyValue);
+          sessionCache.userInfo = userInfo;
+          const devices = await fetchDevices(apiKeyValue);
+          sessionCache.devices = devices;
+          const pushes = await fetchRecentPushes(apiKeyValue);
+          sessionCache.recentPushes = pushes;
+          sessionCache.isAuthenticated = true;
+          sessionCache.lastUpdated = Date.now();
+          debugLogger.general("INFO", "Session cache populated successfully", {
+            hasUserInfo: !!sessionCache.userInfo,
+            deviceCount: sessionCache.devices.length,
+            pushCount: sessionCache.recentPushes.length,
+            lastUpdated: new Date(sessionCache.lastUpdated).toISOString()
+          });
+          await registerDevice(apiKeyValue, deviceIdenValue, deviceNicknameValue);
+          chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 5 });
+          debugLogger.general("DEBUG", "WebSocket health check alarm created", { interval: "5 minutes" });
+        } else {
+          debugLogger.general("WARN", "No API key available - session cache not initialized");
+        }
+        initializationState.completed = true;
+        initializationState.timestamp = Date.now();
+        debugLogger.general("INFO", "Initialization completed successfully", {
+          source,
+          timestamp: new Date(initializationState.timestamp).toISOString()
+        });
+        return apiKeyValue;
+      } catch (error) {
+        initializationState.error = error;
+        debugLogger.general("ERROR", "Error initializing session cache", {
+          error: error.message || error.name || "Unknown error"
+        }, error);
+        sessionCache.isAuthenticated = false;
+        throw error;
+      } finally {
+        initializationState.inProgress = false;
+        initPromise = null;
       }
-      initializationState.completed = true;
-      initializationState.timestamp = Date.now();
-      debugLogger.general("INFO", "Initialization completed successfully", {
-        source,
-        timestamp: new Date(initializationState.timestamp).toISOString()
-      });
-      return apiKeyValue;
-    } catch (error) {
-      initializationState.error = error;
-      debugLogger.general("ERROR", "Error initializing session cache", {
-        error: error.message || error.name || "Unknown error"
-      }, error);
-      sessionCache.isAuthenticated = false;
-      throw error;
-    } finally {
-      initializationState.inProgress = false;
-    }
+    })();
+    return initPromise;
   }
   async function refreshSessionCache(apiKeyParam) {
     debugLogger.general("INFO", "Refreshing session cache", {
@@ -1308,6 +1691,7 @@
 
   // src/background/utils.ts
   var notificationCounter = 0;
+  var isSettingUpContextMenu = false;
   function sanitizeText(text) {
     if (!text) return "";
     let sanitized = text.replace(/<[^>]*>/g, "");
@@ -1326,6 +1710,17 @@
       return parsed.href;
     } catch {
       return "";
+    }
+  }
+  function updateExtensionTooltip(stateDescription) {
+    try {
+      chrome.action.setTitle({ title: stateDescription });
+      debugLogger.general("DEBUG", "Updated extension tooltip", { stateDescription });
+    } catch (error) {
+      debugLogger.general("ERROR", "Exception setting tooltip", {
+        stateDescription,
+        error: error.message
+      }, error);
     }
   }
   function updateConnectionIcon(status) {
@@ -1395,7 +1790,10 @@
       let message = "";
       const iconUrl = "icons/icon128.png";
       const pushType = push.type;
-      if (pushType === "note") {
+      if (pushType === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
+        title = `SMS: ${push.title}`;
+        message = push.body || "";
+      } else if (pushType === "note") {
         title = push.title || "Note";
         message = push.body || "";
       } else if (pushType === "link") {
@@ -1424,6 +1822,7 @@
         title = "Push";
         message = JSON.stringify(push).substring(0, 200);
         debugLogger.notifications("WARN", "Unknown push type", { pushType, push });
+        performanceMonitor.recordUnknownPushType();
       }
       const notificationId = `pushbullet-push-${++notificationCounter}-${Date.now()}`;
       if (notificationDataStore2) {
@@ -1447,6 +1846,7 @@
             pushType: push.type
           });
           performanceMonitor.recordNotification("push_notification_created");
+          performanceMonitor.recordNotificationCreated();
         }
       );
     } catch (error) {
@@ -1454,6 +1854,7 @@
         error: error.message,
         pushType: push.type
       }, error);
+      performanceMonitor.recordNotificationFailed();
     }
   }
   function checkPollingMode() {
@@ -1526,32 +1927,69 @@
     });
   }
   function setupContextMenu() {
+    if (isSettingUpContextMenu) {
+      debugLogger.general("INFO", "Context menu setup already in progress, skipping");
+      return;
+    }
+    isSettingUpContextMenu = true;
     try {
       chrome.contextMenus.removeAll(() => {
-        chrome.contextMenus.create({
-          id: "push-link",
-          title: "Push this link",
-          contexts: ["link"]
-        });
-        chrome.contextMenus.create({
-          id: "push-page",
-          title: "Push this page",
-          contexts: ["page"]
-        });
-        chrome.contextMenus.create({
-          id: "push-selection",
-          title: "Push selected text",
-          contexts: ["selection"]
-        });
-        chrome.contextMenus.create({
-          id: "push-image",
-          title: "Push this image",
-          contexts: ["image"]
-        });
-        debugLogger.general("INFO", "Context menu created");
+        if (chrome.runtime.lastError) {
+          debugLogger.general("ERROR", "Failed to remove existing context menus", {
+            error: chrome.runtime.lastError.message
+          });
+          isSettingUpContextMenu = false;
+          return;
+        }
+        try {
+          chrome.contextMenus.create({
+            id: "push-link",
+            title: "Push this link",
+            contexts: ["link"]
+          });
+          if (chrome.runtime.lastError) {
+            debugLogger.general("ERROR", "Failed to create push-link menu", {
+              error: chrome.runtime.lastError.message
+            });
+          }
+          chrome.contextMenus.create({
+            id: "push-page",
+            title: "Push this page",
+            contexts: ["page"]
+          });
+          if (chrome.runtime.lastError) {
+            debugLogger.general("ERROR", "Failed to create push-page menu", {
+              error: chrome.runtime.lastError.message
+            });
+          }
+          chrome.contextMenus.create({
+            id: "push-selection",
+            title: "Push selected text",
+            contexts: ["selection"]
+          });
+          if (chrome.runtime.lastError) {
+            debugLogger.general("ERROR", "Failed to create push-selection menu", {
+              error: chrome.runtime.lastError.message
+            });
+          }
+          chrome.contextMenus.create({
+            id: "push-image",
+            title: "Push this image",
+            contexts: ["image"]
+          });
+          if (chrome.runtime.lastError) {
+            debugLogger.general("ERROR", "Failed to create push-image menu", {
+              error: chrome.runtime.lastError.message
+            });
+          }
+          debugLogger.general("INFO", "Context menu created successfully");
+        } finally {
+          isSettingUpContextMenu = false;
+        }
       });
     } catch (error) {
       debugLogger.general("ERROR", "Failed to create context menu", null, error);
+      isSettingUpContextMenu = false;
     }
   }
   async function pushLink(url, title) {
@@ -1635,6 +2073,187 @@
     }
   }
 
+  // src/background/state-machine.ts
+  var ServiceWorkerStateMachine = class {
+    currentState = "idle" /* IDLE */;
+    callbacks;
+    constructor(callbacks) {
+      this.callbacks = callbacks;
+      debugLogger.general("INFO", "[StateMachine] Initialized", { initialState: this.currentState });
+    }
+    /**
+     * Get the current state
+     */
+    getCurrentState() {
+      return this.currentState;
+    }
+    /**
+     * Check if in a specific state
+     */
+    isInState(state) {
+      return this.currentState === state;
+    }
+    /**
+     * Transition to a new state based on an event
+     * 
+     * @param event - The event that triggers the transition
+     * @param data - Optional data to pass to the state entry handler
+     */
+    async transition(event, data) {
+      const nextState = this.getNextState(event, data);
+      if (nextState !== this.currentState) {
+        debugLogger.general("INFO", `[StateMachine] Transition`, {
+          from: this.currentState,
+          event,
+          to: nextState
+        });
+        await this.onStateExit(this.currentState, nextState);
+        const previousState = this.currentState;
+        this.currentState = nextState;
+        await this.onStateEnter(this.currentState, previousState, data);
+      } else {
+        debugLogger.general("DEBUG", `[StateMachine] No transition`, {
+          state: this.currentState,
+          event
+        });
+      }
+    }
+    /**
+     * Determine the next state based on current state and event
+     * 
+     * This implements the state transition table from ADR 0005.
+     */
+    getNextState(event, data) {
+      if (event === "LOGOUT") {
+        return "idle" /* IDLE */;
+      }
+      switch (this.currentState) {
+        case "idle" /* IDLE */:
+          if (event === "STARTUP") {
+            return data?.hasApiKey ? "initializing" /* INITIALIZING */ : "idle" /* IDLE */;
+          }
+          if (event === "API_KEY_SET") {
+            return "initializing" /* INITIALIZING */;
+          }
+          break;
+        case "initializing" /* INITIALIZING */:
+          if (event === "INIT_SUCCESS") {
+            return "ready" /* READY */;
+          }
+          if (event === "INIT_FAILURE") {
+            return "error" /* ERROR */;
+          }
+          break;
+        case "ready" /* READY */:
+          if (event === "WS_DISCONNECTED") {
+            return "degraded" /* DEGRADED */;
+          }
+          if (event === "WS_PERMANENT_ERROR") {
+            return "error" /* ERROR */;
+          }
+          break;
+        case "degraded" /* DEGRADED */:
+          if (event === "WS_CONNECTED") {
+            return "ready" /* READY */;
+          }
+          if (event === "WS_PERMANENT_ERROR") {
+            return "error" /* ERROR */;
+          }
+          break;
+        case "error" /* ERROR */:
+          if (event === "API_KEY_SET") {
+            return "initializing" /* INITIALIZING */;
+          }
+          break;
+      }
+      return this.currentState;
+    }
+    /**
+     * Handle entering a new state
+     * 
+     * This is where side effects happen (calling callbacks).
+     */
+    async onStateEnter(state, previousState, data) {
+      debugLogger.general("DEBUG", `[StateMachine] Entering state`, { state, previousState });
+      updateExtensionTooltip(this.getStateDescription());
+      switch (state) {
+        case "idle" /* IDLE */:
+          if (this.callbacks.onClearData) {
+            await this.callbacks.onClearData();
+          }
+          if (this.callbacks.onDisconnectWebSocket) {
+            this.callbacks.onDisconnectWebSocket();
+          }
+          break;
+        case "initializing" /* INITIALIZING */:
+          if (this.callbacks.onInitialize) {
+            try {
+              await this.callbacks.onInitialize(data);
+              await this.transition("INIT_SUCCESS");
+            } catch (error) {
+              debugLogger.general("ERROR", "[StateMachine] Initialization failed", null, error);
+              await this.transition("INIT_FAILURE");
+            }
+          }
+          break;
+        case "ready" /* READY */:
+          if (previousState === "degraded" /* DEGRADED */ && this.callbacks.onStopPolling) {
+            this.callbacks.onStopPolling();
+          }
+          if (previousState === "initializing" /* INITIALIZING */ && this.callbacks.onConnectWebSocket) {
+            this.callbacks.onConnectWebSocket();
+          }
+          break;
+        case "degraded" /* DEGRADED */:
+          debugLogger.general("WARN", "Entering DEGRADED state. Starting polling fallback.");
+          chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
+          if (this.callbacks.onStartPolling) {
+            this.callbacks.onStartPolling();
+          }
+          break;
+        case "error" /* ERROR */:
+          if (this.callbacks.onShowError) {
+            this.callbacks.onShowError("Service worker encountered an error");
+          }
+          break;
+      }
+    }
+    /**
+     * Handle exiting a state
+     * 
+     * Optional cleanup logic when leaving a state.
+     */
+    async onStateExit(state, nextState) {
+      debugLogger.general("DEBUG", `[StateMachine] Exiting state`, { state, nextState });
+      if (state === "degraded" /* DEGRADED */) {
+        debugLogger.general("INFO", "Exiting DEGRADED state. Stopping polling fallback.");
+        chrome.alarms.clear("pollingFallback");
+        if (this.callbacks.onStopPolling) {
+          this.callbacks.onStopPolling();
+        }
+      }
+    }
+    /**
+     * Get a human-readable description of the current state
+     */
+    getStateDescription() {
+      switch (this.currentState) {
+        case "idle" /* IDLE */:
+          return "Idle - No API key configured";
+        case "initializing" /* INITIALIZING */:
+          return "Initializing - Fetching session data";
+        case "ready" /* READY */:
+          return "Ready - Connected via WebSocket";
+        case "degraded" /* DEGRADED */:
+          return "Degraded - Using polling fallback";
+        case "error" /* ERROR */:
+          return "Error - Unrecoverable error occurred";
+        default:
+          return "Unknown state";
+      }
+    }
+  };
+
   // src/lib/security/message-validation.ts
   function isValidSender(sender) {
     if (!sender) {
@@ -1707,6 +2326,42 @@
     return notificationDataStore;
   }
   var websocketClient2 = null;
+  var stateMachine = new ServiceWorkerStateMachine({
+    onInitialize: async (data) => {
+      const apiKey2 = data?.apiKey || getApiKey();
+      if (apiKey2) {
+        await initializeSessionCache("state-machine", connectWebSocket, {
+          setApiKey,
+          setDeviceIden,
+          setAutoOpenLinks,
+          setNotificationTimeout,
+          setDeviceNickname
+        });
+      }
+    },
+    onConnectWebSocket: () => {
+      connectWebSocket();
+    },
+    onStartPolling: () => {
+      checkPollingMode();
+    },
+    onStopPolling: () => {
+      stopPollingMode();
+    },
+    onShowError: (error) => {
+      debugLogger.general("ERROR", "[StateMachine] Error state", { error });
+      updateConnectionIcon("disconnected");
+    },
+    onClearData: async () => {
+      sessionCache.userInfo = null;
+      sessionCache.devices = [];
+      sessionCache.recentPushes = [];
+      sessionCache.lastUpdated = null;
+    },
+    onDisconnectWebSocket: () => {
+      disconnectWebSocket();
+    }
+  });
   function connectWebSocket() {
     updateConnectionIcon("connecting");
     if (websocketClient2) {
@@ -1716,84 +2371,84 @@
     }
     websocketClient2 = new WebSocketClient(WEBSOCKET_URL, getApiKey);
     setWebSocketClient(websocketClient2);
-    websocketClient2.setHandlers({
-      onTicklePush: async () => {
-        await refreshPushes(notificationDataStore);
-      },
-      onTickleDevice: async () => {
-        const apiKey2 = getApiKey();
-        if (apiKey2) {
-          const devices = await fetchDevices(apiKey2);
-          sessionCache.devices = devices;
-          sessionCache.lastUpdated = Date.now();
-          chrome.runtime.sendMessage({
-            action: "sessionDataUpdated",
-            devices,
-            userInfo: sessionCache.userInfo,
-            recentPushes: sessionCache.recentPushes,
-            autoOpenLinks: sessionCache.autoOpenLinks,
-            deviceNickname: sessionCache.deviceNickname
-          }).catch(() => {
-          });
-        }
-      },
-      onPush: async (push) => {
-        let decryptedPush = push;
-        if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
-          try {
-            const result = await chrome.storage.local.get(["encryptionPassword"]);
-            const password = result.encryptionPassword;
-            if (password && sessionCache.userInfo) {
-              debugLogger.general("INFO", "Decrypting encrypted push", {
-                pushIden: push.iden
-              });
-              const decrypted = await PushbulletCrypto.decryptPush(
-                push,
-                password,
-                sessionCache.userInfo.iden
-              );
-              decryptedPush = decrypted;
-              debugLogger.general("INFO", "Push decrypted successfully", {
-                pushType: decryptedPush.type
-              });
-            } else {
-              debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
-            }
-          } catch (error) {
-            debugLogger.general("ERROR", "Failed to decrypt push", {
-              error: error.message
-            }, error);
-          }
-        }
-        if (sessionCache.recentPushes) {
-          sessionCache.recentPushes.unshift(decryptedPush);
-          sessionCache.lastUpdated = Date.now();
-          chrome.runtime.sendMessage({
-            action: "pushesUpdated",
-            pushes: sessionCache.recentPushes
-          }).catch(() => {
-          });
-        }
-        showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
-          debugLogger.general("ERROR", "Failed to show notification", null, error);
+    globalEventBus.on("websocket:tickle:push", async () => {
+      await refreshPushes(notificationDataStore);
+    });
+    globalEventBus.on("websocket:tickle:device", async () => {
+      const apiKey2 = getApiKey();
+      if (apiKey2) {
+        const devices = await fetchDevices(apiKey2);
+        sessionCache.devices = devices;
+        sessionCache.lastUpdated = Date.now();
+        chrome.runtime.sendMessage({
+          action: "sessionDataUpdated",
+          devices,
+          userInfo: sessionCache.userInfo,
+          recentPushes: sessionCache.recentPushes,
+          autoOpenLinks: sessionCache.autoOpenLinks,
+          deviceNickname: sessionCache.deviceNickname
+        }).catch(() => {
         });
-      },
-      onConnected: () => {
-        stopPollingMode();
-        updateConnectionIcon("connected");
-      },
-      onDisconnected: () => {
-        updateConnectionIcon("disconnected");
-      },
-      checkPollingMode: () => {
-        checkPollingMode();
-      },
-      stopPollingMode: () => {
-        stopPollingMode();
-      },
-      updatePopupConnectionState: (state) => {
-        updatePopupConnectionState(state);
       }
+    });
+    globalEventBus.on("websocket:push", async (push) => {
+      performanceMonitor.recordPushReceived();
+      let decryptedPush = push;
+      if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
+        try {
+          const password = await storageRepository.getEncryptionPassword();
+          if (password && sessionCache.userInfo) {
+            debugLogger.general("INFO", "Decrypting encrypted push", {
+              pushIden: push.iden
+            });
+            const decrypted = await PushbulletCrypto.decryptPush(
+              push,
+              password,
+              sessionCache.userInfo.iden
+            );
+            decryptedPush = decrypted;
+            debugLogger.general("INFO", "Push decrypted successfully", {
+              pushType: decryptedPush.type
+            });
+          } else {
+            debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+          }
+        } catch (error) {
+          debugLogger.general("ERROR", "Failed to decrypt push", {
+            error: error.message
+          }, error);
+        }
+      }
+      if (sessionCache.recentPushes) {
+        sessionCache.recentPushes.unshift(decryptedPush);
+        sessionCache.lastUpdated = Date.now();
+        chrome.runtime.sendMessage({
+          action: "pushesUpdated",
+          pushes: sessionCache.recentPushes
+        }).catch(() => {
+        });
+      }
+      showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+        debugLogger.general("ERROR", "Failed to show notification", null, error);
+        performanceMonitor.recordNotificationFailed();
+      });
+    });
+    globalEventBus.on("websocket:connected", () => {
+      stateMachine.transition("WS_CONNECTED");
+      updateConnectionIcon("connected");
+    });
+    globalEventBus.on("websocket:disconnected", () => {
+      stateMachine.transition("WS_DISCONNECTED");
+      updateConnectionIcon("disconnected");
+    });
+    globalEventBus.on("websocket:polling:check", () => {
+      checkPollingMode();
+    });
+    globalEventBus.on("websocket:polling:stop", () => {
+      stopPollingMode();
+    });
+    globalEventBus.on("websocket:state", (state) => {
+      updatePopupConnectionState(state);
     });
     websocketClient2.connect();
   }
@@ -1802,7 +2457,7 @@
       websocketClient2.disconnect();
     }
   }
-  chrome.runtime.onInstalled.addListener(() => {
+  chrome.runtime.onInstalled.addListener(async () => {
     debugLogger.general("INFO", "Pushbullet extension installed/updated", {
       reason: "onInstalled",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -1810,15 +2465,15 @@
     setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onInstalled");
     setupContextMenu();
-    initializeSessionCache("onInstalled", connectWebSocket, {
-      setApiKey,
-      setDeviceIden,
-      setAutoOpenLinks,
-      setDeviceNickname,
-      setNotificationTimeout
-    });
+    chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+    await ensureConfigLoaded(
+      { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
+      { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
+    );
+    const apiKey2 = getApiKey();
+    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
   });
-  chrome.runtime.onStartup.addListener(() => {
+  chrome.runtime.onStartup.addListener(async () => {
     debugLogger.general("INFO", "Browser started - reinitializing Pushbullet extension", {
       reason: "onStartup",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -1826,13 +2481,13 @@
     setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onStartup");
     setupContextMenu();
-    initializeSessionCache("onStartup", connectWebSocket, {
-      setApiKey,
-      setDeviceIden,
-      setAutoOpenLinks,
-      setDeviceNickname,
-      setNotificationTimeout
-    });
+    chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+    await ensureConfigLoaded(
+      { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
+      { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
+    );
+    const apiKey2 = getApiKey();
+    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
   });
   chrome.notifications.onClicked.addListener((notificationId) => {
     debugLogger.notifications("INFO", "Notification clicked", { notificationId });
@@ -1849,7 +2504,11 @@
     chrome.notifications.clear(notificationId);
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === "websocketReconnect" && getApiKey()) {
+    if (alarm.name === "logFlush") {
+      debugLogger.flush().then(() => {
+        console.log("[Logger] Log buffer flushed to persistent storage.");
+      });
+    } else if (alarm.name === "websocketReconnect" && getApiKey()) {
       debugLogger.websocket("INFO", "Reconnection alarm triggered", {
         alarmName: alarm.name,
         hasApiKey: !!getApiKey(),
@@ -1917,11 +2576,9 @@
       if (apiKey2 && !sessionCache.isAuthenticated && sessionCache.lastUpdated === 0) {
         if (initializationState.inProgress) {
           debugLogger.general("DEBUG", "Initialization already in progress - waiting for completion");
-          const maxWait = 1e4;
-          const startTime = Date.now();
-          const checkInterval = setInterval(() => {
-            if (initializationState.completed || Date.now() - startTime > maxWait) {
-              clearInterval(checkInterval);
+          const initPromise2 = getInitPromise();
+          if (initPromise2) {
+            initPromise2.then(() => {
               sendResponse({
                 isAuthenticated: sessionCache.isAuthenticated,
                 userInfo: sessionCache.userInfo,
@@ -1931,9 +2588,12 @@
                 deviceNickname: sessionCache.deviceNickname,
                 websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
               });
-            }
-          }, 100);
-          return true;
+            }).catch((error) => {
+              debugLogger.general("ERROR", "Initialization failed while waiting", null, error);
+              sendResponse({ isAuthenticated: false });
+            });
+            return true;
+          }
         }
         debugLogger.general("WARN", "Service worker wake-up detected - session cache not initialized", {
           hasApiKey: !!apiKey2,
@@ -2002,38 +2662,44 @@
       }
     } else if (message.action === "apiKeyChanged") {
       setApiKey(message.apiKey);
-      chrome.storage.sync.set({ apiKey: message.apiKey });
+      let savePromise = storageRepository.setApiKey(message.apiKey);
       if (message.deviceNickname) {
-        setDeviceNickname(message.deviceNickname);
-        sessionCache.deviceNickname = message.deviceNickname;
-        chrome.storage.local.set({ deviceNickname: message.deviceNickname });
+        savePromise = savePromise.then(() => {
+          setDeviceNickname(message.deviceNickname);
+          sessionCache.deviceNickname = message.deviceNickname;
+          return storageRepository.setDeviceNickname(message.deviceNickname);
+        });
       }
-      refreshSessionCache(message.apiKey).then(() => {
-        chrome.runtime.sendMessage({
-          action: "sessionDataUpdated",
-          isAuthenticated: true,
+      savePromise.then(() => {
+        return stateMachine.transition("API_KEY_SET", { apiKey: message.apiKey });
+      }).then(() => {
+        sendResponse({
+          success: true,
+          isAuthenticated: stateMachine.isInState("ready" /* READY */) || stateMachine.isInState("degraded" /* DEGRADED */),
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,
           recentPushes: sessionCache.recentPushes,
           autoOpenLinks: sessionCache.autoOpenLinks,
-          deviceNickname: sessionCache.deviceNickname
+          deviceNickname: sessionCache.deviceNickname,
+          websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
         });
       }).catch((error) => {
-        debugLogger.general("ERROR", "Error refreshing session cache after API key change", null, error);
+        debugLogger.general("ERROR", "Error saving API key", null, error);
+        sendResponse({ success: false, error: error.message });
       });
-      connectWebSocket();
-      sendResponse({ success: true });
+      return true;
     } else if (message.action === "logout") {
-      setApiKey(null);
-      setDeviceIden(null);
-      sessionCache.isAuthenticated = false;
-      sessionCache.userInfo = null;
-      sessionCache.devices = [];
-      sessionCache.recentPushes = [];
-      chrome.storage.sync.remove(["apiKey"]);
-      chrome.storage.local.remove(["deviceIden"]);
-      disconnectWebSocket();
-      sendResponse({ success: true });
+      stateMachine.transition("LOGOUT").then(() => {
+        return storageRepository.setApiKey(null);
+      }).then(() => {
+        return storageRepository.setDeviceIden(null);
+      }).then(() => {
+        sendResponse({ success: true });
+      }).catch((error) => {
+        debugLogger.general("ERROR", "Error during logout", null, error);
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
     } else if (message.action === "refreshSession") {
       const apiKey2 = getApiKey();
       if (apiKey2) {
@@ -2055,24 +2721,31 @@
         sendResponse({ isAuthenticated: false });
       }
     } else if (message.action === "settingsChanged") {
+      const promises = [];
       if (message.autoOpenLinks !== void 0) {
         setAutoOpenLinks(message.autoOpenLinks);
         sessionCache.autoOpenLinks = message.autoOpenLinks;
-        chrome.storage.sync.set({ autoOpenLinks: message.autoOpenLinks });
+        promises.push(storageRepository.setAutoOpenLinks(message.autoOpenLinks));
       }
       if (message.notificationTimeout !== void 0) {
         setNotificationTimeout(message.notificationTimeout);
-        chrome.storage.sync.set({ notificationTimeout: message.notificationTimeout });
+        promises.push(storageRepository.setNotificationTimeout(message.notificationTimeout));
       }
-      sendResponse({ success: true });
+      Promise.all(promises).then(() => {
+        sendResponse({ success: true });
+      }).catch((error) => {
+        debugLogger.general("ERROR", "Error saving settings", null, error);
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
     } else if (message.action === "updateDeviceNickname") {
       const apiKey2 = getApiKey();
       const deviceIden2 = getDeviceIden();
       if (apiKey2 && deviceIden2 && message.nickname) {
-        updateDeviceNickname(apiKey2, deviceIden2, message.nickname).then(() => {
+        updateDeviceNickname(apiKey2, deviceIden2, message.nickname).then(async () => {
           setDeviceNickname(message.nickname);
           sessionCache.deviceNickname = message.nickname;
-          chrome.storage.sync.set({ deviceNickname: message.nickname });
+          await storageRepository.setDeviceNickname(message.nickname);
           sendResponse({ success: true });
         }).catch((error) => {
           debugLogger.general("ERROR", "Error updating device nickname", null, error);
@@ -2085,20 +2758,42 @@
     } else if (message.action === "getDebugSummary") {
       const logData = debugLogger.exportLogs();
       const wsState = wsStateMonitor.getStateReport();
+      const perfData = performanceMonitor.exportPerformanceData();
+      const perfSummary = perfData.summary;
       const websocketState = {
         current: {
           stateText: websocketClient2 ? websocketClient2.isConnected() ? "Connected" : "Disconnected" : "Not initialized",
-          readyState: wsState.currentState
+          readyState: wsState.currentState,
+          stateMachineState: stateMachine.getCurrentState(),
+          stateMachineDescription: stateMachine.getStateDescription()
         },
         lastCheck: wsState.lastCheck,
         historyLength: wsState.historyLength
+      };
+      const performanceForDashboard = {
+        websocket: perfSummary.websocket,
+        qualityMetrics: {
+          // Map health checks
+          healthChecksPassed: perfSummary.health?.success || 0,
+          healthChecksFailed: perfSummary.health?.failure || 0,
+          // Map quality metrics
+          disconnectionCount: perfSummary.quality?.disconnections || 0,
+          consecutiveFailures: perfSummary.quality?.consecutiveFailures || 0,
+          // These metrics don't exist in the backend yet, so they'll be undefined
+          averageLatency: void 0,
+          minLatency: void 0,
+          maxLatency: void 0,
+          connectionUptime: 0,
+          currentUptime: 0
+        },
+        notifications: perfSummary.notifications
       };
       const summary = {
         config: debugConfigManager.getConfig(),
         logs: logData.logs,
         // Array of log entries
         totalLogs: logData.summary.totalLogs,
-        performance: performanceMonitor.exportPerformanceData(),
+        performance: performanceForDashboard,
         websocketState,
         initializationStats: initTracker.exportData(),
         errors: {
@@ -2112,9 +2807,41 @@
         totalLogs: summary.totalLogs,
         hasConfig: !!summary.config,
         hasPerformance: !!summary.performance,
-        websocketStateText: websocketState.current.stateText
+        websocketStateText: websocketState.current.stateText,
+        stateMachineState: stateMachine.getCurrentState()
       });
       sendResponse({ success: true, summary });
+      return false;
+    } else if (message.action === "exportDebugData") {
+      debugLogger.general("INFO", "Exporting full debug data");
+      const logData = debugLogger.exportLogs();
+      const errorSummary = globalErrorTracker.getErrorSummary();
+      const dataToExport = {
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        version: chrome.runtime.getManifest().version,
+        debugLogs: logData,
+        performanceData: performanceMonitor.exportPerformanceData(),
+        systemInfo: {
+          websocketState: wsStateMonitor.getStateReport(),
+          initializationData: initTracker.exportData(),
+          stateMachine: {
+            currentState: stateMachine.getCurrentState(),
+            description: stateMachine.getStateDescription()
+          }
+        },
+        errorData: {
+          summary: errorSummary,
+          recent: globalErrorTracker.exportErrorData().errors
+        },
+        sessionCache: {
+          isAuthenticated: sessionCache.isAuthenticated,
+          lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : "never",
+          userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + "***" } : null,
+          deviceCount: sessionCache.devices?.length || 0,
+          pushCount: sessionCache.recentPushes?.length || 0
+        }
+      };
+      sendResponse({ success: true, data: dataToExport });
       return false;
     } else if (message.action === "getNotificationData") {
       const pushData = notificationDataStore.get(message.notificationId);
@@ -2124,6 +2851,44 @@
         sendResponse({ success: false, error: "Notification not found" });
       }
       return false;
+    } else if (message.action === "sendPush") {
+      const apiKey2 = getApiKey();
+      if (!apiKey2) {
+        sendResponse({ success: false, error: "No API key" });
+        return false;
+      }
+      const pushData = message.pushData;
+      if (!pushData || !pushData.type) {
+        sendResponse({ success: false, error: "Invalid push data" });
+        return false;
+      }
+      fetch("https://api.pushbullet.com/v2/pushes", {
+        method: "POST",
+        headers: {
+          "Access-Token": apiKey2,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(pushData)
+      }).then(async (response) => {
+        if (!response.ok) {
+          const errorText = await response.text();
+          let errorMessage = "Failed to send push";
+          try {
+            const errorData = JSON.parse(errorText);
+            if (errorData.error?.message) {
+              errorMessage = errorData.error.message;
+            }
+          } catch {
+          }
+          throw new Error(errorMessage);
+        }
+        await refreshPushes(notificationDataStore);
+        sendResponse({ success: true });
+      }).catch((error) => {
+        debugLogger.general("ERROR", "Failed to send push", { pushType: pushData.type }, error);
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
     }
     return false;
   });

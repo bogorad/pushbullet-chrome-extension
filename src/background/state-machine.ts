@@ -16,6 +16,7 @@
  */
 
 import { debugLogger } from '../lib/logging';
+import { updateExtensionTooltip } from './utils';
 
 /**
  * Service Worker States
@@ -195,6 +196,9 @@ export class ServiceWorkerStateMachine {
   ): Promise<void> {
     debugLogger.general('DEBUG', `[StateMachine] Entering state`, { state, previousState });
 
+    // Update extension tooltip to show current state
+    updateExtensionTooltip(this.getStateDescription());
+
     switch (state) {
       case ServiceWorkerState.IDLE:
         // Clean slate - clear all data
@@ -233,7 +237,10 @@ export class ServiceWorkerStateMachine {
         break;
 
       case ServiceWorkerState.DEGRADED:
-        // Start polling fallback
+        // When we ENTER the DEGRADED state, we start polling
+        debugLogger.general('WARN', 'Entering DEGRADED state. Starting polling fallback.');
+        chrome.alarms.create('pollingFallback', { periodInMinutes: 1 });
+        // Call the callback for consistency
         if (this.callbacks.onStartPolling) {
           this.callbacks.onStartPolling();
         }
@@ -259,8 +266,14 @@ export class ServiceWorkerStateMachine {
   ): Promise<void> {
     debugLogger.general('DEBUG', `[StateMachine] Exiting state`, { state, nextState });
 
-    // Optional: Add cleanup logic here if needed
-    // For example, canceling timers, closing connections, etc.
+    // When we EXIT the DEGRADED state, we must stop polling
+    if (state === ServiceWorkerState.DEGRADED) {
+      debugLogger.general('INFO', 'Exiting DEGRADED state. Stopping polling fallback.');
+      chrome.alarms.clear('pollingFallback');
+      if (this.callbacks.onStopPolling) {
+        this.callbacks.onStopPolling();
+      }
+    }
   }
 
   /**

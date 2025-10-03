@@ -3,7 +3,7 @@
  * Pushbullet Chrome Extension (Manifest V3)
  */
 
-import { debugLogger, debugConfigManager } from '../lib/logging';
+import { debugLogger, debugConfigManager, globalErrorTracker } from '../lib/logging';
 import { performanceMonitor } from '../lib/perf';
 import { initTracker, wsStateMonitor } from '../lib/monitoring';
 import { WebSocketClient } from '../app/ws/client';
@@ -84,7 +84,8 @@ const stateMachine = new ServiceWorkerStateMachine({
     // Initialize session cache
     const apiKey = data?.apiKey || getApiKey();
     if (apiKey) {
-      await initializeSessionCache('state-machine', {
+      // Pass connectWebSocket so it can be called upon successful initialization
+      await initializeSessionCache('state-machine', connectWebSocket, {
         setApiKey,
         setDeviceIden,
         setAutoOpenLinks,
@@ -162,6 +163,9 @@ function connectWebSocket(): void {
   });
 
   globalEventBus.on('websocket:push', async (push: Push) => {
+        // Track push received
+        performanceMonitor.recordPushReceived();
+
         let decryptedPush = push;
 
         // Check if push is encrypted
@@ -210,6 +214,7 @@ function connectWebSocket(): void {
         // This allows multiple notifications to appear concurrently
         showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
           debugLogger.general('ERROR', 'Failed to show notification', null, error);
+          performanceMonitor.recordNotificationFailed();
         });
   });
 
@@ -268,6 +273,15 @@ chrome.runtime.onInstalled.addListener(async () => {
   initTracker.recordInitialization('onInstalled');
   setupContextMenu();
 
+  // Create periodic log flush alarm
+  chrome.alarms.create('logFlush', { periodInMinutes: 1 });
+
+  // Load API key from storage first
+  await ensureConfigLoaded(
+    { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
+    { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
+  );
+
   // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
   const apiKey = getApiKey();
   await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
@@ -287,6 +301,15 @@ chrome.runtime.onStartup.addListener(async () => {
 
   initTracker.recordInitialization('onStartup');
   setupContextMenu();
+
+  // Create periodic log flush alarm
+  chrome.alarms.create('logFlush', { periodInMinutes: 1 });
+
+  // Load API key from storage first
+  await ensureConfigLoaded(
+    { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
+    { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
+  );
 
   // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
   const apiKey = getApiKey();
@@ -321,7 +344,12 @@ chrome.notifications.onClicked.addListener((notificationId) => {
  * Alarm listener
  */
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'websocketReconnect' && getApiKey()) {
+  if (alarm.name === 'logFlush') {
+    // Flush logs to persistent storage
+    debugLogger.flush().then(() => {
+      console.log('[Logger] Log buffer flushed to persistent storage.');
+    });
+  } else if (alarm.name === 'websocketReconnect' && getApiKey()) {
     debugLogger.websocket('INFO', 'Reconnection alarm triggered', {
       alarmName: alarm.name,
       hasApiKey: !!getApiKey(),
@@ -506,41 +534,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Update API key
     setApiKey(message.apiKey);
 
-    // Save API key to storage (plain text) via repository
-    await storageRepository.setApiKey(message.apiKey);
+    // Build promise chain
+    let savePromise = storageRepository.setApiKey(message.apiKey);
 
     // Update device nickname if provided
     if (message.deviceNickname) {
-      setDeviceNickname(message.deviceNickname);
-      sessionCache.deviceNickname = message.deviceNickname;
-      await storageRepository.setDeviceNickname(message.deviceNickname);
+      savePromise = savePromise.then(() => {
+        setDeviceNickname(message.deviceNickname);
+        sessionCache.deviceNickname = message.deviceNickname;
+        return storageRepository.setDeviceNickname(message.deviceNickname);
+      });
     }
 
     // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
-    await stateMachine.transition('API_KEY_SET', { apiKey: message.apiKey });
-
-    // Send response with session data after state machine completes
-    sendResponse({
-      success: true,
-      isAuthenticated: stateMachine.isInState(ServiceWorkerState.READY) || stateMachine.isInState(ServiceWorkerState.DEGRADED),
-      userInfo: sessionCache.userInfo,
-      devices: sessionCache.devices,
-      recentPushes: sessionCache.recentPushes,
-      autoOpenLinks: sessionCache.autoOpenLinks,
-      deviceNickname: sessionCache.deviceNickname,
-      websocketConnected: websocketClient ? websocketClient.isConnected() : false
+    savePromise.then(() => {
+      return stateMachine.transition('API_KEY_SET', { apiKey: message.apiKey });
+    }).then(() => {
+      // Send response with session data after state machine completes
+      sendResponse({
+        success: true,
+        isAuthenticated: stateMachine.isInState(ServiceWorkerState.READY) || stateMachine.isInState(ServiceWorkerState.DEGRADED),
+        userInfo: sessionCache.userInfo,
+        devices: sessionCache.devices,
+        recentPushes: sessionCache.recentPushes,
+        autoOpenLinks: sessionCache.autoOpenLinks,
+        deviceNickname: sessionCache.deviceNickname,
+        websocketConnected: websocketClient ? websocketClient.isConnected() : false
+      });
+    }).catch((error) => {
+      debugLogger.general('ERROR', 'Error saving API key', null, error);
+      sendResponse({ success: false, error: error.message });
     });
 
     return true; // Keep message channel open for async response
   } else if (message.action === 'logout') {
     // ARCHITECTURAL CHANGE: Use state machine for logout
-    await stateMachine.transition('LOGOUT');
+    stateMachine.transition('LOGOUT').then(() => {
+      // Clear storage via repository
+      return storageRepository.setApiKey(null);
+    }).then(() => {
+      return storageRepository.setDeviceIden(null);
+    }).then(() => {
+      sendResponse({ success: true });
+    }).catch((error) => {
+      debugLogger.general('ERROR', 'Error during logout', null, error);
+      sendResponse({ success: false, error: error.message });
+    });
 
-    // Clear storage via repository
-    await storageRepository.setApiKey(null);
-    await storageRepository.setDeviceIden(null);
-
-    sendResponse({ success: true });
+    return true; // Async response
   } else if (message.action === 'refreshSession') {
     const apiKey = getApiKey();
     if (apiKey) {
@@ -563,18 +604,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ isAuthenticated: false });
     }
   } else if (message.action === 'settingsChanged') {
+    const promises: Promise<void>[] = [];
+
     if (message.autoOpenLinks !== undefined) {
       setAutoOpenLinks(message.autoOpenLinks);
       sessionCache.autoOpenLinks = message.autoOpenLinks;
-      await storageRepository.setAutoOpenLinks(message.autoOpenLinks);
+      promises.push(storageRepository.setAutoOpenLinks(message.autoOpenLinks));
     }
 
     if (message.notificationTimeout !== undefined) {
       setNotificationTimeout(message.notificationTimeout);
-      await storageRepository.setNotificationTimeout(message.notificationTimeout);
+      promises.push(storageRepository.setNotificationTimeout(message.notificationTimeout));
     }
 
-    sendResponse({ success: true });
+    Promise.all(promises).then(() => {
+      sendResponse({ success: true });
+    }).catch((error) => {
+      debugLogger.general('ERROR', 'Error saving settings', null, error);
+      sendResponse({ success: false, error: error.message });
+    });
+
+    return true; // Async response
   } else if (message.action === 'updateDeviceNickname') {
     const apiKey = getApiKey();
     const deviceIden = getDeviceIden();
@@ -599,22 +649,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Return debug summary for debug dashboard
     const logData = debugLogger.exportLogs();
     const wsState = wsStateMonitor.getStateReport();
+    const perfData = performanceMonitor.exportPerformanceData();
+    const perfSummary = perfData.summary;
 
     // Format websocket state for dashboard compatibility
     const websocketState = {
       current: {
         stateText: websocketClient ? (websocketClient.isConnected() ? 'Connected' : 'Disconnected') : 'Not initialized',
-        readyState: wsState.currentState
+        readyState: wsState.currentState,
+        stateMachineState: stateMachine.getCurrentState(),
+        stateMachineDescription: stateMachine.getStateDescription()
       },
       lastCheck: wsState.lastCheck,
       historyLength: wsState.historyLength
+    };
+
+    // Map performance data to match frontend expectations
+    // The frontend expects: { websocket, qualityMetrics, notifications }
+    // The backend provides: { summary: { websocket, health, quality, metrics, notifications } }
+    const performanceForDashboard = {
+      websocket: perfSummary.websocket,
+      qualityMetrics: {
+        // Map health checks
+        healthChecksPassed: perfSummary.health?.success || 0,
+        healthChecksFailed: perfSummary.health?.failure || 0,
+        // Map quality metrics
+        disconnectionCount: perfSummary.quality?.disconnections || 0,
+        consecutiveFailures: perfSummary.quality?.consecutiveFailures || 0,
+        // These metrics don't exist in the backend yet, so they'll be undefined
+        averageLatency: undefined,
+        minLatency: undefined,
+        maxLatency: undefined,
+        connectionUptime: 0,
+        currentUptime: 0
+      },
+      notifications: perfSummary.notifications
     };
 
     const summary = {
       config: debugConfigManager.getConfig(),
       logs: logData.logs, // Array of log entries
       totalLogs: logData.summary.totalLogs,
-      performance: performanceMonitor.exportPerformanceData(),
+      performance: performanceForDashboard,
       websocketState: websocketState,
       initializationStats: initTracker.exportData(),
       errors: {
@@ -628,10 +704,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       totalLogs: summary.totalLogs,
       hasConfig: !!summary.config,
       hasPerformance: !!summary.performance,
-      websocketStateText: websocketState.current.stateText
+      websocketStateText: websocketState.current.stateText,
+      stateMachineState: stateMachine.getCurrentState()
     });
 
     sendResponse({ success: true, summary });
+    return false; // Synchronous response
+  } else if (message.action === 'exportDebugData') {
+    // This handler gathers all debug data for exporting
+    debugLogger.general('INFO', 'Exporting full debug data');
+
+    const logData = debugLogger.exportLogs();
+    const errorSummary = globalErrorTracker.getErrorSummary();
+
+    const dataToExport = {
+      timestamp: new Date().toISOString(),
+      version: chrome.runtime.getManifest().version,
+      debugLogs: logData,
+      performanceData: performanceMonitor.exportPerformanceData(),
+      systemInfo: {
+        websocketState: wsStateMonitor.getStateReport(),
+        initializationData: initTracker.exportData(),
+        stateMachine: {
+          currentState: stateMachine.getCurrentState(),
+          description: stateMachine.getStateDescription(),
+        },
+      },
+      errorData: {
+        summary: errorSummary,
+        recent: globalErrorTracker.exportErrorData().errors,
+      },
+      sessionCache: {
+        isAuthenticated: sessionCache.isAuthenticated,
+        lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : 'never',
+        userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + '***' } : null,
+        deviceCount: sessionCache.devices?.length || 0,
+        pushCount: sessionCache.recentPushes?.length || 0
+      }
+    };
+
+    sendResponse({ success: true, data: dataToExport });
     return false; // Synchronous response
   } else if (message.action === 'getNotificationData') {
     // Return notification data for detail view

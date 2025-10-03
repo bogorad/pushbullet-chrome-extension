@@ -9,11 +9,140 @@
     return element;
   }
 
+  // src/infrastructure/storage/storage.repository.ts
+  var ChromeStorageRepository = class {
+    /**
+     * Get API Key from sync storage
+     */
+    async getApiKey() {
+      const result = await chrome.storage.sync.get(["apiKey"]);
+      return result.apiKey || null;
+    }
+    /**
+     * Set API Key in sync storage
+     */
+    async setApiKey(key) {
+      if (key === null) {
+        await chrome.storage.sync.remove(["apiKey"]);
+      } else {
+        await chrome.storage.sync.set({ apiKey: key });
+      }
+    }
+    /**
+     * Get Device Identifier from local storage
+     */
+    async getDeviceIden() {
+      const result = await chrome.storage.local.get(["deviceIden"]);
+      return result.deviceIden || null;
+    }
+    /**
+     * Set Device Identifier in local storage
+     */
+    async setDeviceIden(iden) {
+      if (iden === null) {
+        await chrome.storage.local.remove(["deviceIden"]);
+      } else {
+        await chrome.storage.local.set({ deviceIden: iden });
+      }
+    }
+    /**
+     * Get Device Nickname from sync storage
+     */
+    async getDeviceNickname() {
+      const result = await chrome.storage.sync.get(["deviceNickname"]);
+      return result.deviceNickname || null;
+    }
+    /**
+     * Set Device Nickname in sync storage
+     */
+    async setDeviceNickname(nickname) {
+      await chrome.storage.sync.set({ deviceNickname: nickname });
+    }
+    /**
+     * Get Auto Open Links setting from sync storage
+     */
+    async getAutoOpenLinks() {
+      const result = await chrome.storage.sync.get(["autoOpenLinks"]);
+      return result.autoOpenLinks !== void 0 ? result.autoOpenLinks : false;
+    }
+    /**
+     * Set Auto Open Links setting in sync storage
+     */
+    async setAutoOpenLinks(enabled) {
+      await chrome.storage.sync.set({ autoOpenLinks: enabled });
+    }
+    /**
+     * Get Notification Timeout from sync storage
+     */
+    async getNotificationTimeout() {
+      const result = await chrome.storage.sync.get(["notificationTimeout"]);
+      return result.notificationTimeout !== void 0 ? result.notificationTimeout : 5e3;
+    }
+    /**
+     * Set Notification Timeout in sync storage
+     */
+    async setNotificationTimeout(timeout) {
+      await chrome.storage.sync.set({ notificationTimeout: timeout });
+    }
+    /**
+     * Get Encryption Password from local storage
+     */
+    async getEncryptionPassword() {
+      const result = await chrome.storage.local.get(["encryptionPassword"]);
+      return result.encryptionPassword || null;
+    }
+    /**
+     * Set Encryption Password in local storage
+     */
+    async setEncryptionPassword(password) {
+      if (password === null) {
+        await chrome.storage.local.remove(["encryptionPassword"]);
+      } else {
+        await chrome.storage.local.set({ encryptionPassword: password });
+      }
+    }
+    /**
+     * Get Scroll to Recent Pushes flag from local storage
+     */
+    async getScrollToRecentPushes() {
+      const result = await chrome.storage.local.get(["scrollToRecentPushes"]);
+      return result.scrollToRecentPushes || false;
+    }
+    /**
+     * Set Scroll to Recent Pushes flag in local storage
+     */
+    async setScrollToRecentPushes(scroll) {
+      await chrome.storage.local.set({ scrollToRecentPushes: scroll });
+    }
+    /**
+     * Remove Scroll to Recent Pushes flag from local storage
+     */
+    async removeScrollToRecentPushes() {
+      await chrome.storage.local.remove(["scrollToRecentPushes"]);
+    }
+    /**
+     * Clear all storage (both sync and local)
+     */
+    async clear() {
+      await Promise.all([
+        chrome.storage.sync.clear(),
+        chrome.storage.local.clear()
+      ]);
+    }
+    /**
+     * Remove specific keys from storage
+     * Removes from both sync and local storage
+     */
+    async remove(keys) {
+      await Promise.all([
+        chrome.storage.sync.remove(keys),
+        chrome.storage.local.remove(keys)
+      ]);
+    }
+  };
+  var storageRepository = new ChromeStorageRepository();
+
   // src/popup/index.ts
-  var USER_INFO_URL = "https://api.pushbullet.com/v2/users/me";
-  var DEVICES_URL = "https://api.pushbullet.com/v2/devices";
-  var PUSHES_URL = "https://api.pushbullet.com/v2/pushes";
-  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
   var loadingSection = getElementById("loading-section");
   var loginSection = getElementById("login-section");
   var mainSection = getElementById("main-section");
@@ -49,48 +178,50 @@
   var devices = [];
   var hasInitialized = false;
   var currentPushType = "note";
-  var websocket = null;
   function init() {
     console.log("Popup initializing");
     setupEventListeners();
     checkStorageForApiKey();
   }
+  async function initializeFromSessionData(response) {
+    if (!response.isAuthenticated) {
+      showSection("login");
+      return;
+    }
+    if (response.deviceNickname) {
+      deviceNickname = response.deviceNickname;
+      console.log("Device nickname:", deviceNickname);
+    }
+    if (response.userInfo) {
+      updateUserInfo(response.userInfo);
+    }
+    populateDeviceDropdown(response.devices);
+    displayPushes(response.recentPushes);
+    showSection("main");
+    hasInitialized = true;
+  }
   function checkStorageForApiKey() {
-    console.log("Checking storage for API key");
+    console.log("Requesting session data from background");
     showSection("loading");
-    const syncPromise = chrome.storage.sync.get(["apiKey", "autoOpenLinks", "deviceNickname"]);
-    const localPromise = chrome.storage.local.get(["scrollToRecentPushes"]);
-    Promise.all([syncPromise, localPromise]).then(
-      async ([syncResult, localResult]) => {
-        const result = { ...syncResult, ...localResult };
-        if (result.apiKey) {
-          apiKey = result.apiKey;
-          if (result.autoOpenLinks !== void 0) {
-            console.log("Auto-open links setting:", result.autoOpenLinks);
-          }
-          if (result.deviceNickname) {
-            deviceNickname = result.deviceNickname;
-            console.log("Device nickname:", deviceNickname);
-          }
-          try {
-            await initializeAuthenticated();
-            showSection("main");
-            hasInitialized = true;
-            if (result.scrollToRecentPushes) {
-              chrome.storage.local.remove(["scrollToRecentPushes"]);
-              setTimeout(() => {
-                scrollToRecentPushes();
-              }, 100);
-            }
-          } catch (error) {
-            console.error("Error initializing:", error);
-            showSection("login");
-          }
-        } else {
-          showSection("login");
-        }
+    chrome.runtime.sendMessage({ action: "getSessionData" }, async (response) => {
+      if (chrome.runtime.lastError) {
+        console.error("Error getting session data:", chrome.runtime.lastError);
+        showSection("login");
+        return;
       }
-    );
+      if (response.isAuthenticated) {
+        await initializeFromSessionData(response);
+        const shouldScroll = await storageRepository.getScrollToRecentPushes();
+        if (shouldScroll) {
+          await storageRepository.removeScrollToRecentPushes();
+          setTimeout(() => {
+            scrollToRecentPushes();
+          }, 100);
+        }
+      } else {
+        showSection("login");
+      }
+    });
   }
   function showSection(section) {
     console.log("Showing section:", section);
@@ -134,155 +265,50 @@
     }
     showSection("loading");
     try {
-      const response = await fetch(USER_INFO_URL, {
-        headers: {
-          "Access-Token": newApiKey
-        }
-      });
-      if (!response.ok) {
-        throw new Error("Invalid Access Token");
-      }
-      await chrome.storage.sync.set({
-        apiKey: newApiKey,
-        deviceNickname: newNickname
-      });
+      await storageRepository.setApiKey(newApiKey);
+      await storageRepository.setDeviceNickname(newNickname);
       apiKey = newApiKey;
       deviceNickname = newNickname;
       chrome.runtime.sendMessage({
         action: "apiKeyChanged",
         apiKey: newApiKey,
         deviceNickname: newNickname
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error notifying background:", chrome.runtime.lastError);
+          showStatus("Error: Could not connect to background script", "error");
+          showSection("login");
+          return;
+        }
+        if (response.success === false) {
+          showStatus(`Error: ${response.error || "Invalid Access Token"}`, "error");
+          showSection("login");
+          return;
+        }
+        if (response.isAuthenticated) {
+          initializeFromSessionData(response);
+          hasInitialized = true;
+        } else {
+          showStatus("Invalid Access Token", "error");
+          showSection("login");
+        }
       });
-      await initializeAuthenticated();
-      showSection("main");
-      hasInitialized = true;
     } catch (error) {
       showStatus(`Error: ${error.message}`, "error");
       showSection("login");
     }
   }
-  function logout() {
-    disconnectWebSocket();
-    chrome.storage.sync.remove(["apiKey"]);
-    chrome.storage.local.remove(["deviceIden"]);
+  async function logout() {
+    await storageRepository.setApiKey(null);
+    await storageRepository.setDeviceIden(null);
     apiKey = null;
     hasInitialized = false;
+    chrome.runtime.sendMessage({ action: "logout" }).catch((error) => {
+      console.warn("Could not notify background of logout:", error.message);
+    });
     showSection("login");
     apiKeyInput.value = "";
     deviceNicknameInput.value = "";
-  }
-  async function initializeAuthenticated() {
-    try {
-      const userInfo = await fetchUserInfo();
-      devices = await fetchDevices();
-      populateDeviceDropdown(devices);
-      const pushes = await fetchRecentPushes();
-      displayPushes(pushes);
-      updateUserInfo(userInfo);
-      connectWebSocket();
-      return true;
-    } catch (error) {
-      console.error("Error in initializeAuthenticated:", error);
-      throw error;
-    }
-  }
-  async function fetchUserInfo() {
-    if (!apiKey) throw new Error("No API key");
-    const response = await fetch(USER_INFO_URL, {
-      headers: {
-        "Access-Token": apiKey
-      }
-    });
-    if (!response.ok) {
-      throw new Error("Failed to fetch user info");
-    }
-    return response.json();
-  }
-  async function fetchDevices() {
-    if (!apiKey) throw new Error("No API key");
-    const response = await fetch(DEVICES_URL, {
-      headers: {
-        "Access-Token": apiKey
-      }
-    });
-    if (!response.ok) {
-      throw new Error("Failed to fetch devices");
-    }
-    const data = await response.json();
-    return data.devices.filter((device) => device.active);
-  }
-  async function fetchRecentPushes() {
-    if (!apiKey) throw new Error("No API key");
-    const response = await fetch(`${PUSHES_URL}?limit=20`, {
-      headers: {
-        "Access-Token": apiKey
-      }
-    });
-    if (!response.ok) {
-      throw new Error("Failed to fetch pushes");
-    }
-    const data = await response.json();
-    let deviceIden = null;
-    try {
-      const deviceResult = await chrome.storage.local.get(["deviceIden"]);
-      deviceIden = deviceResult.deviceIden;
-    } catch (error) {
-      console.error("Error getting device iden:", error);
-    }
-    return data.pushes.filter((push) => {
-      const hasContent = push.title || push.body || push.url;
-      return hasContent && !push.dismissed;
-    });
-  }
-  function connectWebSocket() {
-    disconnectWebSocket();
-    if (!apiKey) return;
-    try {
-      const wsUrl = WEBSOCKET_URL + apiKey;
-      websocket = new WebSocket(wsUrl);
-      websocket.onopen = () => {
-        console.log("Connected to Pushbullet WebSocket from popup");
-      };
-      websocket.onmessage = async (event) => {
-        const data = JSON.parse(event.data);
-        console.log("WebSocket message received in popup:", data);
-        switch (data.type) {
-          case "tickle":
-            if (data.subtype === "push") {
-              console.log("Push tickle received in popup, fetching latest pushes");
-              const pushes = await fetchRecentPushes();
-              displayPushes(pushes);
-            }
-            break;
-          case "push":
-            if (data.push) {
-              console.log("Push message received directly in popup:", data.push);
-              const pushes = await fetchRecentPushes();
-              displayPushes(pushes);
-            }
-            break;
-        }
-      };
-      websocket.onerror = (error) => {
-        console.error("WebSocket error in popup:", error);
-      };
-      websocket.onclose = () => {
-        console.log("Disconnected from Pushbullet WebSocket in popup");
-        setTimeout(() => {
-          if (apiKey && hasInitialized) {
-            connectWebSocket();
-          }
-        }, 5e3);
-      };
-    } catch (error) {
-      console.error("Error connecting to WebSocket from popup:", error);
-    }
-  }
-  function disconnectWebSocket() {
-    if (websocket) {
-      websocket.close();
-      websocket = null;
-    }
   }
   function updateUserInfo(userInfo) {
     userName.textContent = userInfo.name || userInfo.email;
@@ -315,7 +341,35 @@
     recentPushes.forEach((push) => {
       let title = push.title;
       let body = push.body;
-      let url = push.url;
+      const url = push.url;
+      if (push.type === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
+        title = `SMS: ${push.title}`;
+        body = push.body || "";
+        const pushItem2 = document.createElement("div");
+        pushItem2.className = "push-item";
+        pushItem2.classList.add("push-sms");
+        if (push.created) {
+          const timestamp = new Date(push.created * 1e3);
+          const timeElement = document.createElement("div");
+          timeElement.className = "push-time";
+          timeElement.textContent = formatTimestamp(timestamp);
+          pushItem2.appendChild(timeElement);
+        }
+        if (title) {
+          const titleEl = document.createElement("div");
+          titleEl.className = "push-title";
+          titleEl.textContent = title;
+          pushItem2.appendChild(titleEl);
+        }
+        if (body) {
+          const bodyEl = document.createElement("div");
+          bodyEl.className = "push-body";
+          bodyEl.textContent = body;
+          pushItem2.appendChild(bodyEl);
+        }
+        pushesList.appendChild(pushItem2);
+        return;
+      }
       if (push.type === "sms_changed" && push.notifications && push.notifications.length > 0) {
         const sms = push.notifications[0];
         title = sms.title || "SMS";
@@ -437,9 +491,9 @@
         pushData.device_iden = targetDevice;
       }
       try {
-        const deviceResult = await chrome.storage.local.get(["deviceIden"]);
-        if (deviceResult.deviceIden) {
-          pushData.source_device_iden = deviceResult.deviceIden;
+        const deviceIden = await storageRepository.getDeviceIden();
+        if (deviceIden) {
+          pushData.source_device_iden = deviceIden;
         }
       } catch (error) {
         console.error("Error getting device iden:", error);
@@ -506,32 +560,28 @@
           return;
         }
       }
-      console.log("Sending push:", pushData);
-      const response = await fetch(PUSHES_URL, {
-        method: "POST",
-        headers: {
-          "Access-Token": apiKey,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(pushData)
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Push failed:", response.status, errorText);
-        let errorMessage = "Failed to send push";
-        try {
-          const errorData = JSON.parse(errorText);
-          if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
-          }
-        } catch {
+      console.log("Sending push via background:", pushData);
+      chrome.runtime.sendMessage({
+        action: "sendPush",
+        pushData
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error sending push:", chrome.runtime.lastError);
+          showStatus("Error: Could not send push", "error");
+          return;
         }
-        throw new Error(errorMessage);
-      }
-      clearPushForm();
-      showStatus("Push sent successfully!", "success");
-      const pushes = await fetchRecentPushes();
-      displayPushes(pushes);
+        if (response.success) {
+          clearPushForm();
+          showStatus("Push sent successfully!", "success");
+          chrome.runtime.sendMessage({ action: "getSessionData" }, (sessionResponse) => {
+            if (sessionResponse && sessionResponse.recentPushes) {
+              displayPushes(sessionResponse.recentPushes);
+            }
+          });
+        } else {
+          showStatus(`Error: ${response.error || "Failed to send push"}`, "error");
+        }
+      });
     } catch (error) {
       showStatus(`Error: ${error.message}`, "error");
     }

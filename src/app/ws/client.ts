@@ -204,9 +204,6 @@ export class WebSocketClient {
         this.reconnectAttempts++;
         performanceMonitor.recordWebSocketReconnection();
 
-        // Emit event to check polling mode
-        globalEventBus.emit('websocket:polling:check');
-
         debugLogger.websocket('INFO', 'Scheduling WebSocket reconnection (30s one-shot)', {
           attempt: this.reconnectAttempts,
           nextAttemptAt: new Date(Date.now() + 30000).toISOString()

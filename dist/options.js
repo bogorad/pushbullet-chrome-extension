@@ -23,6 +23,139 @@
     }, 3e3);
   }
 
+  // src/infrastructure/storage/storage.repository.ts
+  var ChromeStorageRepository = class {
+    /**
+     * Get API Key from sync storage
+     */
+    async getApiKey() {
+      const result = await chrome.storage.sync.get(["apiKey"]);
+      return result.apiKey || null;
+    }
+    /**
+     * Set API Key in sync storage
+     */
+    async setApiKey(key) {
+      if (key === null) {
+        await chrome.storage.sync.remove(["apiKey"]);
+      } else {
+        await chrome.storage.sync.set({ apiKey: key });
+      }
+    }
+    /**
+     * Get Device Identifier from local storage
+     */
+    async getDeviceIden() {
+      const result = await chrome.storage.local.get(["deviceIden"]);
+      return result.deviceIden || null;
+    }
+    /**
+     * Set Device Identifier in local storage
+     */
+    async setDeviceIden(iden) {
+      if (iden === null) {
+        await chrome.storage.local.remove(["deviceIden"]);
+      } else {
+        await chrome.storage.local.set({ deviceIden: iden });
+      }
+    }
+    /**
+     * Get Device Nickname from sync storage
+     */
+    async getDeviceNickname() {
+      const result = await chrome.storage.sync.get(["deviceNickname"]);
+      return result.deviceNickname || null;
+    }
+    /**
+     * Set Device Nickname in sync storage
+     */
+    async setDeviceNickname(nickname) {
+      await chrome.storage.sync.set({ deviceNickname: nickname });
+    }
+    /**
+     * Get Auto Open Links setting from sync storage
+     */
+    async getAutoOpenLinks() {
+      const result = await chrome.storage.sync.get(["autoOpenLinks"]);
+      return result.autoOpenLinks !== void 0 ? result.autoOpenLinks : false;
+    }
+    /**
+     * Set Auto Open Links setting in sync storage
+     */
+    async setAutoOpenLinks(enabled) {
+      await chrome.storage.sync.set({ autoOpenLinks: enabled });
+    }
+    /**
+     * Get Notification Timeout from sync storage
+     */
+    async getNotificationTimeout() {
+      const result = await chrome.storage.sync.get(["notificationTimeout"]);
+      return result.notificationTimeout !== void 0 ? result.notificationTimeout : 5e3;
+    }
+    /**
+     * Set Notification Timeout in sync storage
+     */
+    async setNotificationTimeout(timeout) {
+      await chrome.storage.sync.set({ notificationTimeout: timeout });
+    }
+    /**
+     * Get Encryption Password from local storage
+     */
+    async getEncryptionPassword() {
+      const result = await chrome.storage.local.get(["encryptionPassword"]);
+      return result.encryptionPassword || null;
+    }
+    /**
+     * Set Encryption Password in local storage
+     */
+    async setEncryptionPassword(password) {
+      if (password === null) {
+        await chrome.storage.local.remove(["encryptionPassword"]);
+      } else {
+        await chrome.storage.local.set({ encryptionPassword: password });
+      }
+    }
+    /**
+     * Get Scroll to Recent Pushes flag from local storage
+     */
+    async getScrollToRecentPushes() {
+      const result = await chrome.storage.local.get(["scrollToRecentPushes"]);
+      return result.scrollToRecentPushes || false;
+    }
+    /**
+     * Set Scroll to Recent Pushes flag in local storage
+     */
+    async setScrollToRecentPushes(scroll) {
+      await chrome.storage.local.set({ scrollToRecentPushes: scroll });
+    }
+    /**
+     * Remove Scroll to Recent Pushes flag from local storage
+     */
+    async removeScrollToRecentPushes() {
+      await chrome.storage.local.remove(["scrollToRecentPushes"]);
+    }
+    /**
+     * Clear all storage (both sync and local)
+     */
+    async clear() {
+      await Promise.all([
+        chrome.storage.sync.clear(),
+        chrome.storage.local.clear()
+      ]);
+    }
+    /**
+     * Remove specific keys from storage
+     * Removes from both sync and local storage
+     */
+    async remove(keys) {
+      await Promise.all([
+        chrome.storage.sync.remove(keys),
+        chrome.storage.local.remove(keys)
+      ]);
+    }
+  };
+  var storageRepository = new ChromeStorageRepository();
+
   // src/options/index.ts
   var deviceNicknameInput = getElementById("device-nickname");
   var updateNicknameButton = getElementById("update-nickname");
@@ -48,15 +181,15 @@
   }
   async function loadSettings() {
     try {
-      const syncResult = await chrome.storage.sync.get(["deviceNickname", "notificationTimeout", "autoOpenLinks"]);
-      const localResult = await chrome.storage.local.get(["encryptionPassword", "debugConfig"]);
-      deviceNicknameInput.value = syncResult.deviceNickname || DEFAULT_SETTINGS.deviceNickname;
-      const timeoutMs = syncResult.notificationTimeout !== void 0 ? syncResult.notificationTimeout : DEFAULT_SETTINGS.notificationTimeout;
-      notificationTimeoutInput.value = Math.round(timeoutMs / 1e3).toString();
-      autoOpenLinksCheckbox.checked = syncResult.autoOpenLinks !== void 0 ? syncResult.autoOpenLinks : DEFAULT_SETTINGS.autoOpenLinks;
-      encryptionPasswordInput.value = localResult.encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
-      const debugConfig = localResult.debugConfig;
-      debugModeCheckbox.checked = debugConfig?.enabled !== void 0 ? debugConfig.enabled : DEFAULT_SETTINGS.debugMode;
+      const deviceNickname = await storageRepository.getDeviceNickname();
+      const notificationTimeout = await storageRepository.getNotificationTimeout();
+      const autoOpenLinks = await storageRepository.getAutoOpenLinks();
+      const encryptionPassword = await storageRepository.getEncryptionPassword();
+      deviceNicknameInput.value = deviceNickname || DEFAULT_SETTINGS.deviceNickname;
+      notificationTimeoutInput.value = Math.round(notificationTimeout / 1e3).toString();
+      autoOpenLinksCheckbox.checked = autoOpenLinks;
+      encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
+      debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
       const manifest = chrome.runtime.getManifest();
       versionSpan.textContent = manifest.version;
       console.log("Settings loaded successfully");
@@ -72,7 +205,7 @@
       return;
     }
     try {
-      await chrome.storage.sync.set({ deviceNickname: nickname });
+      await storageRepository.setDeviceNickname(nickname);
       chrome.runtime.sendMessage({
         action: "deviceNicknameChanged",
         deviceNickname: nickname
@@ -91,7 +224,7 @@
     }
     const milliseconds = seconds * 1e3;
     try {
-      await chrome.storage.sync.set({ notificationTimeout: milliseconds });
+      await storageRepository.setNotificationTimeout(milliseconds);
       showStatus2("Notification timeout updated", "success");
     } catch (error) {
       console.error("Error saving notification timeout:", error);
@@ -101,7 +234,7 @@
   async function saveAutoOpenLinks() {
     const enabled = autoOpenLinksCheckbox.checked;
     try {
-      await chrome.storage.sync.set({ autoOpenLinks: enabled });
+      await storageRepository.setAutoOpenLinks(enabled);
       chrome.runtime.sendMessage({
         action: "autoOpenLinksChanged",
         autoOpenLinks: enabled
@@ -115,9 +248,7 @@
   async function saveEncryptionPassword() {
     const password = encryptionPasswordInput.value.trim();
     try {
-      await chrome.storage.local.set({
-        encryptionPassword: password
-      });
+      await storageRepository.setEncryptionPassword(password);
       chrome.runtime.sendMessage({
         action: "encryptionPasswordChanged",
         hasPassword: password.length > 0
@@ -163,15 +294,9 @@
         showStatus2("Timeout must be between 0 and 60 seconds", "error");
         return;
       }
-      await chrome.storage.sync.set({
-        deviceNickname: nickname,
-        notificationTimeout: seconds * 1e3,
-        autoOpenLinks: autoOpen
-      });
-      const result = await chrome.storage.local.get(["debugConfig"]);
-      const debugConfig = result.debugConfig || {};
-      debugConfig.enabled = debug;
-      await chrome.storage.local.set({ debugConfig });
+      await storageRepository.setDeviceNickname(nickname);
+      await storageRepository.setNotificationTimeout(seconds * 1e3);
+      await storageRepository.setAutoOpenLinks(autoOpen);
       chrome.runtime.sendMessage({
         action: "settingsChanged",
         settings: {
@@ -192,15 +317,9 @@
       return;
     }
     try {
-      await chrome.storage.sync.set({
-        deviceNickname: DEFAULT_SETTINGS.deviceNickname,
-        notificationTimeout: DEFAULT_SETTINGS.notificationTimeout,
-        autoOpenLinks: DEFAULT_SETTINGS.autoOpenLinks
-      });
-      const debugConfig = {
-        enabled: DEFAULT_SETTINGS.debugMode
-      };
-      await chrome.storage.local.set({ debugConfig });
+      await storageRepository.setDeviceNickname(DEFAULT_SETTINGS.deviceNickname);
+      await storageRepository.setNotificationTimeout(DEFAULT_SETTINGS.notificationTimeout);
+      await storageRepository.setAutoOpenLinks(DEFAULT_SETTINGS.autoOpenLinks);
       await loadSettings();
       showStatus2("Settings reset to defaults", "success");
     } catch (error) {

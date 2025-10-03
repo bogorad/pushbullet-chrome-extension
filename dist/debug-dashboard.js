@@ -146,7 +146,10 @@
       errorCountEl.textContent = "0";
     }
     if (data.websocketState && data.websocketState.current) {
-      websocketStatusEl.textContent = data.websocketState.current.stateText || "Unknown";
+      const stateMachineState = data.websocketState.current.stateMachineState || "unknown";
+      const stateDescription = data.websocketState.current.stateMachineDescription || data.websocketState.current.stateText || "Unknown";
+      websocketStatusEl.textContent = stateDescription;
+      websocketStatusEl.title = `State: ${stateMachineState}`;
     } else {
       websocketStatusEl.textContent = "Unknown";
     }
@@ -169,7 +172,7 @@
       logsContainer.innerHTML = '<p class="loading">No logs match the current filters</p>';
       return;
     }
-    logsContainer.innerHTML = filteredLogs.map((log) => {
+    logsContainer.innerHTML = [...filteredLogs].reverse().map((log) => {
       const dataStr = log.data ? JSON.stringify(log.data, null, 2) : "";
       const errorStr = log.error ? `${log.error.name}: ${log.error.message}` : "";
       return `
@@ -215,6 +218,8 @@
       <p><strong>Reconnection Attempts:</strong> <span>${ws.reconnectionAttempts || 0}</span></p>
       <p><strong>Last Connection:</strong> <span>${ws.lastConnectionTime ? new Date(ws.lastConnectionTime).toLocaleString() : "Never"}</span></p>
     `;
+    } else {
+      websocketMetricsEl.innerHTML = '<p class="loading">No websocket data available</p>';
     }
     if (performance.qualityMetrics) {
       const quality = performance.qualityMetrics;
@@ -227,6 +232,8 @@
       <p><strong>Health Checks:</strong> <span class="success">${quality.healthChecksPassed || 0} passed</span> / <span class="error">${quality.healthChecksFailed || 0} failed</span></p>
       <p><strong>Consecutive Failures:</strong> <span class="${quality.consecutiveFailures > 3 ? "error" : ""}">${quality.consecutiveFailures || 0}</span></p>
     `;
+    } else {
+      qualityMetricsEl.innerHTML = '<p class="loading">No quality metrics available</p>';
     }
     if (performance.notifications) {
       const notif = performance.notifications;
@@ -236,6 +243,8 @@
       <p><strong>Notifications Failed:</strong> <span>${notif.notificationsFailed || 0}</span></p>
       <p><strong>Avg Processing Time:</strong> <span>${notif.averageProcessingTime ? notif.averageProcessingTime.toFixed(2) + "ms" : "N/A"}</span></p>
     `;
+    } else {
+      notificationMetricsEl.innerHTML = '<p class="loading">No notification metrics available</p>';
     }
   }
   function renderInitializationStats(initStats) {
