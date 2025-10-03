@@ -13,6 +13,10 @@ import { createNotificationWithTimeout } from '../app/notifications';
 // Counter to ensure unique notification IDs
 let notificationCounter = 0;
 
+// Guard flag to prevent concurrent context menu setup
+// Ensures idempotent behavior when multiple startup events fire
+let isSettingUpContextMenu = false;
+
 /**
  * Connection status for icon updates
  */
@@ -336,38 +340,83 @@ export function updatePopupConnectionState(state: string): void {
 
 /**
  * Setup context menu
+ * Idempotent - safe to call from multiple event listeners
  */
 export function setupContextMenu(): void {
+  // Guard against concurrent setup attempts
+  if (isSettingUpContextMenu) {
+    debugLogger.general('INFO', 'Context menu setup already in progress, skipping');
+    return;
+  }
+
+  isSettingUpContextMenu = true;
+
   try {
     chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create({
-        id: 'push-link',
-        title: 'Push this link',
-        contexts: ['link']
-      });
+      // Check for errors from removeAll
+      if (chrome.runtime.lastError) {
+        debugLogger.general('ERROR', 'Failed to remove existing context menus', {
+          error: chrome.runtime.lastError.message
+        });
+        isSettingUpContextMenu = false;
+        return;
+      }
 
-      chrome.contextMenus.create({
-        id: 'push-page',
-        title: 'Push this page',
-        contexts: ['page']
-      });
+      // Now that menus are removed, create new ones
+      try {
+        chrome.contextMenus.create({
+          id: 'push-link',
+          title: 'Push this link',
+          contexts: ['link']
+        });
+        if (chrome.runtime.lastError) {
+          debugLogger.general('ERROR', 'Failed to create push-link menu', {
+            error: chrome.runtime.lastError.message
+          });
+        }
 
-      chrome.contextMenus.create({
-        id: 'push-selection',
-        title: 'Push selected text',
-        contexts: ['selection']
-      });
+        chrome.contextMenus.create({
+          id: 'push-page',
+          title: 'Push this page',
+          contexts: ['page']
+        });
+        if (chrome.runtime.lastError) {
+          debugLogger.general('ERROR', 'Failed to create push-page menu', {
+            error: chrome.runtime.lastError.message
+          });
+        }
 
-      chrome.contextMenus.create({
-        id: 'push-image',
-        title: 'Push this image',
-        contexts: ['image']
-      });
+        chrome.contextMenus.create({
+          id: 'push-selection',
+          title: 'Push selected text',
+          contexts: ['selection']
+        });
+        if (chrome.runtime.lastError) {
+          debugLogger.general('ERROR', 'Failed to create push-selection menu', {
+            error: chrome.runtime.lastError.message
+          });
+        }
 
-      debugLogger.general('INFO', 'Context menu created');
+        chrome.contextMenus.create({
+          id: 'push-image',
+          title: 'Push this image',
+          contexts: ['image']
+        });
+        if (chrome.runtime.lastError) {
+          debugLogger.general('ERROR', 'Failed to create push-image menu', {
+            error: chrome.runtime.lastError.message
+          });
+        }
+
+        debugLogger.general('INFO', 'Context menu created successfully');
+      } finally {
+        // Always clear the guard flag when done
+        isSettingUpContextMenu = false;
+      }
     });
   } catch (error) {
     debugLogger.general('ERROR', 'Failed to create context menu', null, error as Error);
+    isSettingUpContextMenu = false;
   }
 }
 

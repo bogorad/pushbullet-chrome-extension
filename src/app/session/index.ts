@@ -21,6 +21,10 @@ export const initializationState: InitializationState = {
   timestamp: null
 };
 
+// Promise singleton for single-flight initialization
+// Prevents race conditions when multiple events trigger initialization concurrently
+let initPromise: Promise<string | null> | null = null;
+
 // NO DECRYPTION - API key is stored in plain text in chrome.storage.sync
 // The crypto module is ONLY for decrypting E2EE push messages, NOT the API key!
 
@@ -35,8 +39,14 @@ export async function initializeSessionCache(
     setNotificationTimeout: (timeout: number) => void;
   }
 ): Promise<string | null> {
-  if (initializationState.inProgress) {
-    throw new Error('Initialization already in progress');
+  // If initialization is already in progress, return the existing promise
+  // This allows concurrent callers to await the same initialization
+  if (initializationState.inProgress && initPromise) {
+    debugLogger.general('INFO', 'Initialization already in progress, returning existing promise', {
+      source,
+      existingInitialization: true
+    });
+    return initPromise;
   }
 
   if (initializationState.completed) {
@@ -49,11 +59,13 @@ export async function initializeSessionCache(
 
   initializationState.inProgress = true;
 
-  try {
-    debugLogger.general('INFO', 'Initializing session cache', {
-      source,
-      timestamp: new Date().toISOString()
-    });
+  // Create and store the initialization promise
+  initPromise = (async () => {
+    try {
+      debugLogger.general('INFO', 'Initializing session cache', {
+        source,
+        timestamp: new Date().toISOString()
+      });
 
     // Load core settings from sync storage
     debugLogger.storage('DEBUG', 'Loading initial configuration from sync storage');
@@ -165,24 +177,29 @@ export async function initializeSessionCache(
       debugLogger.general('WARN', 'No API key available - session cache not initialized');
     }
 
-    initializationState.completed = true;
-    initializationState.timestamp = Date.now();
-    debugLogger.general('INFO', 'Initialization completed successfully', {
-      source,
-      timestamp: new Date(initializationState.timestamp).toISOString()
-    });
+      initializationState.completed = true;
+      initializationState.timestamp = Date.now();
+      debugLogger.general('INFO', 'Initialization completed successfully', {
+        source,
+        timestamp: new Date(initializationState.timestamp).toISOString()
+      });
 
-    return apiKeyValue;
-  } catch (error) {
-    initializationState.error = error as Error;
-    debugLogger.general('ERROR', 'Error initializing session cache', {
-      error: (error as Error).message || (error as Error).name || 'Unknown error'
-    }, error as Error);
-    sessionCache.isAuthenticated = false;
-    throw error;
-  } finally {
-    initializationState.inProgress = false;
-  }
+      return apiKeyValue;
+    } catch (error) {
+      initializationState.error = error as Error;
+      debugLogger.general('ERROR', 'Error initializing session cache', {
+        error: (error as Error).message || (error as Error).name || 'Unknown error'
+      }, error as Error);
+      sessionCache.isAuthenticated = false;
+      throw error;
+    } finally {
+      initializationState.inProgress = false;
+      // Clear the promise reference to allow retry on failure
+      initPromise = null;
+    }
+  })();
+
+  return initPromise;
 }
 
 export async function refreshSessionCache(apiKeyParam: string): Promise<void> {

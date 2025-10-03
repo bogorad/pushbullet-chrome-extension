@@ -218,6 +218,10 @@ chrome.runtime.onInstalled.addListener(() => {
     setAutoOpenLinks,
     setDeviceNickname,
     setNotificationTimeout
+  }).catch(error => {
+    debugLogger.general('WARN', 'Initialization failed during onInstalled (this may be expected if already in progress)', {
+      error: error.message
+    });
   });
 });
 
@@ -241,6 +245,10 @@ chrome.runtime.onStartup.addListener(() => {
     setAutoOpenLinks,
     setDeviceNickname,
     setNotificationTimeout
+  }).catch(error => {
+    debugLogger.general('WARN', 'Initialization failed during onStartup (this may be expected if already in progress)', {
+      error: error.message
+    });
   });
 });
 

@@ -17,7 +17,7 @@
 
 ---
 
-## Current state (as of v 1.0.26)
+## Current state (as of v 1.0.60)
 
 | Feature                          | Status                                                    |
 | -------------------------------- | --------------------------------------------------------- |
@@ -27,18 +27,20 @@
 | Outbound pushes (note/link/file) | ✅                                                        |
 | Notification deduplication       | ✅ last 1 000 pushes tracked                              |
 | Debug / perf logging             | ✅ exportable JSON                                        |
-| Unit tests                       | ❌ (contributors welcome)                                 |
-| TypeScript                       | ❌ (plain JS for now)                                     |
+| Unit tests                       | ✅ Vitest with 14 tests covering race conditions          |
+| TypeScript                       | ✅ Full TypeScript migration complete                     |
 
 ---
 
 ## Install from source
 
 1. Clone or download this repo
-2. `npm install` (installs ESLint only)
-3. `npm run lint` (optional – should return clean)
-4. Chrome ▸ `chrome://extensions` ▸ **Developer mode** ON ▸ **Load unpacked** ▸ select the repo folder
-5. Click the new toolbar icon, paste your **Access Token** (from [Pushbullet settings](https://www.pushbullet.com/#settings/account)) and set a **device nickname**.
+2. `npm install` (installs dependencies including TypeScript, esbuild, Vitest)
+3. `npm run build` (compiles TypeScript to JavaScript)
+4. `npm test` (optional – runs unit tests)
+5. `npm run lint` (optional – should return clean)
+6. Chrome ▸ `chrome://extensions` ▸ **Developer mode** ON ▸ **Load unpacked** ▸ select the repo folder
+7. Click the new toolbar icon, paste your **Access Token** (from [Pushbullet settings](https://www.pushbullet.com/#settings/account)) and set a **device nickname**.
 
 ---
 
@@ -65,26 +67,55 @@
 ## Architecture snapshot
 
 ```
-src/                        (proposed – still flat in repo)
- ├─ background.js           MV3 service worker (≈ 1 000 lines – needs modularising)
- ├─ js/crypto.js            E2EE decrypt (AES-256-GCM, PBKDF2)
- ├─ js/popup.js             Pop-up UI logic
- ├─ js/options.js           Settings page
- ├─ js/debug-dashboard.js   Live debug console
- ├─ css/*.css               Themed styles
- └─ *.html                  Pop-up, options, debug pages
+src/
+ ├─ background/
+ │   ├─ index.ts            MV3 service worker entry point
+ │   ├─ state.ts            Background state management
+ │   └─ utils.ts            Context menus, notifications, icons
+ ├─ app/
+ │   ├─ session/            Session cache & initialization
+ │   ├─ api/                Pushbullet API client
+ │   └─ websocket/          Real-time WebSocket connection
+ ├─ lib/
+ │   ├─ crypto.ts           E2EE decrypt (AES-256-GCM, PBKDF2)
+ │   └─ logging.ts          Debug logging infrastructure
+ ├─ popup/                  Pop-up UI logic
+ ├─ options/                Settings page
+ ├─ debug-dashboard/        Live debug console
+ └─ notification-detail/    Notification detail page
+
+tests/
+ ├─ setup.ts                Chrome API mocks
+ ├─ app/
+ │   └─ session.test.ts     Session initialization tests
+ └─ background/
+     └─ utils.test.ts       Context menu tests
 ```
 
 ---
 
+## Testing
+
+This project includes comprehensive unit tests for race condition fixes:
+
+```bash
+npm test              # Run all tests
+npm run test:watch    # Run tests in watch mode
+npm run test:coverage # Run tests with coverage report
+```
+
+See [README-TESTING.md](README-TESTING.md) for detailed testing documentation.
+
 ## Contribute
 
-- **Code style**: `npm run lint` (ESLint, no semicolons, 2-spaces)
-- **Pull requests**: please add a short note of what you tested manually (unit-test infra coming later)
-- **Big items on the wish-list**:  
-  – TypeScript migration  
-  – Jest or Vitest unit tests  
+- **Code style**: `npm run lint` (ESLint + TypeScript)
+- **Type checking**: `npm run typecheck`
+- **Testing**: `npm test` – please add tests for new features
+- **Pull requests**: include tests and ensure all checks pass
+- **Big items on the wish-list**:
   – CI that packages a `.zip` ready for Chrome Web-Store
+  – More comprehensive test coverage
+  – E2E tests for critical user flows
 
 ---
 

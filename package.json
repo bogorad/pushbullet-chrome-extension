@@ -2,11 +2,16 @@
   "name": "pushbullet-chrome-extension",
   "version": "1.0.3",
   "description": "Unofficial Manifest V3 compatible Pushbullet client for Chrome",
+  "type": "module",
   "private": true,
   "scripts": {
     "lint": "eslint *.js src/**/*.ts",
     "lint:fix": "eslint *.js src/**/*.ts --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui",
     "build:background": "esbuild src/background/index.ts --bundle --format=iife --platform=browser --outfile=dist/background.js --sourcemap --target=es2022",
     "build:popup": "esbuild src/popup/index.ts --bundle --format=iife --platform=browser --outfile=dist/popup.js --sourcemap --target=es2022",
     "build:options": "esbuild src/options/index.ts --bundle --format=iife --platform=browser --outfile=dist/options.js --sourcemap --target=es2022",
@@ -26,9 +31,12 @@
     "@types/node": "^24.6.2",
     "@typescript-eslint/eslint-plugin": "^8.45.0",
     "@typescript-eslint/parser": "^8.45.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "esbuild": "^0.25.10",
     "esbuild-plugin-copy": "^2.1.1",
     "eslint": "^8.57.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9",
+    "vitest-chrome": "^0.1.0"
   }
 }
