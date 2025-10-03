@@ -133,6 +133,20 @@ function connectWebSocket(): void {
     websocketClient = null;
   }
 
+  // RACE CONDITION FIX: Remove all previous event listeners to prevent listener leaks
+  // When connectWebSocket is called multiple times (during reconnection attempts),
+  // old listeners accumulate, causing duplicate event handling and multiple notifications
+  // for the same push. This cleanup ensures only one set of listeners is active.
+  debugLogger.websocket('DEBUG', 'Cleaning up old event listeners before reconnecting');
+  globalEventBus.removeAllListeners('websocket:tickle:push');
+  globalEventBus.removeAllListeners('websocket:tickle:device');
+  globalEventBus.removeAllListeners('websocket:push');
+  globalEventBus.removeAllListeners('websocket:connected');
+  globalEventBus.removeAllListeners('websocket:disconnected');
+  globalEventBus.removeAllListeners('websocket:polling:check');
+  globalEventBus.removeAllListeners('websocket:polling:stop');
+  globalEventBus.removeAllListeners('websocket:state');
+
   websocketClient = new WebSocketClient(WEBSOCKET_URL, getApiKey);
   setWebSocketClient(websocketClient);
 
@@ -460,19 +474,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         lastUpdated: sessionCache.lastUpdated
       });
 
-      // Ensure config is loaded
-      ensureConfigLoaded(
-        { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-        { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-      ).then(() => {
-        // Re-initialize session cache
-        initializeSessionCache('onMessage', connectWebSocket, {
-          setApiKey,
-          setDeviceIden,
-          setAutoOpenLinks,
-          setDeviceNickname,
-          setNotificationTimeout
-        }).then(() => {
+      // API KEY PERSISTENCE FIX: Properly await ensureConfigLoaded to ensure API key
+      // is loaded from storage BEFORE initializing session cache. Using async/await
+      // instead of promise chains ensures proper sequencing and error handling.
+      (async () => {
+        try {
+          debugLogger.general('DEBUG', 'Loading config from storage before session cache initialization');
+
+          // Ensure config is loaded (MUST complete before session cache init)
+          await ensureConfigLoaded(
+            { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
+            { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
+          );
+
+          debugLogger.general('DEBUG', 'Config loaded, initializing session cache', {
+            hasApiKey: !!getApiKey()
+          });
+
+          // Re-initialize session cache (MUST complete before sending response)
+          await initializeSessionCache('onMessage', connectWebSocket, {
+            setApiKey,
+            setDeviceIden,
+            setAutoOpenLinks,
+            setDeviceNickname,
+            setNotificationTimeout
+          });
+
           sendResponse({
             isAuthenticated: true,
             userInfo: sessionCache.userInfo,
@@ -482,11 +509,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             deviceNickname: sessionCache.deviceNickname,
             websocketConnected: websocketClient ? websocketClient.isConnected() : false
           });
-        }).catch((error) => {
-          debugLogger.general('ERROR', 'Error re-initializing session cache', null, error);
+        } catch (error) {
+          debugLogger.general('ERROR', 'Error during service worker wake-up recovery', null, error as Error);
           sendResponse({ isAuthenticated: false });
-        });
-      });
+        }
+      })();
 
       return true; // Async response
     }

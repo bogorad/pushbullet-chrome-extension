@@ -2388,6 +2388,15 @@
       websocketClient2.disconnect();
       websocketClient2 = null;
     }
+    debugLogger.websocket("DEBUG", "Cleaning up old event listeners before reconnecting");
+    globalEventBus.removeAllListeners("websocket:tickle:push");
+    globalEventBus.removeAllListeners("websocket:tickle:device");
+    globalEventBus.removeAllListeners("websocket:push");
+    globalEventBus.removeAllListeners("websocket:connected");
+    globalEventBus.removeAllListeners("websocket:disconnected");
+    globalEventBus.removeAllListeners("websocket:polling:check");
+    globalEventBus.removeAllListeners("websocket:polling:stop");
+    globalEventBus.removeAllListeners("websocket:state");
     websocketClient2 = new WebSocketClient(WEBSOCKET_URL, getApiKey);
     setWebSocketClient(websocketClient2);
     globalEventBus.on("websocket:tickle:push", async () => {
@@ -2619,17 +2628,23 @@
           isAuthenticated: sessionCache.isAuthenticated,
           lastUpdated: sessionCache.lastUpdated
         });
-        ensureConfigLoaded(
-          { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-          { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-        ).then(() => {
-          initializeSessionCache("onMessage", connectWebSocket, {
-            setApiKey,
-            setDeviceIden,
-            setAutoOpenLinks,
-            setDeviceNickname,
-            setNotificationTimeout
-          }).then(() => {
+        (async () => {
+          try {
+            debugLogger.general("DEBUG", "Loading config from storage before session cache initialization");
+            await ensureConfigLoaded(
+              { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
+              { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
+            );
+            debugLogger.general("DEBUG", "Config loaded, initializing session cache", {
+              hasApiKey: !!getApiKey()
+            });
+            await initializeSessionCache("onMessage", connectWebSocket, {
+              setApiKey,
+              setDeviceIden,
+              setAutoOpenLinks,
+              setDeviceNickname,
+              setNotificationTimeout
+            });
             sendResponse({
               isAuthenticated: true,
               userInfo: sessionCache.userInfo,
@@ -2639,11 +2654,11 @@
               deviceNickname: sessionCache.deviceNickname,
               websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
             });
-          }).catch((error) => {
-            debugLogger.general("ERROR", "Error re-initializing session cache", null, error);
+          } catch (error) {
+            debugLogger.general("ERROR", "Error during service worker wake-up recovery", null, error);
             sendResponse({ isAuthenticated: false });
-          });
-        });
+          }
+        })();
         return true;
       }
       const isStale = sessionCache.lastUpdated > 0 && Date.now() - sessionCache.lastUpdated > 3e5;
