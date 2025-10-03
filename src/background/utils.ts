@@ -218,6 +218,10 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
       // Don't show notifications for dismissals
       debugLogger.notifications('DEBUG', 'Skipping dismissal push notification');
       return;
+    } else if (pushType === 'ping' || pushType === 'pong') {
+      // These are internal keep-alive messages, do not show a notification
+      debugLogger.notifications('DEBUG', 'Ignoring internal push type', { pushType });
+      return;
     } else {
       // Unknown type - show raw data
       title = 'Push';

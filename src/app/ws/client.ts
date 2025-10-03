@@ -148,6 +148,18 @@ export class WebSocketClient {
               });
               break;
 
+            case 'ping':
+              debugLogger.websocket('DEBUG', 'Received ping (keep-alive) message', {
+                timestamp: new Date().toISOString()
+              });
+              break;
+
+            case 'pong':
+              debugLogger.websocket('DEBUG', 'Received pong (keep-alive) message', {
+                timestamp: new Date().toISOString()
+              });
+              break;
+
             default:
               debugLogger.websocket('WARN', 'Unknown WebSocket message type received', {
                 type: (data as any).type

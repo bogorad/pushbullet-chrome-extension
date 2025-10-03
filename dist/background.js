@@ -808,6 +808,16 @@
                   timestamp: (/* @__PURE__ */ new Date()).toISOString()
                 });
                 break;
+              case "ping":
+                debugLogger.websocket("DEBUG", "Received ping (keep-alive) message", {
+                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
+                });
+                break;
+              case "pong":
+                debugLogger.websocket("DEBUG", "Received pong (keep-alive) message", {
+                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
+                });
+                break;
               default:
                 debugLogger.websocket("WARN", "Unknown WebSocket message type received", {
                   type: data.type
@@ -1823,6 +1833,9 @@
         }
       } else if (pushType === "dismissal") {
         debugLogger.notifications("DEBUG", "Skipping dismissal push notification");
+        return;
+      } else if (pushType === "ping" || pushType === "pong") {
+        debugLogger.notifications("DEBUG", "Ignoring internal push type", { pushType });
         return;
       } else {
         title = "Push";
