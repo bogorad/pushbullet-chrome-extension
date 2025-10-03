@@ -53,6 +53,15 @@
         console.error("[Logger] Failed to flush logs to storage:", error);
       }
     }
+    /**
+     * Clear all logs from memory and persistent storage
+     * This method is called when the user clicks "Clear All Logs" in the debug dashboard
+     */
+    async clearLogs() {
+      this.logs = [];
+      await this.flush();
+      this.log("GENERAL", "INFO", "Log buffer has been cleared by the user.");
+    }
     sanitize(data) {
       if (!DEBUG_CONFIG.sanitizeData) return data;
       if (typeof data === "string") {
@@ -1335,15 +1344,16 @@
     timestamp: null
   };
   var initPromise = null;
-  function getInitPromise() {
-    return initPromise;
-  }
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
     if (initializationState.inProgress && initPromise) {
-      debugLogger.general("INFO", "Initialization already in progress, returning existing promise", {
-        source,
-        existingInitialization: true
-      });
+      debugLogger.general(
+        "INFO",
+        "Initialization already in progress, returning existing promise",
+        {
+          source,
+          existingInitialization: true
+        }
+      );
       return initPromise;
     }
     if (initializationState.completed) {
@@ -1360,7 +1370,10 @@
           source,
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
-        debugLogger.storage("DEBUG", "Loading initial configuration from storage repository");
+        debugLogger.storage(
+          "DEBUG",
+          "Loading initial configuration from storage repository"
+        );
         const apiKeyValue = await storageRepository.getApiKey();
         const deviceIdenValue = await storageRepository.getDeviceIden();
         if (stateSetters) {
@@ -1377,19 +1390,26 @@
         }
         sessionCache.autoOpenLinks = autoOpenLinksValue;
         sessionCache.deviceNickname = deviceNicknameValue;
-        debugLogger.storage("INFO", "Loaded configuration from storage repository", {
-          hasApiKey: !!apiKeyValue,
-          hasDeviceIden: !!deviceIdenValue,
-          autoOpenLinks: autoOpenLinksValue,
-          deviceNickname: deviceNicknameValue,
-          notificationTimeout: notificationTimeoutValue
-        });
+        debugLogger.storage(
+          "INFO",
+          "Loaded configuration from storage repository",
+          {
+            hasApiKey: !!apiKeyValue,
+            hasDeviceIden: !!deviceIdenValue,
+            autoOpenLinks: autoOpenLinksValue,
+            deviceNickname: deviceNicknameValue,
+            notificationTimeout: notificationTimeoutValue
+          }
+        );
         debugLogger.general("DEBUG", "API key status", {
           hasApiKey: !!apiKeyValue,
           apiKeyLength: apiKeyValue ? apiKeyValue.length : 0
         });
         if (apiKeyValue) {
-          debugLogger.general("INFO", "API key available - initializing session data");
+          debugLogger.general(
+            "INFO",
+            "API key available - initializing session data"
+          );
           const userInfo = await fetchUserInfo(apiKeyValue);
           sessionCache.userInfo = userInfo;
           const devices = await fetchDevices(apiKeyValue);
@@ -1405,10 +1425,15 @@
             lastUpdated: new Date(sessionCache.lastUpdated).toISOString()
           });
           await registerDevice(apiKeyValue, deviceIdenValue, deviceNicknameValue);
-          chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 5 });
-          debugLogger.general("DEBUG", "WebSocket health check alarm created", { interval: "5 minutes" });
+          chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 1 });
+          debugLogger.general("DEBUG", "WebSocket health check alarm created", {
+            interval: "5 minutes"
+          });
         } else {
-          debugLogger.general("WARN", "No API key available - session cache not initialized");
+          debugLogger.general(
+            "WARN",
+            "No API key available - session cache not initialized"
+          );
         }
         initializationState.completed = true;
         initializationState.timestamp = Date.now();
@@ -1419,9 +1444,14 @@
         return apiKeyValue;
       } catch (error) {
         initializationState.error = error;
-        debugLogger.general("ERROR", "Error initializing session cache", {
-          error: error.message || error.name || "Unknown error"
-        }, error);
+        debugLogger.general(
+          "ERROR",
+          "Error initializing session cache",
+          {
+            error: error.message || error.name || "Unknown error"
+          },
+          error
+        );
         sessionCache.isAuthenticated = false;
         throw error;
       } finally {
@@ -1438,7 +1468,10 @@
     });
     try {
       if (apiKeyParam) {
-        debugLogger.general("DEBUG", "API key available - refreshing session data");
+        debugLogger.general(
+          "DEBUG",
+          "API key available - refreshing session data"
+        );
         debugLogger.general("DEBUG", "Refreshing user info");
         const userInfo = await fetchUserInfo(apiKeyParam);
         sessionCache.userInfo = userInfo;
@@ -1457,90 +1490,22 @@
           lastUpdated: new Date(sessionCache.lastUpdated).toISOString()
         });
       } else {
-        debugLogger.general("WARN", "No API key available - cannot refresh session cache");
+        debugLogger.general(
+          "WARN",
+          "No API key available - cannot refresh session cache"
+        );
         sessionCache.isAuthenticated = false;
       }
     } catch (error) {
-      debugLogger.general("ERROR", "Error refreshing session cache", {
-        error: error.message
-      }, error);
+      debugLogger.general(
+        "ERROR",
+        "Error refreshing session cache",
+        {
+          error: error.message
+        },
+        error
+      );
       throw error;
-    }
-  }
-
-  // src/app/reconnect/index.ts
-  async function ensureConfigLoaded(stateSetters, stateGetters) {
-    try {
-      if (!stateSetters || !stateGetters) {
-        return;
-      }
-      const needsApiKey = !stateGetters.getApiKey();
-      const needsDeviceIden = !stateGetters.getDeviceIden();
-      const needsNickname = stateGetters.getDeviceNickname() === null || stateGetters.getDeviceNickname() === void 0;
-      const needsAutoOpen = stateGetters.getAutoOpenLinks() === null || stateGetters.getAutoOpenLinks() === void 0;
-      const needsTimeout = stateGetters.getNotificationTimeout() === null || stateGetters.getNotificationTimeout() === void 0;
-      if (needsApiKey) {
-        try {
-          const apiKey2 = await storageRepository.getApiKey();
-          if (apiKey2) {
-            stateSetters.setApiKey(apiKey2);
-          }
-        } catch (err) {
-        }
-      }
-      if (needsDeviceIden) {
-        try {
-          const deviceIden2 = await storageRepository.getDeviceIden();
-          if (deviceIden2) {
-            stateSetters.setDeviceIden(deviceIden2);
-          }
-        } catch (err) {
-        }
-      }
-      if (needsNickname) {
-        try {
-          const deviceNickname2 = await storageRepository.getDeviceNickname();
-          if (deviceNickname2 !== null && deviceNickname2 !== void 0) {
-            stateSetters.setDeviceNickname(deviceNickname2);
-          }
-        } catch (err) {
-        }
-      }
-      if (needsAutoOpen) {
-        try {
-          const autoOpenLinks2 = await storageRepository.getAutoOpenLinks();
-          if (autoOpenLinks2 !== null && autoOpenLinks2 !== void 0) {
-            stateSetters.setAutoOpenLinks(autoOpenLinks2);
-          }
-        } catch (err) {
-        }
-      }
-      if (needsTimeout) {
-        try {
-          const notificationTimeout2 = await storageRepository.getNotificationTimeout();
-          if (notificationTimeout2 !== null && notificationTimeout2 !== void 0) {
-            stateSetters.setNotificationTimeout(notificationTimeout2);
-          }
-        } catch (err) {
-        }
-      }
-      try {
-        debugLogger.storage("DEBUG", "ensureConfigLoaded completed", {
-          hasApiKey: !!stateGetters.getApiKey(),
-          hasDeviceIden: !!stateGetters.getDeviceIden(),
-          autoOpenLinks: stateGetters.getAutoOpenLinks(),
-          notificationTimeout: stateGetters.getNotificationTimeout(),
-          deviceNickname: stateGetters.getDeviceNickname()
-        });
-      } catch (err) {
-      }
-    } catch (e) {
-      try {
-        debugLogger.storage("WARN", "ensureConfigLoaded encountered an error", {
-          error: e && e.message
-        });
-      } catch (err) {
-      }
     }
   }
 
@@ -1688,9 +1653,6 @@
   }
   function setAutoOpenLinks(value) {
     autoOpenLinks = value;
-  }
-  function getNotificationTimeout() {
-    return notificationTimeout;
   }
   function setNotificationTimeout(timeout) {
     notificationTimeout = timeout;
@@ -2130,6 +2092,15 @@
         const previousState = this.currentState;
         this.currentState = nextState;
         await this.onStateEnter(this.currentState, previousState, data);
+        try {
+          await chrome.storage.local.set({
+            lastKnownState: this.currentState,
+            lastKnownStateDescription: this.getStateDescription()
+          });
+          debugLogger.storage("DEBUG", "[StateMachine] Persisted new state to storage", { state: this.currentState });
+        } catch (error) {
+          debugLogger.storage("ERROR", "[StateMachine] Failed to persist state", null, error);
+        }
       } else {
         debugLogger.general("DEBUG", `[StateMachine] No transition`, {
           state: this.currentState,
@@ -2345,6 +2316,7 @@
     return notificationDataStore;
   }
   var websocketClient2 = null;
+  var recoveryTimerStart = 0;
   var stateMachine = new ServiceWorkerStateMachine({
     onInitialize: async (data) => {
       const apiKey2 = data?.apiKey || getApiKey();
@@ -2381,7 +2353,39 @@
       disconnectWebSocket();
     }
   });
+  async function restoreVisualState() {
+    try {
+      const { lastKnownState, lastKnownStateDescription } = await chrome.storage.local.get([
+        "lastKnownState",
+        "lastKnownStateDescription"
+      ]);
+      if (lastKnownState) {
+        debugLogger.general("INFO", "Restoring visual state from storage", { state: lastKnownState });
+        if (lastKnownStateDescription) {
+          updateExtensionTooltip(lastKnownStateDescription);
+        }
+        switch (lastKnownState) {
+          case "ready" /* READY */:
+            updateConnectionIcon("connected");
+            break;
+          case "initializing" /* INITIALIZING */:
+            updateConnectionIcon("connecting");
+            break;
+          case "error" /* ERROR */:
+          case "degraded" /* DEGRADED */:
+          case "idle" /* IDLE */:
+            updateConnectionIcon("disconnected");
+            break;
+          default:
+            updateConnectionIcon("disconnected");
+        }
+      }
+    } catch (error) {
+      debugLogger.general("ERROR", "Failed to restore visual state", null, error);
+    }
+  }
   function connectWebSocket() {
+    recoveryTimerStart = Date.now();
     updateConnectionIcon("connecting");
     if (websocketClient2) {
       debugLogger.websocket("INFO", "Disposing existing WebSocket before reconnecting");
@@ -2461,7 +2465,12 @@
         performanceMonitor.recordNotificationFailed();
       });
     });
-    globalEventBus.on("websocket:connected", () => {
+    globalEventBus.on("websocket:connected", async () => {
+      const recoveryTime = Date.now() - recoveryTimerStart;
+      debugLogger.performance("INFO", "WebSocket recovery time", { duration: recoveryTime });
+      const { recoveryTimings = [] } = await chrome.storage.local.get("recoveryTimings");
+      recoveryTimings.push(recoveryTime);
+      await chrome.storage.local.set({ recoveryTimings: recoveryTimings.slice(-20) });
       stateMachine.transition("WS_CONNECTED");
       updateConnectionIcon("connected");
     });
@@ -2486,6 +2495,9 @@
     }
   }
   chrome.runtime.onInstalled.addListener(async () => {
+    const { restarts = 0 } = await chrome.storage.local.get("restarts");
+    await chrome.storage.local.set({ restarts: restarts + 1 });
+    await restoreVisualState();
     debugLogger.general("INFO", "Pushbullet extension installed/updated", {
       reason: "onInstalled",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -2494,14 +2506,21 @@
     initTracker.recordInitialization("onInstalled");
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
-    await ensureConfigLoaded(
-      { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-      { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-    );
-    const apiKey2 = getApiKey();
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+    try {
+      const apiKey2 = await storageRepository.getApiKey();
+      if (apiKey2) {
+        setApiKey(apiKey2);
+      }
+      await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+    } catch (error) {
+      debugLogger.storage("ERROR", "Failed to read API key on startup", null, error);
+      await stateMachine.transition("STARTUP", { hasApiKey: false });
+    }
   });
   chrome.runtime.onStartup.addListener(async () => {
+    const { restarts = 0 } = await chrome.storage.local.get("restarts");
+    await chrome.storage.local.set({ restarts: restarts + 1 });
+    await restoreVisualState();
     debugLogger.general("INFO", "Browser started - reinitializing Pushbullet extension", {
       reason: "onStartup",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -2510,12 +2529,16 @@
     initTracker.recordInitialization("onStartup");
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
-    await ensureConfigLoaded(
-      { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-      { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-    );
-    const apiKey2 = getApiKey();
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+    try {
+      const apiKey2 = await storageRepository.getApiKey();
+      if (apiKey2) {
+        setApiKey(apiKey2);
+      }
+      await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+    } catch (error) {
+      debugLogger.storage("ERROR", "Failed to read API key on startup", null, error);
+      await stateMachine.transition("STARTUP", { hasApiKey: false });
+    }
   });
   chrome.notifications.onClicked.addListener((notificationId) => {
     debugLogger.notifications("INFO", "Notification clicked", { notificationId });
@@ -2547,6 +2570,7 @@
       debugLogger.websocket("WARN", "Reconnection alarm triggered but no API key available");
     } else if (alarm.name === "websocketHealthCheck") {
       performWebSocketHealthCheck(websocketClient2, connectWebSocket);
+      chrome.storage.local.set({ lastSeenAlive: Date.now() });
     } else if (alarm.name === "pollingFallback") {
       performPollingFetch();
     }
@@ -2600,100 +2624,34 @@
       return false;
     }
     if (message.action === "getSessionData") {
-      const apiKey2 = getApiKey();
-      if (apiKey2 && !sessionCache.isAuthenticated && sessionCache.lastUpdated === 0) {
-        if (initializationState.inProgress) {
-          debugLogger.general("DEBUG", "Initialization already in progress - waiting for completion");
-          const initPromise2 = getInitPromise();
-          if (initPromise2) {
-            initPromise2.then(() => {
-              sendResponse({
-                isAuthenticated: sessionCache.isAuthenticated,
-                userInfo: sessionCache.userInfo,
-                devices: sessionCache.devices,
-                recentPushes: sessionCache.recentPushes,
-                autoOpenLinks: sessionCache.autoOpenLinks,
-                deviceNickname: sessionCache.deviceNickname,
-                websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
-              });
-            }).catch((error) => {
-              debugLogger.general("ERROR", "Initialization failed while waiting", null, error);
-              sendResponse({ isAuthenticated: false });
-            });
-            return true;
-          }
-        }
-        debugLogger.general("WARN", "Service worker wake-up detected - session cache not initialized", {
-          hasApiKey: !!apiKey2,
-          isAuthenticated: sessionCache.isAuthenticated,
-          lastUpdated: sessionCache.lastUpdated
-        });
-        (async () => {
-          try {
-            debugLogger.general("DEBUG", "Loading config from storage before session cache initialization");
-            await ensureConfigLoaded(
-              { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-              { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-            );
-            debugLogger.general("DEBUG", "Config loaded, initializing session cache", {
-              hasApiKey: !!getApiKey()
-            });
-            await initializeSessionCache("onMessage", connectWebSocket, {
+      (async () => {
+        try {
+          const storedApiKey = await storageRepository.getApiKey();
+          if (storedApiKey && !sessionCache.isAuthenticated) {
+            debugLogger.general("WARN", "Service worker wake-up detected - reloading session from storage.");
+            await initializeSessionCache("onMessageWakeup", connectWebSocket, {
               setApiKey,
               setDeviceIden,
               setAutoOpenLinks,
-              setDeviceNickname,
-              setNotificationTimeout
+              setNotificationTimeout,
+              setDeviceNickname
             });
-            sendResponse({
-              isAuthenticated: true,
-              userInfo: sessionCache.userInfo,
-              devices: sessionCache.devices,
-              recentPushes: sessionCache.recentPushes,
-              autoOpenLinks: sessionCache.autoOpenLinks,
-              deviceNickname: sessionCache.deviceNickname,
-              websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
-            });
-          } catch (error) {
-            debugLogger.general("ERROR", "Error during service worker wake-up recovery", null, error);
-            sendResponse({ isAuthenticated: false });
           }
-        })();
-        return true;
-      }
-      const isStale = sessionCache.lastUpdated > 0 && Date.now() - sessionCache.lastUpdated > 3e5;
-      if (sessionCache.isAuthenticated && !isStale) {
-        sendResponse({
-          isAuthenticated: true,
-          userInfo: sessionCache.userInfo,
-          devices: sessionCache.devices,
-          recentPushes: sessionCache.recentPushes,
-          autoOpenLinks: sessionCache.autoOpenLinks,
-          deviceNickname: sessionCache.deviceNickname,
-          websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
-        });
-      } else if (sessionCache.isAuthenticated && isStale) {
-        const apiKey3 = getApiKey();
-        if (apiKey3) {
-          refreshSessionCache(apiKey3).then(() => {
-            sendResponse({
-              isAuthenticated: true,
-              userInfo: sessionCache.userInfo,
-              devices: sessionCache.devices,
-              recentPushes: sessionCache.recentPushes,
-              autoOpenLinks: sessionCache.autoOpenLinks,
-              deviceNickname: sessionCache.deviceNickname,
-              websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
-            });
-          }).catch((error) => {
-            debugLogger.general("ERROR", "Error refreshing session cache", null, error);
-            sendResponse({ isAuthenticated: false });
+          sendResponse({
+            isAuthenticated: sessionCache.isAuthenticated,
+            userInfo: sessionCache.userInfo,
+            devices: sessionCache.devices,
+            recentPushes: sessionCache.recentPushes,
+            autoOpenLinks: getAutoOpenLinks(),
+            deviceNickname: getDeviceNickname(),
+            websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
           });
-          return true;
+        } catch (error) {
+          debugLogger.general("ERROR", "Error handling getSessionData after wake-up", null, error);
+          sendResponse({ isAuthenticated: false, error: error.message });
         }
-      } else {
-        sendResponse({ isAuthenticated: false });
-      }
+      })();
+      return true;
     } else if (message.action === "apiKeyChanged") {
       setApiKey(message.apiKey);
       let savePromise = storageRepository.setApiKey(message.apiKey);
@@ -2790,62 +2748,80 @@
         sendResponse({ success: false, error: "Missing required parameters" });
       }
     } else if (message.action === "getDebugSummary") {
-      const logData = debugLogger.exportLogs();
-      const wsState = wsStateMonitor.getStateReport();
-      const perfData = performanceMonitor.exportPerformanceData();
-      const perfSummary = perfData.summary;
-      const websocketState = {
-        current: {
-          stateText: websocketClient2 ? websocketClient2.isConnected() ? "Connected" : "Disconnected" : "Not initialized",
-          readyState: wsState.currentState,
-          stateMachineState: stateMachine.getCurrentState(),
-          stateMachineDescription: stateMachine.getStateDescription()
-        },
-        lastCheck: wsState.lastCheck,
-        historyLength: wsState.historyLength
-      };
-      const performanceForDashboard = {
-        websocket: perfSummary.websocket,
-        qualityMetrics: {
-          // Map health checks
-          healthChecksPassed: perfSummary.health?.success || 0,
-          healthChecksFailed: perfSummary.health?.failure || 0,
-          // Map quality metrics
-          disconnectionCount: perfSummary.quality?.disconnections || 0,
-          consecutiveFailures: perfSummary.quality?.consecutiveFailures || 0,
-          // These metrics don't exist in the backend yet, so they'll be undefined
-          averageLatency: void 0,
-          minLatency: void 0,
-          maxLatency: void 0,
-          connectionUptime: 0,
-          currentUptime: 0
-        },
-        notifications: perfSummary.notifications
-      };
-      const summary = {
-        config: debugConfigManager.getConfig(),
-        logs: logData.logs,
-        // Array of log entries
-        totalLogs: logData.summary.totalLogs,
-        performance: performanceForDashboard,
-        websocketState,
-        initializationStats: initTracker.exportData(),
-        errors: {
-          total: logData.summary.errors,
-          last24h: logData.summary.errors,
-          // Add last24h for dashboard
-          critical: []
-        }
-      };
-      debugLogger.general("DEBUG", "Sending debug summary", {
-        totalLogs: summary.totalLogs,
-        hasConfig: !!summary.config,
-        hasPerformance: !!summary.performance,
-        websocketStateText: websocketState.current.stateText,
-        stateMachineState: stateMachine.getCurrentState()
+      (async () => {
+        const logData = debugLogger.exportLogs();
+        const wsState = wsStateMonitor.getStateReport();
+        const perfData = performanceMonitor.exportPerformanceData();
+        const perfSummary = perfData.summary;
+        const websocketState = {
+          current: {
+            stateText: websocketClient2 ? websocketClient2.isConnected() ? "Connected" : "Disconnected" : "Not initialized",
+            readyState: wsState.currentState,
+            stateMachineState: stateMachine.getCurrentState(),
+            stateMachineDescription: stateMachine.getStateDescription()
+          },
+          lastCheck: wsState.lastCheck,
+          historyLength: wsState.historyLength
+        };
+        const performanceForDashboard = {
+          websocket: perfSummary.websocket,
+          qualityMetrics: {
+            // Map health checks
+            healthChecksPassed: perfSummary.health?.success || 0,
+            healthChecksFailed: perfSummary.health?.failure || 0,
+            // Map quality metrics
+            disconnectionCount: perfSummary.quality?.disconnections || 0,
+            consecutiveFailures: perfSummary.quality?.consecutiveFailures || 0,
+            // These metrics don't exist in the backend yet, so they'll be undefined
+            averageLatency: void 0,
+            minLatency: void 0,
+            maxLatency: void 0,
+            connectionUptime: 0,
+            currentUptime: 0
+          },
+          notifications: perfSummary.notifications
+        };
+        const { restarts = 0, recoveryTimings = [] } = await chrome.storage.local.get(["restarts", "recoveryTimings"]);
+        const avgRecoveryTime = recoveryTimings.length > 0 ? recoveryTimings.reduce((a, b) => a + b, 0) / recoveryTimings.length : 0;
+        const mv3LifecycleStats = {
+          restarts,
+          wakeUpTriggers: initTracker.exportData().stats,
+          // We already track this!
+          avgRecoveryTime: avgRecoveryTime.toFixed(0) + " ms"
+          // Add more stats like downtime here in the future
+        };
+        const summary = {
+          config: debugConfigManager.getConfig(),
+          logs: logData.logs,
+          // Array of log entries
+          totalLogs: logData.summary.totalLogs,
+          performance: performanceForDashboard,
+          websocketState,
+          initializationStats: initTracker.exportData(),
+          mv3LifecycleStats,
+          // Add the new data object
+          errors: {
+            total: logData.summary.errors,
+            last24h: logData.summary.errors,
+            // Add last24h for dashboard
+            critical: []
+          }
+        };
+        debugLogger.general("DEBUG", "Sending debug summary", {
+          totalLogs: summary.totalLogs,
+          hasConfig: !!summary.config,
+          hasPerformance: !!summary.performance,
+          websocketStateText: websocketState.current.stateText,
+          stateMachineState: stateMachine.getCurrentState()
+        });
+        sendResponse({ success: true, summary });
+      })();
+      return true;
+    } else if (message.action === "clearAllLogs") {
+      debugLogger.clearLogs().then(() => {
+        sendResponse({ success: true });
       });
-      sendResponse({ success: true, summary });
-      return false;
+      return true;
     } else if (message.action === "exportDebugData") {
       debugLogger.general("INFO", "Exporting full debug data");
       const logData = debugLogger.exportLogs();

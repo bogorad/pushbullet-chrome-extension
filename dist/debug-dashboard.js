@@ -20,6 +20,7 @@
   var refreshBtn = getElementById("refresh-btn");
   var exportJsonBtn = getElementById("export-json-btn");
   var exportTextBtn = getElementById("export-text-btn");
+  var clearLogsBtn = getElementById("clear-logs-btn");
   var closeBtn = getElementById("close-btn");
   var autoRefreshToggle = getElementById("auto-refresh-toggle");
   var lastUpdatedSpan = getElementById("last-updated");
@@ -37,6 +38,7 @@
   var qualityMetricsEl = getElementById("quality-metrics");
   var notificationMetricsEl = getElementById("notification-metrics");
   var initializationStatsEl = getElementById("initialization-stats");
+  var mv3LifecycleMetricsEl = getElementById("mv3-lifecycle-metrics");
   var errorSummaryEl = getElementById("error-summary");
   var criticalErrorsEl = getElementById("critical-errors");
   var debugConfigEl = getElementById("debug-config");
@@ -52,6 +54,17 @@
     });
     exportTextBtn.addEventListener("click", () => {
       exportData("text");
+    });
+    clearLogsBtn.addEventListener("click", () => {
+      if (confirm("Are you sure you want to permanently delete all logs?")) {
+        chrome.runtime.sendMessage({ action: "clearAllLogs" }, (response) => {
+          if (response && response.success) {
+            loadDashboardData();
+          } else {
+            showError("Failed to clear logs.");
+          }
+        });
+      }
     });
     closeBtn.addEventListener("click", () => {
       window.close();
@@ -120,6 +133,7 @@
     renderLogs();
     renderPerformanceMetrics(data.performance);
     renderInitializationStats(data.initializationStats);
+    renderMv3LifecycleMetrics(data.mv3LifecycleStats);
     renderErrors(data.errors);
     renderConfig(data.config, data.websocketState);
   }
@@ -267,6 +281,21 @@
       ).join("");
       initializationStatsEl.innerHTML += '<hr style="margin: 10px 0; border-color: #444;"><p style="font-size: 11px; color: #888; margin-bottom: 5px;">Recent (last 10):</p>' + recentHtml;
     }
+  }
+  function renderMv3LifecycleMetrics(stats) {
+    if (!stats) {
+      mv3LifecycleMetricsEl.innerHTML = '<p class="loading">No MV3 stats available</p>';
+      return;
+    }
+    mv3LifecycleMetricsEl.innerHTML = `
+    <p><strong>Service Worker Restarts:</strong> <span>${stats.restarts || 0}</span></p>
+    <p><strong>Avg. Recovery Time:</strong> <span>${stats.avgRecoveryTime || "N/A"}</span></p>
+    <hr style="margin: 10px 0; border-color: #444;">
+    <p style="font-size: 11px; color: #888; margin-bottom: 5px;">Wake-up Triggers:</p>
+    <p><strong>On Startup/Install:</strong> <span>${(stats.wakeUpTriggers.onInstalled || 0) + (stats.wakeUpTriggers.onStartup || 0)}</span></p>
+    <p><strong>By Alarm:</strong> <span>${stats.wakeUpTriggers.onAlarm || 0}</span></p>
+    <p><strong>By User Action:</strong> <span>${stats.wakeUpTriggers.onMessage || 0}</span></p>
+  `;
   }
   function renderErrors(errors) {
     if (!errors) {

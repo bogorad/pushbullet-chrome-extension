@@ -116,6 +116,19 @@ export class ServiceWorkerStateMachine {
 
       // Run entry actions for the new state
       await this.onStateEnter(this.currentState, previousState, data);
+
+      // ICON PERSISTENCE FIX: Persist state to storage so icon badge survives service worker restarts
+      // This ensures users always see the correct extension state (error, connected, etc.)
+      // even after Chrome shuts down the service worker or the browser is restarted
+      try {
+        await chrome.storage.local.set({
+          lastKnownState: this.currentState,
+          lastKnownStateDescription: this.getStateDescription()
+        });
+        debugLogger.storage('DEBUG', '[StateMachine] Persisted new state to storage', { state: this.currentState });
+      } catch (error) {
+        debugLogger.storage('ERROR', '[StateMachine] Failed to persist state', null, error as Error);
+      }
     } else {
       debugLogger.general('DEBUG', `[StateMachine] No transition`, {
         state: this.currentState,

@@ -39,7 +39,8 @@ import {
   setupContextMenu,
   pushLink,
   pushNote,
-  updateConnectionIcon
+  updateConnectionIcon,
+  updateExtensionTooltip
 } from './utils';
 import { validatePrivilegedMessage } from '../lib/security/message-validation';
 import type { Push } from '../types/domain';
@@ -75,6 +76,9 @@ export function getNotificationStore(): Map<string, Push> {
 
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
+
+// MV3 LIFECYCLE TRACKING: Recovery timer for measuring WebSocket reconnection time
+let recoveryTimerStart: number = 0;
 
 // Initialize State Machine
 // ARCHITECTURAL CHANGE: Centralized lifecycle management
@@ -120,9 +124,59 @@ const stateMachine = new ServiceWorkerStateMachine({
 });
 
 /**
+ * ICON PERSISTENCE FIX: Restore visual state from storage
+ *
+ * Reads the last known state from storage and updates the icon badge
+ * and tooltip to match. This ensures UI state persists across restarts.
+ *
+ * This function should be called at the very beginning of onInstalled
+ * and onStartup listeners to restore the visual state before any other
+ * initialization occurs.
+ */
+async function restoreVisualState(): Promise<void> {
+  try {
+    const { lastKnownState, lastKnownStateDescription } = await chrome.storage.local.get([
+      'lastKnownState',
+      'lastKnownStateDescription'
+    ]);
+
+    if (lastKnownState) {
+      debugLogger.general('INFO', 'Restoring visual state from storage', { state: lastKnownState });
+
+      // Restore tooltip
+      if (lastKnownStateDescription) {
+        updateExtensionTooltip(lastKnownStateDescription);
+      }
+
+      // Restore icon badge color based on state
+      switch (lastKnownState as ServiceWorkerState) {
+        case ServiceWorkerState.READY:
+          updateConnectionIcon('connected');
+          break;
+        case ServiceWorkerState.INITIALIZING:
+          updateConnectionIcon('connecting');
+          break;
+        case ServiceWorkerState.ERROR:
+        case ServiceWorkerState.DEGRADED:
+        case ServiceWorkerState.IDLE:
+          updateConnectionIcon('disconnected'); // This will set the badge to red
+          break;
+        default:
+          updateConnectionIcon('disconnected');
+      }
+    }
+  } catch (error) {
+    debugLogger.general('ERROR', 'Failed to restore visual state', null, error as Error);
+  }
+}
+
+/**
  * Connect to WebSocket
  */
 function connectWebSocket(): void {
+  // MV3 LIFECYCLE TRACKING: Start recovery timer
+  recoveryTimerStart = Date.now();
+
   // Set connecting status
   updateConnectionIcon('connecting');
 
@@ -232,7 +286,15 @@ function connectWebSocket(): void {
         });
   });
 
-  globalEventBus.on('websocket:connected', () => {
+  globalEventBus.on('websocket:connected', async () => {
+    // MV3 LIFECYCLE TRACKING: Calculate and store recovery time
+    const recoveryTime = Date.now() - recoveryTimerStart;
+    debugLogger.performance('INFO', 'WebSocket recovery time', { duration: recoveryTime });
+    const { recoveryTimings = [] } = await chrome.storage.local.get('recoveryTimings');
+    recoveryTimings.push(recoveryTime);
+    // Keep only the last 20 timings for averaging
+    await chrome.storage.local.set({ recoveryTimings: recoveryTimings.slice(-20) });
+
     // Trigger state machine transition
     stateMachine.transition('WS_CONNECTED');
     updateConnectionIcon('connected');
@@ -276,6 +338,13 @@ function disconnectWebSocket(): void {
  * Extension installed/updated
  */
 chrome.runtime.onInstalled.addListener(async () => {
+  // MV3 LIFECYCLE TRACKING: Increment restart counter
+  const { restarts = 0 } = await chrome.storage.local.get('restarts');
+  await chrome.storage.local.set({ restarts: restarts + 1 });
+
+  // ICON PERSISTENCE FIX: Restore visual state FIRST before any other initialization
+  await restoreVisualState();
+
   debugLogger.general('INFO', 'Pushbullet extension installed/updated', {
     reason: 'onInstalled',
     timestamp: new Date().toISOString()
@@ -290,21 +359,31 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Create periodic log flush alarm
   chrome.alarms.create('logFlush', { periodInMinutes: 1 });
 
-  // Load API key from storage first
-  await ensureConfigLoaded(
-    { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-    { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-  );
-
-  // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
-  const apiKey = getApiKey();
-  await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+  // STARTUP AMNESIA FIX: Read API key from storage and set in-memory variable
+  // This ensures both the state machine transition and onInitialize callback work correctly
+  try {
+    const apiKey = await storageRepository.getApiKey();
+    if (apiKey) {
+      setApiKey(apiKey);
+    }
+    await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+  } catch (error) {
+    debugLogger.storage('ERROR', 'Failed to read API key on startup', null, error as Error);
+    await stateMachine.transition('STARTUP', { hasApiKey: false });
+  }
 });
 
 /**
  * Browser startup
  */
 chrome.runtime.onStartup.addListener(async () => {
+  // MV3 LIFECYCLE TRACKING: Increment restart counter
+  const { restarts = 0 } = await chrome.storage.local.get('restarts');
+  await chrome.storage.local.set({ restarts: restarts + 1 });
+
+  // ICON PERSISTENCE FIX: Restore visual state FIRST before any other initialization
+  await restoreVisualState();
+
   debugLogger.general('INFO', 'Browser started - reinitializing Pushbullet extension', {
     reason: 'onStartup',
     timestamp: new Date().toISOString()
@@ -319,15 +398,18 @@ chrome.runtime.onStartup.addListener(async () => {
   // Create periodic log flush alarm
   chrome.alarms.create('logFlush', { periodInMinutes: 1 });
 
-  // Load API key from storage first
-  await ensureConfigLoaded(
-    { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-    { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-  );
-
-  // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
-  const apiKey = getApiKey();
-  await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+  // STARTUP AMNESIA FIX: Read API key from storage and set in-memory variable
+  // This ensures both the state machine transition and onInitialize callback work correctly
+  try {
+    const apiKey = await storageRepository.getApiKey();
+    if (apiKey) {
+      setApiKey(apiKey);
+    }
+    await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+  } catch (error) {
+    debugLogger.storage('ERROR', 'Failed to read API key on startup', null, error as Error);
+    await stateMachine.transition('STARTUP', { hasApiKey: false });
+  }
 });
 
 /**
@@ -374,6 +456,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     debugLogger.websocket('WARN', 'Reconnection alarm triggered but no API key available');
   } else if (alarm.name === 'websocketHealthCheck') {
     performWebSocketHealthCheck(websocketClient, connectWebSocket);
+    // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
+    chrome.storage.local.set({ lastSeenAlive: Date.now() });
   } else if (alarm.name === 'pollingFallback') {
     performPollingFetch();
   }
@@ -440,123 +524,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'getSessionData') {
-    // Detect service worker wake-up: if we have an API key but session cache is not initialized
-    const apiKey = getApiKey();
-    if (apiKey && !sessionCache.isAuthenticated && sessionCache.lastUpdated === 0) {
-      // Check if initialization is already in progress
-      if (initializationState.inProgress) {
-        debugLogger.general('DEBUG', 'Initialization already in progress - waiting for completion');
+    // SERVICE WORKER AMNESIA FIX: Check storage directly, not the in-memory variable
+    // After service worker restart, in-memory variables are null, but storage persists.
+    // This ensures we detect wake-ups reliably by using storage as the source of truth.
+    (async () => {
+      try {
+        // Check storage directly, not the in-memory variable
+        const storedApiKey = await storageRepository.getApiKey();
 
-        // Await the existing initialization promise directly (no polling needed)
-        const initPromise = getInitPromise();
-        if (initPromise) {
-          initPromise.then(() => {
-            sendResponse({
-              isAuthenticated: sessionCache.isAuthenticated,
-              userInfo: sessionCache.userInfo,
-              devices: sessionCache.devices,
-              recentPushes: sessionCache.recentPushes,
-              autoOpenLinks: sessionCache.autoOpenLinks,
-              deviceNickname: sessionCache.deviceNickname,
-              websocketConnected: websocketClient ? websocketClient.isConnected() : false
-            });
-          }).catch((error) => {
-            debugLogger.general('ERROR', 'Initialization failed while waiting', null, error);
-            sendResponse({ isAuthenticated: false });
-          });
-          return true; // Keep message channel open for async response
-        }
-      }
+        // Detect wake-up: if we have a key in storage but the session is not loaded in memory
+        if (storedApiKey && !sessionCache.isAuthenticated) {
+          debugLogger.general('WARN', 'Service worker wake-up detected - reloading session from storage.');
 
-      debugLogger.general('WARN', 'Service worker wake-up detected - session cache not initialized', {
-        hasApiKey: !!apiKey,
-        isAuthenticated: sessionCache.isAuthenticated,
-        lastUpdated: sessionCache.lastUpdated
-      });
-
-      // API KEY PERSISTENCE FIX: Properly await ensureConfigLoaded to ensure API key
-      // is loaded from storage BEFORE initializing session cache. Using async/await
-      // instead of promise chains ensures proper sequencing and error handling.
-      (async () => {
-        try {
-          debugLogger.general('DEBUG', 'Loading config from storage before session cache initialization');
-
-          // Ensure config is loaded (MUST complete before session cache init)
-          await ensureConfigLoaded(
-            { setApiKey, setDeviceIden, setAutoOpenLinks, setDeviceNickname, setNotificationTimeout },
-            { getApiKey, getDeviceIden, getAutoOpenLinks, getDeviceNickname, getNotificationTimeout }
-          );
-
-          debugLogger.general('DEBUG', 'Config loaded, initializing session cache', {
-            hasApiKey: !!getApiKey()
-          });
-
-          // Re-initialize session cache (MUST complete before sending response)
-          await initializeSessionCache('onMessage', connectWebSocket, {
+          // Await the full initialization process
+          await initializeSessionCache('onMessageWakeup', connectWebSocket, {
             setApiKey,
             setDeviceIden,
             setAutoOpenLinks,
-            setDeviceNickname,
-            setNotificationTimeout
+            setNotificationTimeout,
+            setDeviceNickname
           });
-
-          sendResponse({
-            isAuthenticated: true,
-            userInfo: sessionCache.userInfo,
-            devices: sessionCache.devices,
-            recentPushes: sessionCache.recentPushes,
-            autoOpenLinks: sessionCache.autoOpenLinks,
-            deviceNickname: sessionCache.deviceNickname,
-            websocketConnected: websocketClient ? websocketClient.isConnected() : false
-          });
-        } catch (error) {
-          debugLogger.general('ERROR', 'Error during service worker wake-up recovery', null, error as Error);
-          sendResponse({ isAuthenticated: false });
         }
-      })();
 
-      return true; // Async response
-    }
-
-    // Check if session cache is stale (older than 5 minutes)
-    const isStale = sessionCache.lastUpdated > 0 && (Date.now() - sessionCache.lastUpdated) > 300000;
-
-    if (sessionCache.isAuthenticated && !isStale) {
-      // Return cached session data
-      sendResponse({
-        isAuthenticated: true,
-        userInfo: sessionCache.userInfo,
-        devices: sessionCache.devices,
-        recentPushes: sessionCache.recentPushes,
-        autoOpenLinks: sessionCache.autoOpenLinks,
-        deviceNickname: sessionCache.deviceNickname,
-        websocketConnected: websocketClient ? websocketClient.isConnected() : false
-      });
-    } else if (sessionCache.isAuthenticated && isStale) {
-      // Refresh session cache in the background
-      const apiKey = getApiKey();
-      if (apiKey) {
-        refreshSessionCache(apiKey).then(() => {
-          sendResponse({
-            isAuthenticated: true,
-            userInfo: sessionCache.userInfo,
-            devices: sessionCache.devices,
-            recentPushes: sessionCache.recentPushes,
-            autoOpenLinks: sessionCache.autoOpenLinks,
-            deviceNickname: sessionCache.deviceNickname,
-            websocketConnected: websocketClient ? websocketClient.isConnected() : false
-          });
-        }).catch((error) => {
-          debugLogger.general('ERROR', 'Error refreshing session cache', null, error);
-          sendResponse({ isAuthenticated: false });
+        // Now, respond with the (potentially restored) session data
+        sendResponse({
+          isAuthenticated: sessionCache.isAuthenticated,
+          userInfo: sessionCache.userInfo,
+          devices: sessionCache.devices,
+          recentPushes: sessionCache.recentPushes,
+          autoOpenLinks: getAutoOpenLinks(),
+          deviceNickname: getDeviceNickname(),
+          websocketConnected: websocketClient ? websocketClient.isConnected() : false
         });
-
-        return true; // Async response
+      } catch (error) {
+        debugLogger.general('ERROR', 'Error handling getSessionData after wake-up', null, error as Error);
+        sendResponse({ isAuthenticated: false, error: (error as Error).message });
       }
-    } else {
-      // Not authenticated
-      sendResponse({ isAuthenticated: false });
-    }
+    })();
+
+    return true; // Return true to indicate an asynchronous response.
   } else if (message.action === 'apiKeyChanged') {
     // Update API key
     setApiKey(message.apiKey);
@@ -674,69 +680,92 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   } else if (message.action === 'getDebugSummary') {
     // Return debug summary for debug dashboard
-    const logData = debugLogger.exportLogs();
-    const wsState = wsStateMonitor.getStateReport();
-    const perfData = performanceMonitor.exportPerformanceData();
-    const perfSummary = perfData.summary;
+    (async () => {
+      const logData = debugLogger.exportLogs();
+      const wsState = wsStateMonitor.getStateReport();
+      const perfData = performanceMonitor.exportPerformanceData();
+      const perfSummary = perfData.summary;
 
-    // Format websocket state for dashboard compatibility
-    const websocketState = {
-      current: {
-        stateText: websocketClient ? (websocketClient.isConnected() ? 'Connected' : 'Disconnected') : 'Not initialized',
-        readyState: wsState.currentState,
-        stateMachineState: stateMachine.getCurrentState(),
-        stateMachineDescription: stateMachine.getStateDescription()
-      },
-      lastCheck: wsState.lastCheck,
-      historyLength: wsState.historyLength
-    };
+      // Format websocket state for dashboard compatibility
+      const websocketState = {
+        current: {
+          stateText: websocketClient ? (websocketClient.isConnected() ? 'Connected' : 'Disconnected') : 'Not initialized',
+          readyState: wsState.currentState,
+          stateMachineState: stateMachine.getCurrentState(),
+          stateMachineDescription: stateMachine.getStateDescription()
+        },
+        lastCheck: wsState.lastCheck,
+        historyLength: wsState.historyLength
+      };
 
-    // Map performance data to match frontend expectations
-    // The frontend expects: { websocket, qualityMetrics, notifications }
-    // The backend provides: { summary: { websocket, health, quality, metrics, notifications } }
-    const performanceForDashboard = {
-      websocket: perfSummary.websocket,
-      qualityMetrics: {
-        // Map health checks
-        healthChecksPassed: perfSummary.health?.success || 0,
-        healthChecksFailed: perfSummary.health?.failure || 0,
-        // Map quality metrics
-        disconnectionCount: perfSummary.quality?.disconnections || 0,
-        consecutiveFailures: perfSummary.quality?.consecutiveFailures || 0,
-        // These metrics don't exist in the backend yet, so they'll be undefined
-        averageLatency: undefined,
-        minLatency: undefined,
-        maxLatency: undefined,
-        connectionUptime: 0,
-        currentUptime: 0
-      },
-      notifications: perfSummary.notifications
-    };
+      // Map performance data to match frontend expectations
+      // The frontend expects: { websocket, qualityMetrics, notifications }
+      // The backend provides: { summary: { websocket, health, quality, metrics, notifications } }
+      const performanceForDashboard = {
+        websocket: perfSummary.websocket,
+        qualityMetrics: {
+          // Map health checks
+          healthChecksPassed: perfSummary.health?.success || 0,
+          healthChecksFailed: perfSummary.health?.failure || 0,
+          // Map quality metrics
+          disconnectionCount: perfSummary.quality?.disconnections || 0,
+          consecutiveFailures: perfSummary.quality?.consecutiveFailures || 0,
+          // These metrics don't exist in the backend yet, so they'll be undefined
+          averageLatency: undefined,
+          minLatency: undefined,
+          maxLatency: undefined,
+          connectionUptime: 0,
+          currentUptime: 0
+        },
+        notifications: perfSummary.notifications
+      };
 
-    const summary = {
-      config: debugConfigManager.getConfig(),
-      logs: logData.logs, // Array of log entries
-      totalLogs: logData.summary.totalLogs,
-      performance: performanceForDashboard,
-      websocketState: websocketState,
-      initializationStats: initTracker.exportData(),
-      errors: {
-        total: logData.summary.errors,
-        last24h: logData.summary.errors, // Add last24h for dashboard
-        critical: []
-      }
-    };
+      // MV3 LIFECYCLE TRACKING: Gather metrics for dashboard
+      const { restarts = 0, recoveryTimings = [] } = await chrome.storage.local.get(['restarts', 'recoveryTimings']);
+      const avgRecoveryTime = recoveryTimings.length > 0
+        ? recoveryTimings.reduce((a: number, b: number) => a + b, 0) / recoveryTimings.length
+        : 0;
 
-    debugLogger.general('DEBUG', 'Sending debug summary', {
-      totalLogs: summary.totalLogs,
-      hasConfig: !!summary.config,
-      hasPerformance: !!summary.performance,
-      websocketStateText: websocketState.current.stateText,
-      stateMachineState: stateMachine.getCurrentState()
+      const mv3LifecycleStats = {
+        restarts: restarts,
+        wakeUpTriggers: initTracker.exportData().stats, // We already track this!
+        avgRecoveryTime: avgRecoveryTime.toFixed(0) + ' ms',
+        // Add more stats like downtime here in the future
+      };
+
+      const summary = {
+        config: debugConfigManager.getConfig(),
+        logs: logData.logs, // Array of log entries
+        totalLogs: logData.summary.totalLogs,
+        performance: performanceForDashboard,
+        websocketState: websocketState,
+        initializationStats: initTracker.exportData(),
+        mv3LifecycleStats: mv3LifecycleStats, // Add the new data object
+        errors: {
+          total: logData.summary.errors,
+          last24h: logData.summary.errors, // Add last24h for dashboard
+          critical: []
+        }
+      };
+
+      debugLogger.general('DEBUG', 'Sending debug summary', {
+        totalLogs: summary.totalLogs,
+        hasConfig: !!summary.config,
+        hasPerformance: !!summary.performance,
+        websocketStateText: websocketState.current.stateText,
+        stateMachineState: stateMachine.getCurrentState()
+      });
+
+      sendResponse({ success: true, summary });
+    })();
+
+    return true; // Async response
+  } else if (message.action === 'clearAllLogs') {
+    // Clear all logs from memory and persistent storage
+    debugLogger.clearLogs().then(() => {
+      sendResponse({ success: true });
     });
-
-    sendResponse({ success: true, summary });
-    return false; // Synchronous response
+    return true; // Async response
   } else if (message.action === 'exportDebugData') {
     // This handler gathers all debug data for exporting
     debugLogger.general('INFO', 'Exporting full debug data');

@@ -88,6 +88,16 @@ export class DebugLogger {
     }
   }
 
+  /**
+   * Clear all logs from memory and persistent storage
+   * This method is called when the user clicks "Clear All Logs" in the debug dashboard
+   */
+  async clearLogs(): Promise<void> {
+    this.logs = [];
+    await this.flush();
+    this.log('GENERAL', 'INFO', 'Log buffer has been cleared by the user.');
+  }
+
   private sanitize(data: unknown): unknown {
     if (!DEBUG_CONFIG.sanitizeData) return data;
     if (typeof data === "string") {

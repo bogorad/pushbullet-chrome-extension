@@ -16,6 +16,7 @@
         <button id="refresh-btn" class="btn btn-primary">🔄 Refresh</button>
         <button id="export-json-btn" class="btn btn-secondary">📥 Export JSON</button>
         <button id="export-text-btn" class="btn btn-secondary">📄 Export Text</button>
+        <button id="clear-logs-btn" class="btn btn-danger">🗑️ Clear All Logs</button>
         <label style="margin-left: 8px; white-space: nowrap;">
           <input type="checkbox" id="auto-refresh-toggle" checked>
           Auto-refresh: Enabled (every 2s)
@@ -123,6 +124,12 @@
             <div class="metric-card">
               <h4>Initialization Stats</h4>
               <div id="initialization-stats" class="metric-details">
+                <p class="loading">Loading...</p>
+              </div>
+            </div>
+            <div class="metric-card">
+              <h4>🤬 Fuck Google (MV3 Lifecycle)</h4>
+              <div id="mv3-lifecycle-metrics" class="metric-details">
                 <p class="loading">Loading...</p>
               </div>
             </div>

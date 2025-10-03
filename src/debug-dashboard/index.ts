@@ -12,6 +12,7 @@ interface DebugSummary {
     logs: LogEntry[];
     performance: PerformanceData;
     initializationStats: InitializationStats;
+    mv3LifecycleStats?: Mv3LifecycleStats;
     errors: ErrorData;
     config: DebugConfig;
     websocketState: WebSocketState;
@@ -73,6 +74,17 @@ interface InitializationStats {
   };
 }
 
+interface Mv3LifecycleStats {
+  restarts: number;
+  wakeUpTriggers: {
+    onInstalled?: number;
+    onStartup?: number;
+    onAlarm?: number;
+    onMessage?: number;
+  };
+  avgRecoveryTime: string;
+}
+
 interface ErrorData {
   total: number;
   critical: number;
@@ -112,6 +124,7 @@ interface WebSocketState {
 const refreshBtn = getElementById<HTMLButtonElement>('refresh-btn');
 const exportJsonBtn = getElementById<HTMLButtonElement>('export-json-btn');
 const exportTextBtn = getElementById<HTMLButtonElement>('export-text-btn');
+const clearLogsBtn = getElementById<HTMLButtonElement>('clear-logs-btn');
 const closeBtn = getElementById<HTMLButtonElement>('close-btn');
 const autoRefreshToggle = getElementById<HTMLInputElement>('auto-refresh-toggle');
 const lastUpdatedSpan = getElementById<HTMLSpanElement>('last-updated');
@@ -137,6 +150,7 @@ const websocketMetricsEl = getElementById<HTMLDivElement>('websocket-metrics');
 const qualityMetricsEl = getElementById<HTMLDivElement>('quality-metrics');
 const notificationMetricsEl = getElementById<HTMLDivElement>('notification-metrics');
 const initializationStatsEl = getElementById<HTMLDivElement>('initialization-stats');
+const mv3LifecycleMetricsEl = getElementById<HTMLDivElement>('mv3-lifecycle-metrics');
 
 // Errors tab elements
 const errorSummaryEl = getElementById<HTMLDivElement>('error-summary');
@@ -166,6 +180,20 @@ function setupEventListeners(): void {
 
   exportTextBtn.addEventListener('click', () => {
     exportData('text');
+  });
+
+  // Clear logs button
+  clearLogsBtn.addEventListener('click', () => {
+    if (confirm('Are you sure you want to permanently delete all logs?')) {
+      chrome.runtime.sendMessage({ action: 'clearAllLogs' }, (response) => {
+        if (response && response.success) {
+          // Refresh the dashboard to show the empty logs
+          loadDashboardData();
+        } else {
+          showError('Failed to clear logs.');
+        }
+      });
+    }
   });
 
   // Close button
@@ -261,6 +289,7 @@ function updateDashboard(data: DebugSummary['summary']): void {
   renderLogs();
   renderPerformanceMetrics(data.performance);
   renderInitializationStats(data.initializationStats);
+  renderMv3LifecycleMetrics(data.mv3LifecycleStats);
   renderErrors(data.errors);
   renderConfig(data.config, data.websocketState);
 }
@@ -457,6 +486,26 @@ function renderInitializationStats(initStats: InitializationStats | undefined): 
     ).join('');
     initializationStatsEl.innerHTML += '<hr style="margin: 10px 0; border-color: #444;"><p style="font-size: 11px; color: #888; margin-bottom: 5px;">Recent (last 10):</p>' + recentHtml;
   }
+}
+
+/**
+ * Render MV3 lifecycle metrics
+ */
+function renderMv3LifecycleMetrics(stats: Mv3LifecycleStats | undefined): void {
+  if (!stats) {
+    mv3LifecycleMetricsEl.innerHTML = '<p class="loading">No MV3 stats available</p>';
+    return;
+  }
+
+  mv3LifecycleMetricsEl.innerHTML = `
+    <p><strong>Service Worker Restarts:</strong> <span>${stats.restarts || 0}</span></p>
+    <p><strong>Avg. Recovery Time:</strong> <span>${stats.avgRecoveryTime || 'N/A'}</span></p>
+    <hr style="margin: 10px 0; border-color: #444;">
+    <p style="font-size: 11px; color: #888; margin-bottom: 5px;">Wake-up Triggers:</p>
+    <p><strong>On Startup/Install:</strong> <span>${(stats.wakeUpTriggers.onInstalled || 0) + (stats.wakeUpTriggers.onStartup || 0)}</span></p>
+    <p><strong>By Alarm:</strong> <span>${stats.wakeUpTriggers.onAlarm || 0}</span></p>
+    <p><strong>By User Action:</strong> <span>${stats.wakeUpTriggers.onMessage || 0}</span></p>
+  `;
 }
 
 /**
