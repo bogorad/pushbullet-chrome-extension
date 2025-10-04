@@ -508,6 +508,11 @@
   };
   var wsStateMonitor = new WebSocketStateMonitor();
 
+  // src/types/domain.ts
+  function isLinkPush(push) {
+    return push.type === "link";
+  }
+
   // src/app/notifications/index.ts
   function createNotificationWithTimeout(notificationId, options, callback, timeoutMs) {
     const iconUrl = chrome.runtime.getURL("icons/icon128.png");
@@ -1730,9 +1735,6 @@
   function setAutoOpenLinks(value) {
     autoOpenLinks = value;
   }
-  function getNotificationTimeout() {
-    return notificationTimeout;
-  }
   function setNotificationTimeout(timeout) {
     notificationTimeout = timeout;
   }
@@ -1801,6 +1803,7 @@
     }
   }
   async function refreshPushes(notificationDataStore2) {
+    await ensureConfigLoaded();
     const apiKey2 = getApiKey();
     if (!apiKey2) {
       debugLogger.general("WARN", "Cannot refresh pushes - no API key");
@@ -1825,6 +1828,22 @@
         showPushNotification(push, notificationDataStore2).catch((error) => {
           debugLogger.general("ERROR", "Failed to show notification", { pushIden: push.iden }, error);
         });
+        const autoOpenLinks2 = getAutoOpenLinks();
+        if (autoOpenLinks2 && isLinkPush(push)) {
+          debugLogger.general("INFO", "Auto-opening link push from tickle", {
+            pushIden: push.iden,
+            url: push.url
+          });
+          chrome.tabs.create({
+            url: push.url,
+            active: false
+            // Open in background to avoid disrupting user
+          }).catch((error) => {
+            debugLogger.general("ERROR", "Failed to auto-open link from tickle", {
+              url: push.url
+            }, error);
+          });
+        }
       }
       chrome.runtime.sendMessage({
         action: "pushesUpdated",
@@ -2574,6 +2593,7 @@
       }
     });
     globalEventBus.on("websocket:push", async (push) => {
+      await ensureConfigLoaded();
       performanceMonitor.recordPushReceived();
       let decryptedPush = push;
       if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
@@ -2614,6 +2634,22 @@
         debugLogger.general("ERROR", "Failed to show notification", null, error);
         performanceMonitor.recordNotificationFailed();
       });
+      const autoOpenLinks2 = getAutoOpenLinks();
+      if (autoOpenLinks2 && isLinkPush(decryptedPush)) {
+        debugLogger.general("INFO", "Auto-opening link push", {
+          pushIden: decryptedPush.iden,
+          url: decryptedPush.url
+        });
+        chrome.tabs.create({
+          url: decryptedPush.url,
+          active: false
+          // Open in background to avoid disrupting user
+        }).catch((error) => {
+          debugLogger.general("ERROR", "Failed to auto-open link", {
+            url: decryptedPush.url
+          }, error);
+        });
+      }
     });
     globalEventBus.on("websocket:connected", async () => {
       const recoveryTime = Date.now() - recoveryTimerStart;
@@ -2727,7 +2763,8 @@
       performPollingFetch();
     }
   });
-  chrome.contextMenus.onClicked.addListener((info, tab) => {
+  chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    await ensureConfigLoaded();
     if (!getApiKey()) {
       chrome.notifications.create("pushbullet-no-api-key", {
         type: "basic",
@@ -2791,6 +2828,7 @@
     if (message.action === "getSessionData") {
       (async () => {
         try {
+          await ensureConfigLoaded();
           const storedApiKey = await storageRepository.getApiKey();
           if (storedApiKey && !sessionCache.isAuthenticated) {
             debugLogger.general("WARN", "Service worker wake-up detected - reloading session from storage.");
@@ -2860,25 +2898,28 @@
       });
       return true;
     } else if (message.action === "refreshSession") {
-      const apiKey2 = getApiKey();
-      if (apiKey2) {
-        refreshSessionCache(apiKey2).then(() => {
-          sendResponse({
-            isAuthenticated: true,
-            userInfo: sessionCache.userInfo,
-            devices: sessionCache.devices,
-            recentPushes: sessionCache.recentPushes,
-            autoOpenLinks: sessionCache.autoOpenLinks,
-            deviceNickname: sessionCache.deviceNickname
+      (async () => {
+        await ensureConfigLoaded();
+        const apiKey2 = getApiKey();
+        if (apiKey2) {
+          refreshSessionCache(apiKey2).then(() => {
+            sendResponse({
+              isAuthenticated: true,
+              userInfo: sessionCache.userInfo,
+              devices: sessionCache.devices,
+              recentPushes: sessionCache.recentPushes,
+              autoOpenLinks: sessionCache.autoOpenLinks,
+              deviceNickname: sessionCache.deviceNickname
+            });
+          }).catch((error) => {
+            debugLogger.general("ERROR", "Error refreshing session", null, error);
+            sendResponse({ isAuthenticated: false });
           });
-        }).catch((error) => {
-          debugLogger.general("ERROR", "Error refreshing session", null, error);
+        } else {
           sendResponse({ isAuthenticated: false });
-        });
-        return true;
-      } else {
-        sendResponse({ isAuthenticated: false });
-      }
+        }
+      })();
+      return true;
     } else if (message.action === "settingsChanged") {
       const promises = [];
       if (message.settings?.deviceNickname) {
@@ -2916,22 +2957,25 @@
       });
       return true;
     } else if (message.action === "updateDeviceNickname") {
-      const apiKey2 = getApiKey();
-      const deviceIden2 = getDeviceIden();
-      if (apiKey2 && deviceIden2 && message.nickname) {
-        updateDeviceNickname(apiKey2, deviceIden2, message.nickname).then(async () => {
-          setDeviceNickname(message.nickname);
-          sessionCache.deviceNickname = message.nickname;
-          await storageRepository.setDeviceNickname(message.nickname);
-          sendResponse({ success: true });
-        }).catch((error) => {
-          debugLogger.general("ERROR", "Error updating device nickname", null, error);
-          sendResponse({ success: false, error: error.message });
-        });
-        return true;
-      } else {
-        sendResponse({ success: false, error: "Missing required parameters" });
-      }
+      (async () => {
+        await ensureConfigLoaded();
+        const apiKey2 = getApiKey();
+        const deviceIden2 = getDeviceIden();
+        if (apiKey2 && deviceIden2 && message.nickname) {
+          updateDeviceNickname(apiKey2, deviceIden2, message.nickname).then(async () => {
+            setDeviceNickname(message.nickname);
+            sessionCache.deviceNickname = message.nickname;
+            await storageRepository.setDeviceNickname(message.nickname);
+            sendResponse({ success: true });
+          }).catch((error) => {
+            debugLogger.general("ERROR", "Error updating device nickname", null, error);
+            sendResponse({ success: false, error: error.message });
+          });
+        } else {
+          sendResponse({ success: false, error: "Missing required parameters" });
+        }
+      })();
+      return true;
     } else if (message.action === "getDebugSummary") {
       (async () => {
         await stateMachineReady;
@@ -3058,22 +3102,7 @@
     } else if (message.action === "sendPush") {
       (async () => {
         try {
-          await ensureConfigLoaded(
-            {
-              setApiKey,
-              setDeviceIden,
-              setAutoOpenLinks,
-              setDeviceNickname,
-              setNotificationTimeout
-            },
-            {
-              getApiKey,
-              getDeviceIden,
-              getAutoOpenLinks,
-              getDeviceNickname,
-              getNotificationTimeout
-            }
-          );
+          await ensureConfigLoaded();
           const apiKey2 = getApiKey();
           if (!apiKey2) {
             sendResponse({ success: false, error: "Not logged in. Please try again." });

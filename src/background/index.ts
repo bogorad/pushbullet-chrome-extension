@@ -44,6 +44,7 @@ import {
 } from './utils';
 import { validatePrivilegedMessage } from '../lib/security/message-validation';
 import type { Push } from '../types/domain';
+import { isLinkPush } from '../types/domain';
 
 // Load debug configuration
 debugConfigManager.loadConfig();
@@ -281,6 +282,9 @@ function connectWebSocket(): void {
   });
 
   globalEventBus.on('websocket:push', async (push: Push) => {
+        // RACE CONDITION FIX: Ensure configuration is loaded before processing push
+        await ensureConfigLoaded();
+
         // Track push received
         performanceMonitor.recordPushReceived();
 
@@ -334,6 +338,24 @@ function connectWebSocket(): void {
           debugLogger.general('ERROR', 'Failed to show notification', null, error);
           performanceMonitor.recordNotificationFailed();
         });
+
+        // Auto-open links if setting is enabled
+        const autoOpenLinks = getAutoOpenLinks();
+        if (autoOpenLinks && isLinkPush(decryptedPush)) {
+          debugLogger.general('INFO', 'Auto-opening link push', {
+            pushIden: decryptedPush.iden,
+            url: decryptedPush.url
+          });
+
+          chrome.tabs.create({
+            url: decryptedPush.url,
+            active: false // Open in background to avoid disrupting user
+          }).catch((error) => {
+            debugLogger.general('ERROR', 'Failed to auto-open link', {
+              url: decryptedPush.url
+            }, error);
+          });
+        }
   });
 
   globalEventBus.on('websocket:connected', async () => {
@@ -528,7 +550,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 /**
  * Context menu click handler
  */
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  // RACE CONDITION FIX: Ensure configuration is loaded before processing context menu action
+  await ensureConfigLoaded();
+
   if (!getApiKey()) {
     chrome.notifications.create('pushbullet-no-api-key', {
       type: 'basic',
@@ -562,6 +587,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       break;
   }
 });
+
+// Define actions that require configuration to be loaded
+const ACTIONS_REQUIRING_CONFIG = new Set([
+  'getSessionData',
+  'refreshSession',
+  'pushLink',
+  'pushNote',
+  'updateDeviceNickname'
+]);
 
 /**
  * Message listener for popup communication
@@ -606,6 +640,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // This ensures we detect wake-ups reliably by using storage as the source of truth.
     (async () => {
       try {
+        // RACE CONDITION FIX: Ensure configuration is loaded before processing
+        await ensureConfigLoaded();
+
         // Check storage directly, not the in-memory variable
         const storedApiKey = await storageRepository.getApiKey();
 
@@ -697,26 +734,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     return true; // Async response
   } else if (message.action === 'refreshSession') {
-    const apiKey = getApiKey();
-    if (apiKey) {
-      refreshSessionCache(apiKey).then(() => {
-        sendResponse({
-          isAuthenticated: true,
-          userInfo: sessionCache.userInfo,
-          devices: sessionCache.devices,
-          recentPushes: sessionCache.recentPushes,
-          autoOpenLinks: sessionCache.autoOpenLinks,
-          deviceNickname: sessionCache.deviceNickname
-        });
-      }).catch((error) => {
-        debugLogger.general('ERROR', 'Error refreshing session', null, error);
-        sendResponse({ isAuthenticated: false });
-      });
+    // RACE CONDITION FIX: Ensure configuration is loaded before processing
+    (async () => {
+      await ensureConfigLoaded();
 
-      return true; // Async response
-    } else {
-      sendResponse({ isAuthenticated: false });
-    }
+      const apiKey = getApiKey();
+      if (apiKey) {
+        refreshSessionCache(apiKey).then(() => {
+          sendResponse({
+            isAuthenticated: true,
+            userInfo: sessionCache.userInfo,
+            devices: sessionCache.devices,
+            recentPushes: sessionCache.recentPushes,
+            autoOpenLinks: sessionCache.autoOpenLinks,
+            deviceNickname: sessionCache.deviceNickname
+          });
+        }).catch((error) => {
+          debugLogger.general('ERROR', 'Error refreshing session', null, error);
+          sendResponse({ isAuthenticated: false });
+        });
+      } else {
+        sendResponse({ isAuthenticated: false });
+      }
+    })();
+
+    return true; // Async response
   } else if (message.action === 'settingsChanged') {
     const promises: Promise<void>[] = [];
 
@@ -764,25 +806,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     return true; // Async response
   } else if (message.action === 'updateDeviceNickname') {
-    const apiKey = getApiKey();
-    const deviceIden = getDeviceIden();
+    // RACE CONDITION FIX: Ensure configuration is loaded before processing
+    (async () => {
+      await ensureConfigLoaded();
 
-    if (apiKey && deviceIden && message.nickname) {
-      updateDeviceNickname(apiKey, deviceIden, message.nickname).then(async () => {
-        setDeviceNickname(message.nickname);
-        sessionCache.deviceNickname = message.nickname;
-        await storageRepository.setDeviceNickname(message.nickname);
+      const apiKey = getApiKey();
+      const deviceIden = getDeviceIden();
 
-        sendResponse({ success: true });
-      }).catch((error) => {
-        debugLogger.general('ERROR', 'Error updating device nickname', null, error);
-        sendResponse({ success: false, error: error.message });
-      });
+      if (apiKey && deviceIden && message.nickname) {
+        updateDeviceNickname(apiKey, deviceIden, message.nickname).then(async () => {
+          setDeviceNickname(message.nickname);
+          sessionCache.deviceNickname = message.nickname;
+          await storageRepository.setDeviceNickname(message.nickname);
 
-      return true; // Async response
-    } else {
-      sendResponse({ success: false, error: 'Missing required parameters' });
-    }
+          sendResponse({ success: true });
+        }).catch((error) => {
+          debugLogger.general('ERROR', 'Error updating device nickname', null, error);
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Missing required parameters' });
+      }
+    })();
+
+    return true; // Async response
   } else if (message.action === 'getDebugSummary') {
     // Return debug summary for debug dashboard
     (async () => {
@@ -935,22 +982,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         // Ensure core configuration is loaded from storage if service worker just woke up
-        await ensureConfigLoaded(
-          {
-            setApiKey,
-            setDeviceIden,
-            setAutoOpenLinks,
-            setDeviceNickname,
-            setNotificationTimeout
-          },
-          {
-            getApiKey,
-            getDeviceIden,
-            getAutoOpenLinks,
-            getDeviceNickname,
-            getNotificationTimeout
-          }
-        );
+        await ensureConfigLoaded();
 
         const apiKey = getApiKey();
         if (!apiKey) {

@@ -6,9 +6,24 @@ import { debugLogger } from '../lib/logging';
 import { performanceMonitor } from '../lib/perf';
 import { sessionCache } from '../app/session';
 import { fetchRecentPushes, fetchDevices } from '../app/api/client';
-import { getApiKey, setPollingMode, isPollingMode } from './state';
-import type { Push } from '../types/domain';
+import {
+  getApiKey,
+  setApiKey,
+  getDeviceIden,
+  setDeviceIden,
+  getAutoOpenLinks,
+  setAutoOpenLinks,
+  getDeviceNickname,
+  setDeviceNickname,
+  getNotificationTimeout,
+  setNotificationTimeout,
+  setPollingMode,
+  isPollingMode
+} from './state';
+import type { Push, LinkPush } from '../types/domain';
+import { isLinkPush } from '../types/domain';
 import { createNotificationWithTimeout } from '../app/notifications';
+import { ensureConfigLoaded } from '../app/reconnect';
 
 // Counter to ensure unique notification IDs
 let notificationCounter = 0;
@@ -116,6 +131,11 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
  * Refresh pushes from API and show notifications for new ones
  */
 export async function refreshPushes(notificationDataStore?: Map<string, Push>): Promise<void> {
+  // RACE CONDITION FIX: Ensure configuration is loaded before processing pushes
+  // This prevents the autoOpenLinks setting from being its default (false) value
+  // when a push arrives before settings have finished loading from storage
+  await ensureConfigLoaded();
+
   const apiKey = getApiKey();
   if (!apiKey) {
     debugLogger.general('WARN', 'Cannot refresh pushes - no API key');
@@ -152,6 +172,24 @@ export async function refreshPushes(notificationDataStore?: Map<string, Push>): 
       showPushNotification(push, notificationDataStore).catch((error) => {
         debugLogger.general('ERROR', 'Failed to show notification', { pushIden: push.iden }, error);
       });
+
+      // Auto-open links if setting is enabled
+      const autoOpenLinks = getAutoOpenLinks();
+      if (autoOpenLinks && isLinkPush(push)) {
+        debugLogger.general('INFO', 'Auto-opening link push from tickle', {
+          pushIden: push.iden,
+          url: (push as LinkPush).url
+        });
+
+        chrome.tabs.create({
+          url: (push as LinkPush).url,
+          active: false // Open in background to avoid disrupting user
+        }).catch((error) => {
+          debugLogger.general('ERROR', 'Failed to auto-open link from tickle', {
+            url: (push as LinkPush).url
+          }, error);
+        });
+      }
     }
 
     // Notify popup
