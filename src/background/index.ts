@@ -74,6 +74,42 @@ export function getNotificationStore(): Map<string, Push> {
   return notificationDataStore;
 }
 
+/**
+ * Attempts to get the API key from storage with retries.
+ *
+ * RACE CONDITION FIX: The chrome.storage API can be transiently unavailable
+ * immediately after a service worker restart, returning empty results even when
+ * data exists. This function implements a retry mechanism to handle this MV3
+ * lifecycle issue.
+ *
+ * @param attempts - Number of retry attempts (default: 3)
+ * @param delay - Delay in milliseconds between attempts (default: 100)
+ * @returns The API key string, or null if not found after all retries
+ */
+async function getApiKeyWithRetries(attempts = 3, delay = 100): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const apiKey = await storageRepository.getApiKey();
+      if (apiKey) {
+        debugLogger.storage('INFO', `API key found on attempt ${i + 1}/${attempts}`);
+        return apiKey;
+      }
+      // API key is null - could be genuinely missing or storage not ready yet
+      debugLogger.storage('DEBUG', `API key not found on attempt ${i + 1}/${attempts}, will retry`);
+    } catch (error) {
+      debugLogger.storage('WARN', `Error getting API key on attempt ${i + 1}/${attempts}`, null, error as Error);
+    }
+
+    // Wait before the next attempt (but not after the last attempt)
+    if (i < attempts - 1) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  debugLogger.storage('WARN', `API key not found after ${attempts} retry attempts - assuming no key configured`);
+  return null;
+}
+
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
 
@@ -83,8 +119,13 @@ let recoveryTimerStart: number = 0;
 // Initialize State Machine
 // ARCHITECTURAL CHANGE: Centralized lifecycle management
 // All service worker state is now managed by the state machine
-const stateMachine = new ServiceWorkerStateMachine({
-  onInitialize: async (data) => {
+// STATE MACHINE HYDRATION: The state machine is created asynchronously to allow
+// it to hydrate its state from storage, ensuring continuity across service worker restarts
+let stateMachine: ServiceWorkerStateMachine;
+
+// Define the callbacks once for reuse
+const stateMachineCallbacks = {
+  onInitialize: async (data: any) => {
     // Initialize session cache
     const apiKey = data?.apiKey || getApiKey();
     if (apiKey) {
@@ -107,7 +148,7 @@ const stateMachine = new ServiceWorkerStateMachine({
   onStopPolling: () => {
     stopPollingMode();
   },
-  onShowError: (error) => {
+  onShowError: (error: string) => {
     debugLogger.general('ERROR', '[StateMachine] Error state', { error });
     updateConnectionIcon('disconnected');
   },
@@ -121,6 +162,15 @@ const stateMachine = new ServiceWorkerStateMachine({
   onDisconnectWebSocket: () => {
     disconnectWebSocket();
   }
+};
+
+// Create a promise that resolves when the state machine is ready
+// This ensures startup listeners wait for hydration to complete before attempting transitions
+const stateMachineReady = ServiceWorkerStateMachine.create(stateMachineCallbacks).then(sm => {
+  stateMachine = sm;
+  debugLogger.general('INFO', '[Background] State machine initialized and ready', {
+    currentState: stateMachine.getCurrentState()
+  });
 });
 
 /**
@@ -359,10 +409,16 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Create periodic log flush alarm
   chrome.alarms.create('logFlush', { periodInMinutes: 1 });
 
-  // STARTUP AMNESIA FIX: Read API key from storage and set in-memory variable
-  // This ensures both the state machine transition and onInitialize callback work correctly
+  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
+  // This ensures the state machine has loaded its persisted state from storage
+  await stateMachineReady;
+
+  // STARTUP AMNESIA FIX + STORAGE RACE CONDITION FIX:
+  // Read API key from storage with retry logic to handle chrome.storage being unavailable
+  // immediately after service worker restart. This ensures both the state machine transition
+  // and onInitialize callback work correctly even when storage is transiently unavailable.
   try {
-    const apiKey = await storageRepository.getApiKey();
+    const apiKey = await getApiKeyWithRetries();
     if (apiKey) {
       setApiKey(apiKey);
     }
@@ -398,10 +454,16 @@ chrome.runtime.onStartup.addListener(async () => {
   // Create periodic log flush alarm
   chrome.alarms.create('logFlush', { periodInMinutes: 1 });
 
-  // STARTUP AMNESIA FIX: Read API key from storage and set in-memory variable
-  // This ensures both the state machine transition and onInitialize callback work correctly
+  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
+  // This ensures the state machine has loaded its persisted state from storage
+  await stateMachineReady;
+
+  // STARTUP AMNESIA FIX + STORAGE RACE CONDITION FIX:
+  // Read API key from storage with retry logic to handle chrome.storage being unavailable
+  // immediately after service worker restart. This ensures both the state machine transition
+  // and onInitialize callback work correctly even when storage is transiently unavailable.
   try {
-    const apiKey = await storageRepository.getApiKey();
+    const apiKey = await getApiKeyWithRetries();
     if (apiKey) {
       setApiKey(apiKey);
     }
@@ -505,12 +567,6 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
  * Message listener for popup communication
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  debugLogger.general('DEBUG', 'Message received from popup', {
-    action: message.action,
-    hasApiKey: !!message.apiKey,
-    timestamp: new Date().toISOString()
-  });
-
   // SECURITY FIX (C-04): Validate sender for privileged actions
   // Prevents external extensions/pages from sending privileged messages
   if (!validatePrivilegedMessage(message.action, sender)) {
@@ -520,6 +576,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       senderUrl: sender?.url
     });
     sendResponse({ success: false, error: 'Unauthorized' });
+    return false;
+  } else if (message.action === 'log') {
+    // Handler for centralized logging from other scripts (e.g., popup)
+    if (message.payload) {
+      const { level, message: logMessage, data } = message.payload;
+      const prefix = '[POPUP]'; // Add a prefix to identify the source
+
+      switch (level) {
+        case 'ERROR':
+          debugLogger.general('ERROR', `${prefix} ${logMessage}`, data);
+          break;
+        case 'WARN':
+          debugLogger.general('WARN', `${prefix} ${logMessage}`, data);
+          break;
+        case 'INFO':
+        default:
+          debugLogger.general('INFO', `${prefix} ${logMessage}`, data);
+          break;
+      }
+    }
+    // Return false because we are not sending a response asynchronously.
     return false;
   }
 
@@ -580,7 +657,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     // ARCHITECTURAL CHANGE: Use state machine instead of direct initialization
-    savePromise.then(() => {
+    // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
+    savePromise.then(() => stateMachineReady).then(() => {
       return stateMachine.transition('API_KEY_SET', { apiKey: message.apiKey });
     }).then(() => {
       // Send response with session data after state machine completes
@@ -602,7 +680,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep message channel open for async response
   } else if (message.action === 'logout') {
     // ARCHITECTURAL CHANGE: Use state machine for logout
-    stateMachine.transition('LOGOUT').then(() => {
+    // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
+    stateMachineReady.then(() => {
+      return stateMachine.transition('LOGOUT');
+    }).then(() => {
       // Clear storage via repository
       return storageRepository.setApiKey(null);
     }).then(() => {
@@ -638,6 +719,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   } else if (message.action === 'settingsChanged') {
     const promises: Promise<void>[] = [];
+
+    // BONUS FIX: Handle device nickname updates from "Save All Settings" button
+    if (message.settings?.deviceNickname) {
+      const newNickname = message.settings.deviceNickname;
+      const apiKey = getApiKey();
+      const deviceIden = getDeviceIden();
+
+      // Trigger API update if we have the required credentials
+      if (apiKey && deviceIden) {
+        promises.push(
+          updateDeviceNickname(apiKey, deviceIden, newNickname).then(() => {
+            // Only update state and storage after API success
+            setDeviceNickname(newNickname);
+            sessionCache.deviceNickname = newNickname;
+            return storageRepository.setDeviceNickname(newNickname);
+          })
+        );
+      } else {
+        // No API credentials, just update local state and storage
+        setDeviceNickname(newNickname);
+        sessionCache.deviceNickname = newNickname;
+        promises.push(storageRepository.setDeviceNickname(newNickname));
+      }
+    }
 
     if (message.autoOpenLinks !== undefined) {
       setAutoOpenLinks(message.autoOpenLinks);
@@ -681,6 +786,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'getDebugSummary') {
     // Return debug summary for debug dashboard
     (async () => {
+      // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
+      await stateMachineReady;
+
       const logData = debugLogger.exportLogs();
       const wsState = wsStateMonitor.getStateReport();
       const perfData = performanceMonitor.exportPerformanceData();
@@ -748,14 +856,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       };
 
-      debugLogger.general('DEBUG', 'Sending debug summary', {
-        totalLogs: summary.totalLogs,
-        hasConfig: !!summary.config,
-        hasPerformance: !!summary.performance,
-        websocketStateText: websocketState.current.stateText,
-        stateMachineState: stateMachine.getCurrentState()
-      });
-
       sendResponse({ success: true, summary });
     })();
 
@@ -783,37 +883,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // This handler gathers all debug data for exporting
     debugLogger.general('INFO', 'Exporting full debug data');
 
-    const logData = debugLogger.exportLogs();
-    const errorSummary = globalErrorTracker.getErrorSummary();
+    // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
+    (async () => {
+      await stateMachineReady;
 
-    const dataToExport = {
-      timestamp: new Date().toISOString(),
-      version: chrome.runtime.getManifest().version,
-      debugLogs: logData,
-      performanceData: performanceMonitor.exportPerformanceData(),
-      systemInfo: {
-        websocketState: wsStateMonitor.getStateReport(),
-        initializationData: initTracker.exportData(),
-        stateMachine: {
-          currentState: stateMachine.getCurrentState(),
-          description: stateMachine.getStateDescription(),
+      const logData = debugLogger.exportLogs();
+      const errorSummary = globalErrorTracker.getErrorSummary();
+
+      const dataToExport = {
+        timestamp: new Date().toISOString(),
+        version: chrome.runtime.getManifest().version,
+        debugLogs: logData,
+        performanceData: performanceMonitor.exportPerformanceData(),
+        systemInfo: {
+          websocketState: wsStateMonitor.getStateReport(),
+          initializationData: initTracker.exportData(),
+          stateMachine: {
+            currentState: stateMachine.getCurrentState(),
+            description: stateMachine.getStateDescription(),
+          },
         },
-      },
-      errorData: {
-        summary: errorSummary,
-        recent: globalErrorTracker.exportErrorData().errors,
-      },
-      sessionCache: {
-        isAuthenticated: sessionCache.isAuthenticated,
-        lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : 'never',
-        userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + '***' } : null,
-        deviceCount: sessionCache.devices?.length || 0,
-        pushCount: sessionCache.recentPushes?.length || 0
-      }
-    };
+        errorData: {
+          summary: errorSummary,
+          recent: globalErrorTracker.exportErrorData().errors,
+        },
+        sessionCache: {
+          isAuthenticated: sessionCache.isAuthenticated,
+          lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : 'never',
+          userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + '***' } : null,
+          deviceCount: sessionCache.devices?.length || 0,
+          pushCount: sessionCache.recentPushes?.length || 0
+        }
+      };
 
-    sendResponse({ success: true, data: dataToExport });
-    return false; // Synchronous response
+      sendResponse({ success: true, data: dataToExport });
+    })();
+
+    return true; // Async response
   } else if (message.action === 'getNotificationData') {
     // Return notification data for detail view
     const pushData = notificationDataStore.get(message.notificationId);
@@ -825,49 +931,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false; // Synchronous response
   } else if (message.action === 'sendPush') {
     // Handle push sending from popup
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      sendResponse({ success: false, error: 'No API key' });
-      return false;
-    }
-
-    const pushData = message.pushData;
-    if (!pushData || !pushData.type) {
-      sendResponse({ success: false, error: 'Invalid push data' });
-      return false;
-    }
-
-    // Send push via API
-    fetch('https://api.pushbullet.com/v2/pushes', {
-      method: 'POST',
-      headers: {
-        'Access-Token': apiKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(pushData)
-    }).then(async (response) => {
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = 'Failed to send push';
-        try {
-          const errorData = JSON.parse(errorText) as { error?: { message?: string } };
-          if (errorData.error?.message) {
-            errorMessage = errorData.error.message;
+    // SERVICE WORKER AMNESIA FIX: Ensure configuration is loaded before attempting to send push
+    (async () => {
+      try {
+        // Ensure core configuration is loaded from storage if service worker just woke up
+        await ensureConfigLoaded(
+          {
+            setApiKey,
+            setDeviceIden,
+            setAutoOpenLinks,
+            setDeviceNickname,
+            setNotificationTimeout
+          },
+          {
+            getApiKey,
+            getDeviceIden,
+            getAutoOpenLinks,
+            getDeviceNickname,
+            getNotificationTimeout
           }
-        } catch {
-          // Use default
+        );
+
+        const apiKey = getApiKey();
+        if (!apiKey) {
+          sendResponse({ success: false, error: 'Not logged in. Please try again.' });
+          return;
         }
-        throw new Error(errorMessage);
+
+        const pushData = message.pushData;
+        if (!pushData || !pushData.type) {
+          sendResponse({ success: false, error: 'Invalid push data' });
+          return;
+        }
+
+        // Send push via API
+        const response = await fetch('https://api.pushbullet.com/v2/pushes', {
+          method: 'POST',
+          headers: {
+            'Access-Token': apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(pushData)
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          let errorMessage = 'Failed to send push';
+          try {
+            const errorData = JSON.parse(errorText) as { error?: { message?: string } };
+            if (errorData.error?.message) {
+              errorMessage = errorData.error.message;
+            }
+          } catch {
+            // Use default
+          }
+          throw new Error(errorMessage);
+        }
+
+        // Refresh pushes after sending
+        await refreshPushes(notificationDataStore);
+
+        sendResponse({ success: true });
+      } catch (error) {
+        debugLogger.general('ERROR', 'Failed to send push', { pushType: message.pushData?.type }, error as Error);
+        sendResponse({ success: false, error: (error as Error).message });
       }
-
-      // Refresh pushes after sending
-      await refreshPushes(notificationDataStore);
-
-      sendResponse({ success: true });
-    }).catch((error) => {
-      debugLogger.general('ERROR', 'Failed to send push', { pushType: pushData.type }, error);
-      sendResponse({ success: false, error: error.message });
-    });
+    })();
 
     return true; // Async response
   }

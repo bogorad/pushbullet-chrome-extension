@@ -211,8 +211,8 @@
     try {
       await storageRepository.setDeviceNickname(nickname);
       chrome.runtime.sendMessage({
-        action: "deviceNicknameChanged",
-        deviceNickname: nickname
+        action: "updateDeviceNickname",
+        nickname
       });
       showStatus2("Device nickname updated successfully", "success");
     } catch (error) {
