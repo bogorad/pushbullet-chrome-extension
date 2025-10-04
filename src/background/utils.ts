@@ -205,104 +205,84 @@ export async function refreshPushes(notificationDataStore?: Map<string, Push>): 
 }
 
 /**
+ * Counter for notification IDs
+ */
+let counter = 0;
+
+/**
  * Show push notification
  */
 export async function showPushNotification(push: Push, notificationDataStore?: Map<string, Push>): Promise<void> {
   try {
-    // Log the full push object for debugging
-    debugLogger.notifications('INFO', 'Showing push notification', {
-      pushType: push.type,
-      hasTitle: !!('title' in push && push.title),
-      pushKeys: Object.keys(push),
-      pushJson: JSON.stringify(push)
-    });
+    const notificationId = `pushbullet-push-${counter++}-${Date.now()}`;
+    const baseOptions = {
+      iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+    };
 
-    let title = 'Pushbullet';
-    let message = '';
-    const iconUrl = 'icons/icon128.png'; // Always use local icon
+    let notificationOptions: chrome.notifications.NotificationOptions;
 
-    // Handle different push types
-    const pushType = push.type;
-
-    // Check for mirrored SMS notifications first (before generic mirror handler)
-    // The application_name might vary between Android phones, so we check if it includes 'messaging'
-    if (pushType === 'mirror' && push.application_name?.toLowerCase().includes('messaging')) {
-      title = `SMS: ${push.title}`; // push.title contains the sender's name/number
-      message = push.body || '';
-    } else if (pushType === 'note') {
-      title = push.title || 'Note';
-      message = push.body || '';
-    } else if (pushType === 'link') {
-      title = push.title || 'Link';
-      message = push.url || '';
-    } else if (pushType === 'file') {
-      title = push.file_name || 'File';
-      message = push.body || push.file_url || '';
-    } else if (pushType === 'mirror') {
-      title = push.title || push.application_name || 'Notification';
-      message = push.body || '';
-    } else if (pushType === 'sms_changed') {
-      // SMS notification from phone
-      const smsData = push as any;
-      if (smsData.notifications && smsData.notifications.length > 0) {
-        const sms = smsData.notifications[0];
-        title = sms.title || 'SMS';
-        message = sms.body || '';
-      } else {
-        title = 'SMS';
-        message = 'New SMS received';
-      }
-    } else if (pushType === 'dismissal') {
-      // Don't show notifications for dismissals
-      debugLogger.notifications('DEBUG', 'Skipping dismissal push notification');
-      return;
-    } else if (pushType === 'ping' || pushType === 'pong') {
-      // These are internal keep-alive messages, do not show a notification
-      debugLogger.notifications('DEBUG', 'Ignoring internal push type', { pushType });
-      return;
+    // Handle undecrypted pushes first
+    if (push.encrypted && 'ciphertext' in push) {
+      notificationOptions = {
+        ...baseOptions,
+        type: 'basic',
+        title: 'Pushbullet',
+        message: 'An encrypted push was received. To view future encrypted pushes you need to add the correct end2end password in options'
+      };
+      debugLogger.notifications('INFO', 'Showing notification for undecrypted push');
+    } else if (push.type === 'sms_changed' && push.notifications && push.notifications.length > 0) {
+      // Handle MMS / SMS with image
+      const mms = push.notifications[0];
+      notificationOptions = {
+        ...baseOptions,
+        type: 'image',
+        title: mms.title || 'New Message',
+        message: mms.body || '',
+        imageUrl: mms.image_url || '' // Set the image for the notification
+      };
+      debugLogger.notifications('INFO', 'Showing image notification for MMS');
     } else {
-      // Unknown type - show raw data
-      title = 'Push';
-      message = JSON.stringify(push).substring(0, 200);
-      debugLogger.notifications('WARN', 'Unknown push type', { pushType, push });
-      performanceMonitor.recordUnknownPushType();
+      // Standard handler for note, link, and file
+      let title = 'Pushbullet';
+      let message = '';
+
+      if (push.type === 'note') {
+        title = push.title || 'New Note';
+        message = push.body || '';
+      } else if (push.type === 'link') {
+        title = push.title || push.url || 'New Link';
+        message = push.url || '';
+      } else if (push.type === 'file') {
+        if (push.title) { // MMS-style file push
+          title = push.title;
+          message = push.body || `Image (${push.file_type})`;
+        } else { // Regular file push
+          title = `New File: ${push.file_name || 'unknown file'}`;
+          message = push.body || push.file_type || '';
+        }
+      }
+
+      notificationOptions = {
+        ...baseOptions,
+        type: 'basic',
+        title: title,
+        message: message
+      };
+      debugLogger.notifications('INFO', 'Showing basic notification', { pushType: push.type });
     }
 
-    // Create notification with GUARANTEED unique ID
-    // Use counter + timestamp to ensure no ID collisions even for rapid notifications
-    const notificationId = `pushbullet-push-${++notificationCounter}-${Date.now()}`;
+    await chrome.notifications.create(notificationId, notificationOptions);
 
-    // Store push data for detail view (SECURITY FIX M-06: uses size-limited store)
     if (notificationDataStore) {
-      // Import addToNotificationStore from background/index.ts would create circular dependency
-      // So we just use the Map directly here - the size limit is enforced in background/index.ts
       notificationDataStore.set(notificationId, push);
     }
 
-    createNotificationWithTimeout(
-      notificationId,
-      {
-        type: 'basic',
-        iconUrl, // Always use local icon, never external URLs
-        title: title.substring(0, 100), // Limit title length
-        message: message.substring(0, 200), // Limit message length
-        priority: 1
-      },
-      (createdId) => {
-        debugLogger.notifications('INFO', 'Push notification created', {
-          notificationId: createdId,
-          pushType: push.type
-        });
-        performanceMonitor.recordNotification('push_notification_created');
-        performanceMonitor.recordNotificationCreated();
-      }
-    );
+    performanceMonitor.recordNotificationCreated();
+    debugLogger.notifications('INFO', 'Push notification created', { notificationId, pushType: push.type });
+
   } catch (error) {
-    debugLogger.notifications('ERROR', 'Failed to show push notification', {
-      error: (error as Error).message,
-      pushType: push.type
-    }, error as Error);
     performanceMonitor.recordNotificationFailed();
+    debugLogger.notifications('ERROR', 'Failed to show push notification', { pushIden: push.iden }, error as Error);
   }
 }
 

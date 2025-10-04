@@ -118,7 +118,9 @@ export async function fetchRecentPushes(apiKey: string): Promise<Push[]> {
       const hasContent =
         ('title' in push && push.title) ||
         ('body' in push && push.body) ||
-        ('url' in push && push.url);
+        ('url' in push && push.url) ||
+        ('file_name' in push && push.file_name) ||
+        ('file_url' in push && push.file_url);
       return hasContent && !push.dismissed;
     });
     debugLogger.api('INFO', 'Pushes fetched successfully', {
