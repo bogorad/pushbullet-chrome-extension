@@ -1509,6 +1509,82 @@
     }
   }
 
+  // src/app/reconnect/index.ts
+  async function ensureConfigLoaded(stateSetters, stateGetters) {
+    try {
+      if (!stateSetters || !stateGetters) {
+        return;
+      }
+      const needsApiKey = !stateGetters.getApiKey();
+      const needsDeviceIden = !stateGetters.getDeviceIden();
+      const needsNickname = stateGetters.getDeviceNickname() === null || stateGetters.getDeviceNickname() === void 0;
+      const needsAutoOpen = stateGetters.getAutoOpenLinks() === null || stateGetters.getAutoOpenLinks() === void 0;
+      const needsTimeout = stateGetters.getNotificationTimeout() === null || stateGetters.getNotificationTimeout() === void 0;
+      if (needsApiKey) {
+        try {
+          const apiKey2 = await storageRepository.getApiKey();
+          if (apiKey2) {
+            stateSetters.setApiKey(apiKey2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsDeviceIden) {
+        try {
+          const deviceIden2 = await storageRepository.getDeviceIden();
+          if (deviceIden2) {
+            stateSetters.setDeviceIden(deviceIden2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsNickname) {
+        try {
+          const deviceNickname2 = await storageRepository.getDeviceNickname();
+          if (deviceNickname2 !== null && deviceNickname2 !== void 0) {
+            stateSetters.setDeviceNickname(deviceNickname2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsAutoOpen) {
+        try {
+          const autoOpenLinks2 = await storageRepository.getAutoOpenLinks();
+          if (autoOpenLinks2 !== null && autoOpenLinks2 !== void 0) {
+            stateSetters.setAutoOpenLinks(autoOpenLinks2);
+          }
+        } catch (err) {
+        }
+      }
+      if (needsTimeout) {
+        try {
+          const notificationTimeout2 = await storageRepository.getNotificationTimeout();
+          if (notificationTimeout2 !== null && notificationTimeout2 !== void 0) {
+            stateSetters.setNotificationTimeout(notificationTimeout2);
+          }
+        } catch (err) {
+        }
+      }
+      try {
+        debugLogger.storage("DEBUG", "ensureConfigLoaded completed", {
+          hasApiKey: !!stateGetters.getApiKey(),
+          hasDeviceIden: !!stateGetters.getDeviceIden(),
+          autoOpenLinks: stateGetters.getAutoOpenLinks(),
+          notificationTimeout: stateGetters.getNotificationTimeout(),
+          deviceNickname: stateGetters.getDeviceNickname()
+        });
+      } catch (err) {
+      }
+    } catch (e) {
+      try {
+        debugLogger.storage("WARN", "ensureConfigLoaded encountered an error", {
+          error: e && e.message
+        });
+      } catch (err) {
+      }
+    }
+  }
+
   // src/lib/crypto/index.ts
   var PushbulletCrypto = class {
     /**
@@ -1653,6 +1729,9 @@
   }
   function setAutoOpenLinks(value) {
     autoOpenLinks = value;
+  }
+  function getNotificationTimeout() {
+    return notificationTimeout;
   }
   function setNotificationTimeout(timeout) {
     notificationTimeout = timeout;
@@ -2055,12 +2134,50 @@
   }
 
   // src/background/state-machine.ts
-  var ServiceWorkerStateMachine = class {
+  var ServiceWorkerState = /* @__PURE__ */ ((ServiceWorkerState2) => {
+    ServiceWorkerState2["IDLE"] = "idle";
+    ServiceWorkerState2["INITIALIZING"] = "initializing";
+    ServiceWorkerState2["READY"] = "ready";
+    ServiceWorkerState2["DEGRADED"] = "degraded";
+    ServiceWorkerState2["ERROR"] = "error";
+    return ServiceWorkerState2;
+  })(ServiceWorkerState || {});
+  var ServiceWorkerStateMachine = class _ServiceWorkerStateMachine {
     currentState = "idle" /* IDLE */;
     callbacks;
     constructor(callbacks) {
       this.callbacks = callbacks;
       debugLogger.general("INFO", "[StateMachine] Initialized", { initialState: this.currentState });
+    }
+    /**
+     * Create a new state machine instance with hydrated state from storage
+     *
+     * This static factory method is the only way to create a ServiceWorkerStateMachine.
+     * It reads the last known state from chrome.storage.local and initializes the
+     * state machine with that state, ensuring continuity across service worker restarts.
+     *
+     * @param callbacks - The callbacks to use for state transitions
+     * @returns A promise that resolves to a fully initialized state machine
+     */
+    static async create(callbacks) {
+      const instance = new _ServiceWorkerStateMachine(callbacks);
+      try {
+        const { lastKnownState } = await chrome.storage.local.get("lastKnownState");
+        if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
+          instance.currentState = lastKnownState;
+          debugLogger.general("INFO", "[StateMachine] Hydrated state from storage", {
+            restoredState: instance.currentState
+          });
+        } else {
+          debugLogger.general("INFO", "[StateMachine] No valid state in storage, using default", {
+            initialState: instance.currentState
+          });
+        }
+      } catch (error) {
+        debugLogger.storage("ERROR", "[StateMachine] Failed to hydrate state, defaulting to IDLE", null, error);
+        instance.currentState = "idle" /* IDLE */;
+      }
+      return instance;
     }
     /**
      * Get the current state
@@ -2110,18 +2227,25 @@
     }
     /**
      * Determine the next state based on current state and event
-     * 
+     *
      * This implements the state transition table from ADR 0005.
      */
     getNextState(event, data) {
       if (event === "LOGOUT") {
         return "idle" /* IDLE */;
       }
+      if (event === "STARTUP") {
+        if (data?.hasApiKey) {
+          if (this.currentState === "initializing" /* INITIALIZING */) {
+            return "initializing" /* INITIALIZING */;
+          }
+          return "initializing" /* INITIALIZING */;
+        } else {
+          return "idle" /* IDLE */;
+        }
+      }
       switch (this.currentState) {
         case "idle" /* IDLE */:
-          if (event === "STARTUP") {
-            return data?.hasApiKey ? "initializing" /* INITIALIZING */ : "idle" /* IDLE */;
-          }
           if (event === "API_KEY_SET") {
             return "initializing" /* INITIALIZING */;
           }
@@ -2315,9 +2439,29 @@
   function getNotificationStore() {
     return notificationDataStore;
   }
+  async function getApiKeyWithRetries(attempts = 3, delay = 100) {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const apiKey2 = await storageRepository.getApiKey();
+        if (apiKey2) {
+          debugLogger.storage("INFO", `API key found on attempt ${i + 1}/${attempts}`);
+          return apiKey2;
+        }
+        debugLogger.storage("DEBUG", `API key not found on attempt ${i + 1}/${attempts}, will retry`);
+      } catch (error) {
+        debugLogger.storage("WARN", `Error getting API key on attempt ${i + 1}/${attempts}`, null, error);
+      }
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    debugLogger.storage("WARN", `API key not found after ${attempts} retry attempts - assuming no key configured`);
+    return null;
+  }
   var websocketClient2 = null;
   var recoveryTimerStart = 0;
-  var stateMachine = new ServiceWorkerStateMachine({
+  var stateMachine;
+  var stateMachineCallbacks = {
     onInitialize: async (data) => {
       const apiKey2 = data?.apiKey || getApiKey();
       if (apiKey2) {
@@ -2352,6 +2496,12 @@
     onDisconnectWebSocket: () => {
       disconnectWebSocket();
     }
+  };
+  var stateMachineReady = ServiceWorkerStateMachine.create(stateMachineCallbacks).then((sm) => {
+    stateMachine = sm;
+    debugLogger.general("INFO", "[Background] State machine initialized and ready", {
+      currentState: stateMachine.getCurrentState()
+    });
   });
   async function restoreVisualState() {
     try {
@@ -2506,8 +2656,9 @@
     initTracker.recordInitialization("onInstalled");
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+    await stateMachineReady;
     try {
-      const apiKey2 = await storageRepository.getApiKey();
+      const apiKey2 = await getApiKeyWithRetries();
       if (apiKey2) {
         setApiKey(apiKey2);
       }
@@ -2529,8 +2680,9 @@
     initTracker.recordInitialization("onStartup");
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+    await stateMachineReady;
     try {
-      const apiKey2 = await storageRepository.getApiKey();
+      const apiKey2 = await getApiKeyWithRetries();
       if (apiKey2) {
         setApiKey(apiKey2);
       }
@@ -2609,11 +2761,6 @@
     }
   });
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    debugLogger.general("DEBUG", "Message received from popup", {
-      action: message.action,
-      hasApiKey: !!message.apiKey,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
     if (!validatePrivilegedMessage(message.action, sender)) {
       debugLogger.general("ERROR", "Rejected privileged message from untrusted sender", {
         action: message.action,
@@ -2621,6 +2768,24 @@
         senderUrl: sender?.url
       });
       sendResponse({ success: false, error: "Unauthorized" });
+      return false;
+    } else if (message.action === "log") {
+      if (message.payload) {
+        const { level, message: logMessage, data } = message.payload;
+        const prefix = "[POPUP]";
+        switch (level) {
+          case "ERROR":
+            debugLogger.general("ERROR", `${prefix} ${logMessage}`, data);
+            break;
+          case "WARN":
+            debugLogger.general("WARN", `${prefix} ${logMessage}`, data);
+            break;
+          case "INFO":
+          default:
+            debugLogger.general("INFO", `${prefix} ${logMessage}`, data);
+            break;
+        }
+      }
       return false;
     }
     if (message.action === "getSessionData") {
@@ -2662,7 +2827,7 @@
           return storageRepository.setDeviceNickname(message.deviceNickname);
         });
       }
-      savePromise.then(() => {
+      savePromise.then(() => stateMachineReady).then(() => {
         return stateMachine.transition("API_KEY_SET", { apiKey: message.apiKey });
       }).then(() => {
         sendResponse({
@@ -2681,7 +2846,9 @@
       });
       return true;
     } else if (message.action === "logout") {
-      stateMachine.transition("LOGOUT").then(() => {
+      stateMachineReady.then(() => {
+        return stateMachine.transition("LOGOUT");
+      }).then(() => {
         return storageRepository.setApiKey(null);
       }).then(() => {
         return storageRepository.setDeviceIden(null);
@@ -2714,6 +2881,24 @@
       }
     } else if (message.action === "settingsChanged") {
       const promises = [];
+      if (message.settings?.deviceNickname) {
+        const newNickname = message.settings.deviceNickname;
+        const apiKey2 = getApiKey();
+        const deviceIden2 = getDeviceIden();
+        if (apiKey2 && deviceIden2) {
+          promises.push(
+            updateDeviceNickname(apiKey2, deviceIden2, newNickname).then(() => {
+              setDeviceNickname(newNickname);
+              sessionCache.deviceNickname = newNickname;
+              return storageRepository.setDeviceNickname(newNickname);
+            })
+          );
+        } else {
+          setDeviceNickname(newNickname);
+          sessionCache.deviceNickname = newNickname;
+          promises.push(storageRepository.setDeviceNickname(newNickname));
+        }
+      }
       if (message.autoOpenLinks !== void 0) {
         setAutoOpenLinks(message.autoOpenLinks);
         sessionCache.autoOpenLinks = message.autoOpenLinks;
@@ -2749,6 +2934,7 @@
       }
     } else if (message.action === "getDebugSummary") {
       (async () => {
+        await stateMachineReady;
         const logData = debugLogger.exportLogs();
         const wsState = wsStateMonitor.getStateReport();
         const perfData = performanceMonitor.exportPerformanceData();
@@ -2807,13 +2993,6 @@
             critical: []
           }
         };
-        debugLogger.general("DEBUG", "Sending debug summary", {
-          totalLogs: summary.totalLogs,
-          hasConfig: !!summary.config,
-          hasPerformance: !!summary.performance,
-          websocketStateText: websocketState.current.stateText,
-          stateMachineState: stateMachine.getCurrentState()
-        });
         sendResponse({ success: true, summary });
       })();
       return true;
@@ -2836,35 +3015,38 @@
       return true;
     } else if (message.action === "exportDebugData") {
       debugLogger.general("INFO", "Exporting full debug data");
-      const logData = debugLogger.exportLogs();
-      const errorSummary = globalErrorTracker.getErrorSummary();
-      const dataToExport = {
-        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-        version: chrome.runtime.getManifest().version,
-        debugLogs: logData,
-        performanceData: performanceMonitor.exportPerformanceData(),
-        systemInfo: {
-          websocketState: wsStateMonitor.getStateReport(),
-          initializationData: initTracker.exportData(),
-          stateMachine: {
-            currentState: stateMachine.getCurrentState(),
-            description: stateMachine.getStateDescription()
+      (async () => {
+        await stateMachineReady;
+        const logData = debugLogger.exportLogs();
+        const errorSummary = globalErrorTracker.getErrorSummary();
+        const dataToExport = {
+          timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+          version: chrome.runtime.getManifest().version,
+          debugLogs: logData,
+          performanceData: performanceMonitor.exportPerformanceData(),
+          systemInfo: {
+            websocketState: wsStateMonitor.getStateReport(),
+            initializationData: initTracker.exportData(),
+            stateMachine: {
+              currentState: stateMachine.getCurrentState(),
+              description: stateMachine.getStateDescription()
+            }
+          },
+          errorData: {
+            summary: errorSummary,
+            recent: globalErrorTracker.exportErrorData().errors
+          },
+          sessionCache: {
+            isAuthenticated: sessionCache.isAuthenticated,
+            lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : "never",
+            userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + "***" } : null,
+            deviceCount: sessionCache.devices?.length || 0,
+            pushCount: sessionCache.recentPushes?.length || 0
           }
-        },
-        errorData: {
-          summary: errorSummary,
-          recent: globalErrorTracker.exportErrorData().errors
-        },
-        sessionCache: {
-          isAuthenticated: sessionCache.isAuthenticated,
-          lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : "never",
-          userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + "***" } : null,
-          deviceCount: sessionCache.devices?.length || 0,
-          pushCount: sessionCache.recentPushes?.length || 0
-        }
-      };
-      sendResponse({ success: true, data: dataToExport });
-      return false;
+        };
+        sendResponse({ success: true, data: dataToExport });
+      })();
+      return true;
     } else if (message.action === "getNotificationData") {
       const pushData = notificationDataStore.get(message.notificationId);
       if (pushData) {
@@ -2874,42 +3056,61 @@
       }
       return false;
     } else if (message.action === "sendPush") {
-      const apiKey2 = getApiKey();
-      if (!apiKey2) {
-        sendResponse({ success: false, error: "No API key" });
-        return false;
-      }
-      const pushData = message.pushData;
-      if (!pushData || !pushData.type) {
-        sendResponse({ success: false, error: "Invalid push data" });
-        return false;
-      }
-      fetch("https://api.pushbullet.com/v2/pushes", {
-        method: "POST",
-        headers: {
-          "Access-Token": apiKey2,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(pushData)
-      }).then(async (response) => {
-        if (!response.ok) {
-          const errorText = await response.text();
-          let errorMessage = "Failed to send push";
-          try {
-            const errorData = JSON.parse(errorText);
-            if (errorData.error?.message) {
-              errorMessage = errorData.error.message;
+      (async () => {
+        try {
+          await ensureConfigLoaded(
+            {
+              setApiKey,
+              setDeviceIden,
+              setAutoOpenLinks,
+              setDeviceNickname,
+              setNotificationTimeout
+            },
+            {
+              getApiKey,
+              getDeviceIden,
+              getAutoOpenLinks,
+              getDeviceNickname,
+              getNotificationTimeout
             }
-          } catch {
+          );
+          const apiKey2 = getApiKey();
+          if (!apiKey2) {
+            sendResponse({ success: false, error: "Not logged in. Please try again." });
+            return;
           }
-          throw new Error(errorMessage);
+          const pushData = message.pushData;
+          if (!pushData || !pushData.type) {
+            sendResponse({ success: false, error: "Invalid push data" });
+            return;
+          }
+          const response = await fetch("https://api.pushbullet.com/v2/pushes", {
+            method: "POST",
+            headers: {
+              "Access-Token": apiKey2,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(pushData)
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            let errorMessage = "Failed to send push";
+            try {
+              const errorData = JSON.parse(errorText);
+              if (errorData.error?.message) {
+                errorMessage = errorData.error.message;
+              }
+            } catch {
+            }
+            throw new Error(errorMessage);
+          }
+          await refreshPushes(notificationDataStore);
+          sendResponse({ success: true });
+        } catch (error) {
+          debugLogger.general("ERROR", "Failed to send push", { pushType: message.pushData?.type }, error);
+          sendResponse({ success: false, error: error.message });
         }
-        await refreshPushes(notificationDataStore);
-        sendResponse({ success: true });
-      }).catch((error) => {
-        debugLogger.general("ERROR", "Failed to send push", { pushType: pushData.type }, error);
-        sendResponse({ success: false, error: error.message });
-      });
+      })();
       return true;
     }
     return false;

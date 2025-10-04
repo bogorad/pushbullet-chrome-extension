@@ -75,7 +75,7 @@ async function loadSettings(): Promise<void> {
  */
 async function updateNickname(): Promise<void> {
   const nickname = deviceNicknameInput.value.trim();
-  
+
   if (!nickname) {
     showStatus('Please enter a device nickname', 'error');
     return;
@@ -85,9 +85,10 @@ async function updateNickname(): Promise<void> {
     await storageRepository.setDeviceNickname(nickname);
 
     // Notify background script
+    // FIX: Changed action name to match what background script expects
     chrome.runtime.sendMessage({
-      action: 'deviceNicknameChanged',
-      deviceNickname: nickname
+      action: 'updateDeviceNickname',
+      nickname: nickname
     });
 
     showStatus('Device nickname updated successfully', 'success');

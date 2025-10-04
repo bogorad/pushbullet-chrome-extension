@@ -176,7 +176,9 @@
   var pushesList = getElementById("pushes-list");
   var statusMessage = getElementById("status-message");
   var openSettingsBtn = getElementById("open-settings");
-  var openDebugDashboardBtn = getElementById("open-debug-dashboard");
+  var openDebugDashboardBtn = getElementById(
+    "open-debug-dashboard"
+  );
   var apiKey = null;
   var deviceNickname = "Chrome";
   var devices = [];
@@ -207,25 +209,28 @@
   function checkStorageForApiKey() {
     console.log("Requesting session data from background");
     showSection("loading");
-    chrome.runtime.sendMessage({ action: "getSessionData" }, async (response) => {
-      if (chrome.runtime.lastError) {
-        console.error("Error getting session data:", chrome.runtime.lastError);
-        showSection("login");
-        return;
-      }
-      if (response.isAuthenticated) {
-        await initializeFromSessionData(response);
-        const shouldScroll = await storageRepository.getScrollToRecentPushes();
-        if (shouldScroll) {
-          await storageRepository.removeScrollToRecentPushes();
-          setTimeout(() => {
-            scrollToRecentPushes();
-          }, 100);
+    chrome.runtime.sendMessage(
+      { action: "getSessionData" },
+      async (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("Error getting session data:", chrome.runtime.lastError);
+          showSection("login");
+          return;
         }
-      } else {
-        showSection("login");
+        if (response.isAuthenticated) {
+          await initializeFromSessionData(response);
+          const shouldScroll = await storageRepository.getScrollToRecentPushes();
+          if (shouldScroll) {
+            await storageRepository.removeScrollToRecentPushes();
+            setTimeout(() => {
+              scrollToRecentPushes();
+            }, 100);
+          }
+        } else {
+          showSection("login");
+        }
       }
-    });
+    );
   }
   function showSection(section) {
     console.log("Showing section:", section);
@@ -273,30 +278,39 @@
       await storageRepository.setDeviceNickname(newNickname);
       apiKey = newApiKey;
       deviceNickname = newNickname;
-      chrome.runtime.sendMessage({
-        action: "apiKeyChanged",
-        apiKey: newApiKey,
-        deviceNickname: newNickname
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error("Error notifying background:", chrome.runtime.lastError);
-          showStatus("Error: Could not connect to background script", "error");
-          showSection("login");
-          return;
+      chrome.runtime.sendMessage(
+        {
+          action: "apiKeyChanged",
+          apiKey: newApiKey,
+          deviceNickname: newNickname
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error(
+              "Error notifying background:",
+              chrome.runtime.lastError
+            );
+            showStatus("Error: Could not connect to background script", "error");
+            showSection("login");
+            return;
+          }
+          if (response.success === false) {
+            showStatus(
+              `Error: ${response.error || "Invalid Access Token"}`,
+              "error"
+            );
+            showSection("login");
+            return;
+          }
+          if (response.isAuthenticated) {
+            initializeFromSessionData(response);
+            hasInitialized = true;
+          } else {
+            showStatus("Invalid Access Token", "error");
+            showSection("login");
+          }
         }
-        if (response.success === false) {
-          showStatus(`Error: ${response.error || "Invalid Access Token"}`, "error");
-          showSection("login");
-          return;
-        }
-        if (response.isAuthenticated) {
-          initializeFromSessionData(response);
-          hasInitialized = true;
-        } else {
-          showStatus("Invalid Access Token", "error");
-          showSection("login");
-        }
-      });
+      );
     } catch (error) {
       showStatus(`Error: ${error.message}`, "error");
       showSection("login");
@@ -484,58 +498,75 @@
     }
   }
   async function sendPush() {
-    if (!apiKey) return;
+    logToBackground("INFO", "[sendPush] Function initiated.");
     try {
       const pushType = currentPushType;
       const targetDevice = targetDeviceSelect.value;
+      logToBackground("INFO", `[sendPush] currentPushType is: '${pushType}'`);
       const pushData = {
         type: pushType
       };
       if (targetDevice !== "all") {
         pushData.device_iden = targetDevice;
       }
-      try {
-        const deviceIden = await storageRepository.getDeviceIden();
-        if (deviceIden) {
-          pushData.source_device_iden = deviceIden;
-        }
-      } catch (error) {
-        console.error("Error getting device iden:", error);
-      }
       if (pushType === "note") {
+        logToBackground("INFO", '[sendPush] Handling "note" type.');
         pushData.title = noteTitleInput.value.trim();
         pushData.body = noteBodyInput.value.trim();
         if (!pushData.title && !pushData.body) {
+          logToBackground(
+            "WARN",
+            "[sendPush] Exiting: Note title and body are empty."
+          );
           showStatus("Please enter a title or body for the note.", "error");
           return;
         }
       } else if (pushType === "link") {
+        logToBackground("INFO", '[sendPush] Handling "link" type.');
         pushData.title = linkTitleInput.value.trim();
         pushData.url = linkUrlInput.value.trim();
         pushData.body = linkBodyInput.value.trim();
         if (!pushData.url) {
+          logToBackground("WARN", "[sendPush] Exiting: Link URL is empty.");
           showStatus("Please enter a URL for the link.", "error");
           return;
         }
       } else if (pushType === "file") {
+        logToBackground("INFO", '[sendPush] Handling "file" type.');
         const file = fileInput.files?.[0];
         if (!file) {
+          logToBackground(
+            "WARN",
+            "[sendPush] Exiting: File type selected but no file is attached."
+          );
           showStatus("Please select a file to attach.", "error");
           return;
         }
         showStatus("Uploading file...", "info");
         try {
-          const uploadRequestResponse = await fetch("https://api.pushbullet.com/v2/upload-request", {
-            method: "POST",
-            headers: {
-              "Access-Token": apiKey,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              file_name: file.name,
-              file_type: file.type || "application/octet-stream"
-            })
-          });
+          const uploadApiKey = await storageRepository.getApiKey();
+          if (!uploadApiKey) {
+            logToBackground(
+              "WARN",
+              "[sendPush] Exiting: Cannot upload file, user is not logged in."
+            );
+            showStatus("Not logged in. Please log in first.", "error");
+            return;
+          }
+          const uploadRequestResponse = await fetch(
+            "https://api.pushbullet.com/v2/upload-request",
+            {
+              method: "POST",
+              headers: {
+                "Access-Token": uploadApiKey,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                file_name: file.name,
+                file_type: file.type || "application/octet-stream"
+              })
+            }
+          );
           if (!uploadRequestResponse.ok) {
             throw new Error("Failed to request file upload authorization");
           }
@@ -559,35 +590,68 @@
           pushData.body = document.getElementById("file-body").value.trim();
           showStatus("File uploaded, sending push...", "info");
         } catch (uploadError) {
-          console.error("File upload error:", uploadError);
-          showStatus("Failed to upload file: " + uploadError.message, "error");
+          logToBackground("ERROR", "[sendPush] File upload error.", {
+            error: uploadError.message
+          });
+          showStatus(
+            "Failed to upload file: " + uploadError.message,
+            "error"
+          );
           return;
         }
       }
-      console.log("Sending push via background:", pushData);
-      chrome.runtime.sendMessage({
-        action: "sendPush",
+      logToBackground(
+        "INFO",
+        "[sendPush] Validation passed. Preparing to send message to background script.",
         pushData
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error("Error sending push:", chrome.runtime.lastError);
-          showStatus("Error: Could not send push", "error");
-          return;
+      );
+      chrome.runtime.sendMessage(
+        {
+          action: "sendPush",
+          pushData
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            logToBackground(
+              "ERROR",
+              "[sendPush] Error sending message to background.",
+              { error: chrome.runtime.lastError }
+            );
+            showStatus("Error: Could not send push", "error");
+            return;
+          }
+          logToBackground(
+            "INFO",
+            "[sendPush] Received response from background script.",
+            response
+          );
+          if (response.success) {
+            clearPushForm();
+            showStatus("Push sent successfully!", "success");
+            chrome.runtime.sendMessage(
+              { action: "getSessionData" },
+              (sessionResponse) => {
+                if (sessionResponse && sessionResponse.recentPushes) {
+                  displayPushes(sessionResponse.recentPushes);
+                }
+              }
+            );
+          } else {
+            showStatus(
+              `Error: ${response.error || "Failed to send push"}`,
+              "error"
+            );
+          }
         }
-        if (response.success) {
-          clearPushForm();
-          showStatus("Push sent successfully!", "success");
-          chrome.runtime.sendMessage({ action: "getSessionData" }, (sessionResponse) => {
-            if (sessionResponse && sessionResponse.recentPushes) {
-              displayPushes(sessionResponse.recentPushes);
-            }
-          });
-        } else {
-          showStatus(`Error: ${response.error || "Failed to send push"}`, "error");
-        }
-      });
+      );
     } catch (error) {
-      showStatus(`Error: ${error.message}`, "error");
+      logToBackground("ERROR", "[sendPush] An unexpected error occurred.", {
+        error: error.message
+      });
+      showStatus(
+        `An unexpected error occurred: ${error.message}`,
+        "error"
+      );
     }
   }
   function clearPushForm() {
@@ -607,6 +671,26 @@
       statusMessage.textContent = "";
       statusMessage.className = "";
     }, 3e3);
+  }
+  function logToBackground(level, message, data) {
+    try {
+      chrome.runtime.sendMessage({
+        action: "log",
+        payload: {
+          level,
+          message,
+          data
+        }
+      });
+    } catch (error) {
+      const fallbackLog = `[FALLBACK] ${message}`;
+      if (level === "ERROR") {
+        console.error(fallbackLog, data, error);
+      } else if (level === "WARN") {
+        console.warn(fallbackLog, data);
+      } else {
+      }
+    }
   }
   function scrollToRecentPushes() {
     const recentPushesSection = document.querySelector(".recent-pushes");

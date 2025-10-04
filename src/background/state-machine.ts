@@ -72,9 +72,43 @@ export class ServiceWorkerStateMachine {
   private currentState: ServiceWorkerState = ServiceWorkerState.IDLE;
   private callbacks: StateMachineCallbacks;
 
-  constructor(callbacks: StateMachineCallbacks) {
+  private constructor(callbacks: StateMachineCallbacks) {
     this.callbacks = callbacks;
     debugLogger.general('INFO', '[StateMachine] Initialized', { initialState: this.currentState });
+  }
+
+  /**
+   * Create a new state machine instance with hydrated state from storage
+   *
+   * This static factory method is the only way to create a ServiceWorkerStateMachine.
+   * It reads the last known state from chrome.storage.local and initializes the
+   * state machine with that state, ensuring continuity across service worker restarts.
+   *
+   * @param callbacks - The callbacks to use for state transitions
+   * @returns A promise that resolves to a fully initialized state machine
+   */
+  public static async create(callbacks: StateMachineCallbacks): Promise<ServiceWorkerStateMachine> {
+    const instance = new ServiceWorkerStateMachine(callbacks);
+
+    try {
+      const { lastKnownState } = await chrome.storage.local.get('lastKnownState');
+
+      if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
+        instance.currentState = lastKnownState as ServiceWorkerState;
+        debugLogger.general('INFO', '[StateMachine] Hydrated state from storage', {
+          restoredState: instance.currentState
+        });
+      } else {
+        debugLogger.general('INFO', '[StateMachine] No valid state in storage, using default', {
+          initialState: instance.currentState
+        });
+      }
+    } catch (error) {
+      debugLogger.storage('ERROR', '[StateMachine] Failed to hydrate state, defaulting to IDLE', null, error as Error);
+      instance.currentState = ServiceWorkerState.IDLE;
+    }
+
+    return instance;
   }
 
   /**
@@ -139,7 +173,7 @@ export class ServiceWorkerStateMachine {
 
   /**
    * Determine the next state based on current state and event
-   * 
+   *
    * This implements the state transition table from ADR 0005.
    */
   private getNextState(event: ServiceWorkerEvent, data?: any): ServiceWorkerState {
@@ -148,12 +182,26 @@ export class ServiceWorkerStateMachine {
       return ServiceWorkerState.IDLE;
     }
 
+    // STARTUP event handling: When service worker restarts, we need to re-initialize
+    // if we have an API key, regardless of the current state. This handles the case
+    // where the state machine was hydrated to READY/DEGRADED but the service worker
+    // has restarted and needs to restore the session.
+    if (event === 'STARTUP') {
+      if (data?.hasApiKey) {
+        // If we're already in INITIALIZING, stay there to avoid duplicate initialization
+        if (this.currentState === ServiceWorkerState.INITIALIZING) {
+          return ServiceWorkerState.INITIALIZING;
+        }
+        // From any other state, transition to INITIALIZING to restore session
+        return ServiceWorkerState.INITIALIZING;
+      } else {
+        // No API key, go to IDLE
+        return ServiceWorkerState.IDLE;
+      }
+    }
+
     switch (this.currentState) {
       case ServiceWorkerState.IDLE:
-        if (event === 'STARTUP') {
-          // Only transition to INITIALIZING if we have an API key
-          return data?.hasApiKey ? ServiceWorkerState.INITIALIZING : ServiceWorkerState.IDLE;
-        }
         if (event === 'API_KEY_SET') {
           return ServiceWorkerState.INITIALIZING;
         }
