@@ -260,6 +260,9 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
           title = `New File: ${push.file_name || 'unknown file'}`;
           message = push.body || push.file_type || '';
         }
+      } else if (push.type === 'mirror') {
+        title = push.title || push.application_name || 'Notification';
+        message = push.body || '';
       }
 
       notificationOptions = {
