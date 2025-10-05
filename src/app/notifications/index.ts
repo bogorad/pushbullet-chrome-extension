@@ -126,7 +126,7 @@ export function showPermanentWebSocketError(closeInfo: { code: number; reason?: 
   try {
     chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
     chrome.action.setBadgeText({ text: 'ERR' });
-  } catch (_) {
+  } catch {
     // noop
   }
 }
@@ -137,7 +137,7 @@ export function showPermanentWebSocketError(closeInfo: { code: number; reason?: 
 export function clearErrorBadge(): void {
   try {
     chrome.action.setBadgeText({ text: '' });
-  } catch (_) {
+  } catch {
     // ignore
   }
 }

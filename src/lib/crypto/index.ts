@@ -100,7 +100,7 @@ export class PushbulletCrypto {
       
       // Parse as JSON
       return JSON.parse(decryptedText);
-    } catch (error) {
+    } catch {
       // SECURITY FIX (M-04): Don't log sensitive crypto data
       console.error('Decryption error - check encryption password');
       throw new Error('Failed to decrypt message. Check your encryption password.');

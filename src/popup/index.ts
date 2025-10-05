@@ -5,7 +5,6 @@
 import type { Push, Device, UserInfo } from "../types/domain";
 import {
   getElementById,
-  formatTimestamp as formatTimestampUtil,
 } from "../lib/ui/dom";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 
@@ -93,10 +92,8 @@ const openDebugDashboardBtn = getElementById<HTMLButtonElement>(
 );
 
 // State variables
-let apiKey: string | null = null;
 let deviceNickname = "Chrome";
 const devices: Device[] = [];
-let hasInitialized = false;
 let currentPushType: PushType = "note";
 // websocket variable removed - background script manages the single WebSocket connection
 
@@ -892,7 +889,7 @@ function scrollToRecentPushes(): void {
 /**
  * Listen for messages from background
  */
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _, __) => {
   if (message.action === "connectionStateChanged") {
     // Connection state changes now shown via badge icon only
     console.log("Connection state changed:", message.state);

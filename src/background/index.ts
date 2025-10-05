@@ -7,7 +7,7 @@ import { debugLogger, debugConfigManager, globalErrorTracker } from '../lib/logg
 import { performanceMonitor } from '../lib/perf';
 import { initTracker, wsStateMonitor } from '../lib/monitoring';
 import { WebSocketClient } from '../app/ws/client';
-import { sessionCache, initializeSessionCache, refreshSessionCache, initializationState, getInitPromise } from '../app/session';
+import { sessionCache, initializeSessionCache, refreshSessionCache, initializationState } from '../app/session';
 import { fetchDevices, updateDeviceNickname } from '../app/api/client';
 import { ensureConfigLoaded } from '../app/reconnect';
 import { PushbulletCrypto } from '../lib/crypto';
@@ -23,7 +23,6 @@ import {
   setDeviceNickname,
   getAutoOpenLinks,
   setAutoOpenLinks,
-  getNotificationTimeout,
   setNotificationTimeout,
   setWebSocketClient,
   WEBSOCKET_URL
@@ -539,31 +538,31 @@ chrome.notifications.onClicked.addListener((notificationId) => {
 /**
  * Alarm listener
  */
-  chrome.alarms.onAlarm.addListener(async (alarm) => {
-    if (alarm.name === 'logFlush') {
-      // Flush logs to persistent storage
-      debugLogger.flush().then(() => {
-        console.log('[Logger] Log buffer flushed to persistent storage.');
-      });
-    } else if (alarm.name === 'websocketReconnect' && getApiKey()) {
-      debugLogger.websocket('INFO', 'Reconnection alarm triggered', {
-        alarmName: alarm.name,
-        hasApiKey: !!getApiKey(),
-        scheduledTime: alarm.scheduledTime ? new Date(alarm.scheduledTime).toISOString() : 'unknown'
-      });
-      connectWebSocket();
-    } else if (alarm.name === 'websocketReconnect') {
-      debugLogger.websocket('WARN', 'Reconnection alarm triggered but no API key available');
-    } else if (alarm.name === 'websocketHealthCheck') {
-      // SERVICE WORKER AMNESIA FIX: Ensure config is loaded before performing health check
-      await ensureConfigLoaded();
-      performWebSocketHealthCheck(websocketClient, connectWebSocket);
-      // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
-      chrome.storage.local.set({ lastSeenAlive: Date.now() });
-    } else if (alarm.name === 'pollingFallback') {
-      performPollingFetch();
-    }
-  });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'logFlush') {
+    // Flush logs to persistent storage
+    debugLogger.flush().then(() => {
+      console.log('[Logger] Log buffer flushed to persistent storage.');
+    });
+  } else if (alarm.name === 'websocketReconnect' && getApiKey()) {
+    debugLogger.websocket('INFO', 'Reconnection alarm triggered', {
+      alarmName: alarm.name,
+      hasApiKey: !!getApiKey(),
+      scheduledTime: alarm.scheduledTime ? new Date(alarm.scheduledTime).toISOString() : 'unknown'
+    });
+    connectWebSocket();
+  } else if (alarm.name === 'websocketReconnect') {
+    debugLogger.websocket('WARN', 'Reconnection alarm triggered but no API key available');
+  } else if (alarm.name === 'websocketHealthCheck') {
+    // SERVICE WORKER AMNESIA FIX: Ensure config is loaded before performing health check
+    await ensureConfigLoaded();
+    performWebSocketHealthCheck(websocketClient, connectWebSocket);
+    // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
+    chrome.storage.local.set({ lastSeenAlive: Date.now() });
+  } else if (alarm.name === 'pollingFallback') {
+    performPollingFetch();
+  }
+});
 
 /**
  * Context menu click handler
@@ -606,14 +605,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// Define actions that require configuration to be loaded
-const ACTIONS_REQUIRING_CONFIG = new Set([
-  'getSessionData',
-  'refreshSession',
-  'pushLink',
-  'pushNote',
-  'updateDeviceNickname'
-]);
+
 
 /**
  * Message listener for popup communication

@@ -140,7 +140,7 @@ export class DebugLogger {
     if (typeof data === 'object' && data !== null) {
       try {
         return JSON.stringify(data, null, 2);
-      } catch (e) {
+      } catch {
         return String(data);
       }
     }
@@ -160,7 +160,7 @@ export class DebugLogger {
     // Handle non-Error objects (like WebSocket Event objects)
     try {
       return JSON.stringify(error, null, 2);
-    } catch (e) {
+    } catch {
       return String(error);
     }
   }
@@ -473,7 +473,7 @@ try {
       "GLOBAL",
     );
   });
-} catch (_) {
+} catch {
   /* noop */
 }
 try {
@@ -487,6 +487,6 @@ try {
       );
     },
   );
-} catch (_) {
+} catch {
   /* noop */
 }

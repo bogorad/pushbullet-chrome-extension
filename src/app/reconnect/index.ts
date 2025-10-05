@@ -51,7 +51,7 @@ export async function ensureConfigLoaded(
         if (apiKey) {
           stateSetters.setApiKey(apiKey);
         }
-      } catch (err) {
+      } catch {
         // Swallow storage errors in ensureConfigLoaded
       }
     }
@@ -63,7 +63,7 @@ export async function ensureConfigLoaded(
         if (deviceIden) {
           stateSetters.setDeviceIden(deviceIden);
         }
-      } catch (err) {
+      } catch {
         // Swallow storage errors in ensureConfigLoaded
       }
     }
@@ -75,7 +75,7 @@ export async function ensureConfigLoaded(
         if (deviceNickname !== null && deviceNickname !== undefined) {
           stateSetters.setDeviceNickname(deviceNickname);
         }
-      } catch (err) {
+      } catch {
         // Swallow storage errors in ensureConfigLoaded
       }
     }
@@ -87,7 +87,7 @@ export async function ensureConfigLoaded(
         if (autoOpenLinks !== null && autoOpenLinks !== undefined) {
           stateSetters.setAutoOpenLinks(autoOpenLinks);
         }
-      } catch (err) {
+      } catch {
         // Swallow storage errors in ensureConfigLoaded
       }
     }
@@ -99,7 +99,7 @@ export async function ensureConfigLoaded(
         if (notificationTimeout !== null && notificationTimeout !== undefined) {
           stateSetters.setNotificationTimeout(notificationTimeout);
         }
-      } catch (err) {
+      } catch {
         // Swallow storage errors in ensureConfigLoaded
       }
     }
@@ -113,7 +113,7 @@ export async function ensureConfigLoaded(
         notificationTimeout: stateGetters.getNotificationTimeout(),
         deviceNickname: stateGetters.getDeviceNickname()
       });
-    } catch (err) {
+    } catch {
       // Swallow logging errors in ensureConfigLoaded
     }
   } catch (e) {
@@ -121,7 +121,7 @@ export async function ensureConfigLoaded(
       debugLogger.storage('WARN', 'ensureConfigLoaded encountered an error', {
         error: e && (e as Error).message
       });
-    } catch (err) {
+    } catch {
       // Ignore
     }
   }

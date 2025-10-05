@@ -5,18 +5,10 @@
 import { debugLogger } from '../lib/logging';
 import { performanceMonitor } from '../lib/perf';
 import { sessionCache } from '../app/session';
-import { fetchRecentPushes, fetchDevices } from '../app/api/client';
+import { fetchRecentPushes } from '../app/api/client';
 import {
   getApiKey,
-  setApiKey,
-  getDeviceIden,
-  setDeviceIden,
   getAutoOpenLinks,
-  setAutoOpenLinks,
-  getDeviceNickname,
-  setDeviceNickname,
-  getNotificationTimeout,
-  setNotificationTimeout,
   setPollingMode,
   isPollingMode
 } from './state';
@@ -25,8 +17,7 @@ import { isLinkPush } from '../types/domain';
 import { createNotificationWithTimeout } from '../app/notifications';
 import { ensureConfigLoaded } from '../app/reconnect';
 
-// Counter to ensure unique notification IDs
-const notificationCounter = 0;
+
 
 // Guard flag to prevent concurrent context menu setup
 // Ensures idempotent behavior when multiple startup events fire
@@ -80,7 +71,7 @@ function sanitizeUrl(url: string): string {
       return '';
     }
     return url;
-  } catch (error) {
+  } catch {
     debugLogger.general('WARN', 'Invalid URL provided', { url });
     return '';
   }
@@ -101,11 +92,8 @@ function isTrustedImageUrl(urlString: string): boolean {
     const url = new URL(urlString);
     // Trust Pushbullet domains and Google secure content domains
     return url.hostname.endsWith('.pushbullet.com') || 
-           url.hostname === 'lh3.googleusercontent.com' ||
-           url.hostname === 'lh4.googleusercontent.com' ||
-           url.hostname === 'lh5.googleusercontent.com' ||
-           url.hostname === 'lh6.googleusercontent.com';
-  } catch (error) {
+           /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);
+  } catch {
     debugLogger.general('WARN', 'Could not parse URL for domain check', { url: urlString });
     return false;
   }
@@ -122,7 +110,7 @@ export function updateExtensionTooltip(stateDescription: string): void {
     debugLogger.general('ERROR', 'Exception setting tooltip', {
       stateDescription,
       error: (error as Error).message
-    }, error as Error);
+    });
   }
 }
 
@@ -146,11 +134,11 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
     chrome.action.setBadgeBackgroundColor({ color: badgeColor });
 
     debugLogger.general('DEBUG', 'Updated connection status badge', { status, badgeText, badgeColor });
-  } catch (error) {
+  } catch {
     debugLogger.general('ERROR', 'Exception setting badge', {
       status,
       error: (error as Error).message
-    }, error as Error);
+    });
   }
 }
 

@@ -19,7 +19,6 @@
   var debugToggle = getElementById("debug-toggle");
   var debugStatusText = getElementById("debug-status-text");
   var lastUpdatedSpan = getElementById("last-updated");
-  var debugStatusEl = getElementById("debug-status");
   var totalLogsEl = getElementById("total-logs");
   var errorCountEl = getElementById("error-count");
   var websocketStatusEl = getElementById("websocket-status");

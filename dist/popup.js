@@ -179,10 +179,8 @@
   var openDebugDashboardBtn = getElementById(
     "open-debug-dashboard"
   );
-  var apiKey = null;
   var deviceNickname = "Chrome";
   var devices = [];
-  var hasInitialized = false;
   var currentPushType = "note";
   function init() {
     console.log("Popup initializing");
@@ -701,7 +699,7 @@
       });
     }
   }
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, _, __) => {
     if (message.action === "connectionStateChanged") {
       console.log("Connection state changed:", message.state);
     } else if (message.action === "pushesUpdated") {

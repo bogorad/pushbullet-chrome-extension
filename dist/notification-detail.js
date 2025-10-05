@@ -50,7 +50,7 @@
     try {
       const url = new URL(urlString);
       return url.hostname.endsWith(".pushbullet.com") || url.hostname === "lh3.googleusercontent.com" || url.hostname === "lh4.googleusercontent.com" || url.hostname === "lh5.googleusercontent.com" || url.hostname === "lh6.googleusercontent.com";
-    } catch (error) {
+    } catch {
       return false;
     }
   }

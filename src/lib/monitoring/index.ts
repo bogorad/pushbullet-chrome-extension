@@ -37,7 +37,7 @@ export class WebSocketStateMonitor {
     this.monitoringInterval = setInterval(() => {
       this.lastStateCheck = Date.now();
       const state = (globalThis as any).websocket ? (globalThis as any).websocket.readyState : null;
-      try { (globalThis as any).debugLogger?.websocket('DEBUG', 'WebSocket state check', { state }); } catch (_) { /* noop */ }
+      try { (globalThis as any).debugLogger?.websocket('DEBUG', 'WebSocket state check', { state }); } catch { /* noop */ }
     }, 30000);
   }
   stopMonitoring() { if (this.monitoringInterval) { clearInterval(this.monitoringInterval); this.monitoringInterval = null; } }

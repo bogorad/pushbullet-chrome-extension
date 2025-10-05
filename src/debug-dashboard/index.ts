@@ -2,7 +2,7 @@
  * Debug Dashboard
  */
 
-import { getElementById, querySelector, clearChildren, setHTML } from '../lib/ui/dom';
+import { getElementById } from '../lib/ui/dom';
 
 // Type definitions
 interface DebugSummary {
@@ -131,8 +131,7 @@ const debugToggle = getElementById<HTMLInputElement>('debug-toggle');
 const debugStatusText = getElementById<HTMLSpanElement>('debug-status-text');
 const lastUpdatedSpan = getElementById<HTMLSpanElement>('last-updated');
 
-// Summary elements
-const debugStatusEl = getElementById<HTMLDivElement>('debug-status');
+
 const totalLogsEl = getElementById<HTMLSpanElement>('total-logs');
 const errorCountEl = getElementById<HTMLSpanElement>('error-count');
 const websocketStatusEl = getElementById<HTMLSpanElement>('websocket-status'); // Now displays state machine status
