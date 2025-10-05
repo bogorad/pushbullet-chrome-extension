@@ -7,4 +7,3 @@ pushbullet-debug-*.json
 # Test coverage
 coverage/
 .vitest/
-dist/
