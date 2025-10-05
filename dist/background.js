@@ -800,7 +800,7 @@
           return;
         }
         const url = this.websocketUrl + apiKey2;
-        debugLogger.websocket("ERROR", "WebSocket URL construction debug", {
+        debugLogger.websocket("INFO", "WebSocket URL construction debug", {
           baseUrl: this.websocketUrl,
           apiKeyLength: apiKey2.length,
           apiKeyPrefix: apiKey2.substring(0, 8) + "...",
@@ -821,11 +821,15 @@
         });
         try {
           this.socket = new WebSocket(url);
-          debugLogger.websocket("DEBUG", "WebSocket object created successfully", {
-            url: this.websocketUrl + "***",
-            readyState: this.socket.readyState,
-            urlLength: url.length
-          });
+          debugLogger.websocket(
+            "DEBUG",
+            "WebSocket object created successfully",
+            {
+              url: this.websocketUrl + "***",
+              readyState: this.socket.readyState,
+              urlLength: url.length
+            }
+          );
         } catch (createError) {
           debugLogger.websocket("ERROR", "Failed to create WebSocket object", {
             url: this.websocketUrl + "***",
@@ -842,7 +846,9 @@
           socketExists: !!this.socket
         });
         this.socket.onopen = () => {
-          debugLogger.websocket("INFO", "WebSocket connection established", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+          debugLogger.websocket("INFO", "WebSocket connection established", {
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
           performanceMonitor.recordWebSocketConnection(true);
           wsStateMonitor.startMonitoring();
           globalEventBus.emit("websocket:polling:stop");
@@ -879,24 +885,40 @@
                 if ("push" in data && data.push) {
                   globalEventBus.emit("websocket:push", data.push);
                 } else {
-                  debugLogger.websocket("WARN", "Push message received without push payload");
+                  debugLogger.websocket(
+                    "WARN",
+                    "Push message received without push payload"
+                  );
                 }
                 break;
               case "nop":
-                debugLogger.websocket("DEBUG", "Received nop (keep-alive) message", {
-                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
-                });
+                debugLogger.websocket(
+                  "DEBUG",
+                  "Received nop (keep-alive) message",
+                  {
+                    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+                  }
+                );
                 break;
               // Note: 'ping' and 'pong' are WebSocket frame types, not message types
               // They should not appear in the message data, but we handle them defensively
               default:
-                debugLogger.websocket("WARN", "Unknown WebSocket message type received", {
-                  type: data.type
-                });
+                debugLogger.websocket(
+                  "WARN",
+                  "Unknown WebSocket message type received",
+                  {
+                    type: data.type
+                  }
+                );
                 break;
             }
           } catch (error) {
-            debugLogger.websocket("ERROR", "Failed to process WebSocket message", null, error);
+            debugLogger.websocket(
+              "ERROR",
+              "Failed to process WebSocket message",
+              null,
+              error
+            );
           }
         };
         this.socket.onerror = (error) => {
@@ -924,13 +946,19 @@
             }
           };
           debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
-          const websocketError = new Error(`WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`);
+          const websocketError = new Error(
+            `WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`
+          );
           websocketError.name = "WebSocketError";
-          globalErrorTracker.trackError(websocketError, {
-            category: "WEBSOCKET",
-            message: "WebSocket error occurred",
-            data: errorInfo
-          }, "WEBSOCKET");
+          globalErrorTracker.trackError(
+            websocketError,
+            {
+              category: "WEBSOCKET",
+              message: "WebSocket error occurred",
+              data: errorInfo
+            },
+            "WEBSOCKET"
+          );
         };
         this.socket.onclose = (event) => {
           const closeInfo = {
@@ -950,7 +978,11 @@
           });
           globalEventBus.emit("websocket:state", "disconnected");
           if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
-            debugLogger.websocket("ERROR", "Permanent WebSocket error - stopping reconnection attempts", closeInfo);
+            debugLogger.websocket(
+              "ERROR",
+              "Permanent WebSocket error - stopping reconnection attempts",
+              closeInfo
+            );
             try {
               showPermanentWebSocketError(closeInfo);
             } catch (_) {
@@ -959,17 +991,28 @@
           }
           this.reconnectAttempts++;
           performanceMonitor.recordWebSocketReconnection();
-          debugLogger.websocket("INFO", "Scheduling WebSocket reconnection (30s one-shot)", {
-            attempt: this.reconnectAttempts,
-            nextAttemptAt: new Date(Date.now() + 3e4).toISOString()
+          debugLogger.websocket(
+            "INFO",
+            "Scheduling WebSocket reconnection (30s one-shot)",
+            {
+              attempt: this.reconnectAttempts,
+              nextAttemptAt: new Date(Date.now() + 3e4).toISOString()
+            }
+          );
+          chrome.alarms.create("websocketReconnect", {
+            when: Date.now() + 3e4
           });
-          chrome.alarms.create("websocketReconnect", { when: Date.now() + 3e4 });
         };
       } catch (error) {
-        debugLogger.websocket("ERROR", "Failed to create WebSocket connection", {
-          url: this.websocketUrl + "***",
-          hasApiKey: !!this.getApiKey()
-        }, error);
+        debugLogger.websocket(
+          "ERROR",
+          "Failed to create WebSocket connection",
+          {
+            url: this.websocketUrl + "***",
+            hasApiKey: !!this.getApiKey()
+          },
+          error
+        );
       }
     }
     /**
@@ -985,7 +1028,12 @@
           this.socket = null;
           wsStateMonitor.stopMonitoring();
         } catch (error) {
-          debugLogger.websocket("ERROR", "Error disconnecting WebSocket", null, error);
+          debugLogger.websocket(
+            "ERROR",
+            "Error disconnecting WebSocket",
+            null,
+            error
+          );
         }
       }
     }
@@ -2664,9 +2712,6 @@
         });
       }
     },
-    onConnectWebSocket: () => {
-      connectWebSocket();
-    },
     onStartPolling: () => {
       checkPollingMode();
     },
@@ -2925,7 +2970,7 @@
     }
     chrome.notifications.clear(notificationId);
   });
-  chrome.alarms.onAlarm.addListener((alarm) => {
+  chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === "logFlush") {
       debugLogger.flush().then(() => {
         console.log("[Logger] Log buffer flushed to persistent storage.");
@@ -2940,6 +2985,7 @@
     } else if (alarm.name === "websocketReconnect") {
       debugLogger.websocket("WARN", "Reconnection alarm triggered but no API key available");
     } else if (alarm.name === "websocketHealthCheck") {
+      await ensureConfigLoaded();
       performWebSocketHealthCheck(websocketClient2, connectWebSocket);
       chrome.storage.local.set({ lastSeenAlive: Date.now() });
     } else if (alarm.name === "pollingFallback") {

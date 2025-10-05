@@ -140,9 +140,7 @@ const stateMachineCallbacks = {
       });
     }
   },
-  onConnectWebSocket: () => {
-    connectWebSocket();
-  },
+
   onStartPolling: () => {
     checkPollingMode();
   },
@@ -541,29 +539,31 @@ chrome.notifications.onClicked.addListener((notificationId) => {
 /**
  * Alarm listener
  */
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'logFlush') {
-    // Flush logs to persistent storage
-    debugLogger.flush().then(() => {
-      console.log('[Logger] Log buffer flushed to persistent storage.');
-    });
-  } else if (alarm.name === 'websocketReconnect' && getApiKey()) {
-    debugLogger.websocket('INFO', 'Reconnection alarm triggered', {
-      alarmName: alarm.name,
-      hasApiKey: !!getApiKey(),
-      scheduledTime: alarm.scheduledTime ? new Date(alarm.scheduledTime).toISOString() : 'unknown'
-    });
-    connectWebSocket();
-  } else if (alarm.name === 'websocketReconnect') {
-    debugLogger.websocket('WARN', 'Reconnection alarm triggered but no API key available');
-  } else if (alarm.name === 'websocketHealthCheck') {
-    performWebSocketHealthCheck(websocketClient, connectWebSocket);
-    // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
-    chrome.storage.local.set({ lastSeenAlive: Date.now() });
-  } else if (alarm.name === 'pollingFallback') {
-    performPollingFetch();
-  }
-});
+  chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === 'logFlush') {
+      // Flush logs to persistent storage
+      debugLogger.flush().then(() => {
+        console.log('[Logger] Log buffer flushed to persistent storage.');
+      });
+    } else if (alarm.name === 'websocketReconnect' && getApiKey()) {
+      debugLogger.websocket('INFO', 'Reconnection alarm triggered', {
+        alarmName: alarm.name,
+        hasApiKey: !!getApiKey(),
+        scheduledTime: alarm.scheduledTime ? new Date(alarm.scheduledTime).toISOString() : 'unknown'
+      });
+      connectWebSocket();
+    } else if (alarm.name === 'websocketReconnect') {
+      debugLogger.websocket('WARN', 'Reconnection alarm triggered but no API key available');
+    } else if (alarm.name === 'websocketHealthCheck') {
+      // SERVICE WORKER AMNESIA FIX: Ensure config is loaded before performing health check
+      await ensureConfigLoaded();
+      performWebSocketHealthCheck(websocketClient, connectWebSocket);
+      // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
+      chrome.storage.local.set({ lastSeenAlive: Date.now() });
+    } else if (alarm.name === 'pollingFallback') {
+      performPollingFetch();
+    }
+  });
 
 /**
  * Context menu click handler
