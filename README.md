@@ -1,6 +1,6 @@
-# Pushbullet for Chrome (Unofficial)
+# Pushbullet for Chrome with SMS reception (Unofficial)
 
-A Manifest V3 compatible Chrome extension for Pushbullet. This extension allows you to receive and send pushes, view mirrored notifications, and interact with your Pushbullet account directly from your browser.
+A Manifest V3 compatible Chrome extension for Pushbullet. This extension allows you to receive and send pushes, view mirrored notifications (including SMS messages), and interact with your Pushbullet account directly from your browser.
 
 > This project is not affiliated with, endorsed by, or connected to Pushbullet Inc.
 
@@ -27,6 +27,7 @@ The extension provides several ways to interact with your Pushbullet account.
 | **Toolbar Pop-up** | Click the extension icon in the toolbar to open the main interface. From here, you can send notes, links, or files, and view your 10 most recent pushes. |
 | **Context Menu** | Right-click on a webpage, a link, an image, or selected text to open the context menu. You will find options to instantly push the selected content. |
 | **Notifications** | Incoming pushes from your devices will appear as native system notifications. Clicking a notification will open its content. |
+| **SMS Reception** | View and reply to SMS messages from your computer, provided you have an Android phone connected to your Pushbullet account. |
 | **Auto-Open Links** | In the extension's options, you can enable a setting to have incoming link pushes automatically open in a new, non-focused browser tab. |
 
 ---
