@@ -2609,6 +2609,18 @@
           }, error);
         }
       }
+      const displayableTypes = ["mirror", "note", "link"];
+      if (!displayableTypes.includes(decryptedPush.type)) {
+        debugLogger.general("INFO", "Ignoring non-displayable push of type", {
+          pushType: decryptedPush.type,
+          pushIden: decryptedPush.iden
+        });
+        return;
+      }
+      debugLogger.general("INFO", "Processing displayable push of type", {
+        pushType: decryptedPush.type,
+        pushIden: decryptedPush.iden
+      });
       if (sessionCache.recentPushes) {
         sessionCache.recentPushes.unshift(decryptedPush);
         sessionCache.lastUpdated = Date.now();

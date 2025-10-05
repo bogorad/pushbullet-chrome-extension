@@ -321,6 +321,24 @@ function connectWebSocket(): void {
       }
     }
 
+    // --- FILTERING LOGIC: Only process displayable push types ---
+    const displayableTypes = ['mirror', 'note', 'link'];
+    
+    if (!displayableTypes.includes(decryptedPush.type)) {
+      // Log for debugging purposes and ignore the push
+      debugLogger.general('INFO', 'Ignoring non-displayable push of type', {
+        pushType: decryptedPush.type,
+        pushIden: decryptedPush.iden
+      });
+      return;
+    }
+
+    // Log that we're processing a displayable push
+    debugLogger.general('INFO', 'Processing displayable push of type', {
+      pushType: decryptedPush.type,
+      pushIden: decryptedPush.iden
+    });
+
     // Update cache (prepend)
     if (sessionCache.recentPushes) {
       sessionCache.recentPushes.unshift(decryptedPush);
