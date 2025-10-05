@@ -7,3 +7,4 @@ pushbullet-debug-*.json
 # Test coverage
 coverage/
 .vitest/
+.auggie.mcp.json
