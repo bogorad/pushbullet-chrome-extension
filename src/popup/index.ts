@@ -94,6 +94,7 @@ const openDebugDashboardBtn = getElementById<HTMLButtonElement>(
 // State variables
 let deviceNickname = "Chrome";
 const devices: Device[] = [];
+let hasInitialized = false;
 let currentPushType: PushType = "note";
 // websocket variable removed - background script manages the single WebSocket connection
 

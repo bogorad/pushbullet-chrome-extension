@@ -181,6 +181,7 @@
   );
   var deviceNickname = "Chrome";
   var devices = [];
+  var hasInitialized = false;
   var currentPushType = "note";
   function init() {
     console.log("Popup initializing");

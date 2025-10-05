@@ -17,7 +17,7 @@ Pushbullet refuses to publish Manifest-V3 compatible chrome extension, and Chrom
 - Maintain (create if needed) the file STATUS.md, put all your detailed plans there as checklists. I has dual use: I monitor progress and in case you fail you can understand the context and continue. Update STATUS.md immediately prior to executing every task.
 - Run `npm build` and `npm run test` after successful changes.
 - Read, respect and maintain `./docs/adr/`
-- After each successful code change, bump the minor version number in manifest.json - e.g., 2.84.6 to 2.84.7, in case there is no minor version, add it - e.g., 2.9 becomes 2.9.1.
+- After each successful code change, bump the patch version number in manifest.json - e.g., 2.84.6 to 2.84.7, in case there is no patch version, add it - e.g., 2.9 becomes 2.9.1.
 
 ## Coding Style:
 
