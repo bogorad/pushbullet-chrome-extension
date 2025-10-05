@@ -52,7 +52,7 @@
               echo "Error: vitest not found after installation"
               exit 1
             fi
-            npm audit fix --force
+            # npm audit fix --force
             # Set zsh as the shell
             export SHELL=${pkgs.zsh}/bin/zsh
             echo "Environment ready. Run 'vitest run' or 'npm test' to execute tests."

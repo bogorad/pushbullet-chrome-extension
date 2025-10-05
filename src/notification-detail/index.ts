@@ -43,6 +43,49 @@ function loadNotification(): void {
 }
 
 /**
+ * Check if URL is from a trusted image domain
+ */
+function isTrustedImageUrl(urlString: string): boolean {
+  if (!urlString) return false;
+  
+  try {
+    const url = new URL(urlString);
+    return url.hostname.endsWith('.pushbullet.com') || 
+           url.hostname === 'lh3.googleusercontent.com' ||
+           url.hostname === 'lh4.googleusercontent.com' ||
+           url.hostname === 'lh5.googleusercontent.com' ||
+           url.hostname === 'lh6.googleusercontent.com';
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Download file from URL
+ */
+function downloadFile(fileUrl: string, fileName?: string): void {
+  // Create a temporary anchor element to trigger download
+  const link = document.createElement('a');
+  link.href = fileUrl;
+  link.download = fileName || 'download';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  
+  // Trigger download
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  
+  // Show feedback
+  const feedback = getElementById<HTMLDivElement>('copy-feedback');
+  setText(feedback, '✓ Download started!');
+  feedback.classList.add('show');
+  setTimeout(() => {
+    feedback.classList.remove('show');
+  }, 2000);
+}
+
+/**
  * Display notification data
  */
 function displayNotification(push: Push): void {
@@ -51,42 +94,81 @@ function displayNotification(push: Push): void {
   const typeBadgeEl = getElementById<HTMLSpanElement>('type-badge');
   const timestampEl = getElementById<HTMLSpanElement>('timestamp');
   const sourceEl = getElementById<HTMLSpanElement>('source');
+  const fileInfoEl = getElementById<HTMLDivElement>('file-info');
+  const fileNameEl = getElementById<HTMLDivElement>('file-name');
+  const fileTypeEl = getElementById<HTMLDivElement>('file-type');
+  const imagePreviewEl = getElementById<HTMLDivElement>('image-preview');
+  const previewImageEl = getElementById<HTMLImageElement>('preview-image');
+  const downloadBtn = getElementById<HTMLButtonElement>('download-btn');
+  const copyBtn = getElementById<HTMLButtonElement>('copy-btn');
 
   // Extract title and message based on push type
   let title = 'Push';
   let message = '';
-  let type = push.type || 'unknown';
+  let type = push.type ?? 'unknown';
+
+  // Hide all optional elements initially
+  fileInfoEl.style.display = 'none';
+  imagePreviewEl.style.display = 'none';
+  downloadBtn.style.display = 'none';
 
   if (push.type === 'note') {
-    title = push.title || 'Note';
-    message = push.body || '';
+    title = push.title ?? 'Note';
+    message = push.body ?? '';
   } else if (push.type === 'link') {
-    title = push.title || 'Link';
-    message = push.url || '';
+    title = push.title ?? 'Link';
+    message = push.url ?? '';
   } else if (push.type === 'file') {
-    title = push.file_name || 'File';
-    message = push.body || push.file_url || '';
+    const filePush = push as any;
+    title = filePush.file_name || 'File';
+    message = filePush.body || filePush.file_url || '';
+    
+    // Show file info
+    if (filePush.file_name) {
+      setText(fileNameEl, filePush.file_name);
+      fileInfoEl.style.display = 'block';
+    }
+    if (filePush.file_type) {
+      setText(fileTypeEl, filePush.file_type);
+    }
+    
+    // Check for image preview
+    const imageUrl = filePush.image_url || (filePush.file_type?.startsWith('image/') ? filePush.file_url : null);
+    if (imageUrl && isTrustedImageUrl(imageUrl)) {
+      previewImageEl.src = imageUrl;
+      imagePreviewEl.style.display = 'block';
+      
+      // Hide copy button for image previews to avoid confusion
+      copyBtn.style.display = 'none';
+    }
+    
+    // Show download button if we have a file URL
+    if (filePush.file_url) {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.onclick = () => downloadFile(filePush.file_url, filePush.file_name);
+    }
   } else if (push.type === 'mirror') {
     title = push.title || push.application_name || 'Notification';
     message = push.body || '';
-  } else if (push.type === 'sms_changed') {
-    if (push.notifications && push.notifications.length > 0) {
-      const sms = push.notifications[0];
+  } else if ((push as any).type === 'sms_changed') {
+    const smsPush = push as any;
+    if (smsPush.notifications && smsPush.notifications.length > 0) {
+      const sms = smsPush.notifications[0];
       title = sms.title || 'SMS';
       message = sms.body || '';
     } else {
       title = 'SMS';
       message = 'New SMS received';
     }
-    type = 'sms';
+    type = 'sms' as any;
   } else {
     title = 'Push';
     message = JSON.stringify(push, null, 2);
   }
 
-  setText(titleEl, title);
-  setText(messageEl, message);
-  setText(typeBadgeEl, type.toUpperCase());
+  setText(titleEl, title ?? 'Push');
+  setText(messageEl, message ?? '');
+  setText(typeBadgeEl, (type ?? 'unknown').toUpperCase());
 
   // Set timestamp
   if (push.created) {
@@ -119,7 +201,7 @@ function detectVerificationCode(title: string, message: string): void {
   // Look for 6-digit number
   const codeMatch = (title + ' ' + message).match(/\b(\d{6})\b/);
 
-  if (codeMatch) {
+  if (codeMatch && codeMatch[1]) {
     const code = codeMatch[1];
 
     // Create code copy button

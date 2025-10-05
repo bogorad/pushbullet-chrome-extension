@@ -1,5 +1,5 @@
 import { performanceMonitor } from '../../lib/perf';
-import { debugLogger } from '../../lib/logging';
+import { debugLogger, globalErrorTracker } from '../../lib/logging';
 import { wsStateMonitor } from '../../lib/monitoring';
 import type { WebSocketMessage, Push } from '../../types/domain';
 import { WS_READY_STATE } from '../../types/domain';
@@ -79,11 +79,56 @@ export class WebSocketClient {
         return;
       }
 
+      // Fix WebSocket URL construction - Pushbullet uses simple concatenation
       const url = this.websocketUrl + apiKey;
-      debugLogger.websocket('INFO', 'Connecting to WebSocket', { url: this.websocketUrl + '***' });
+      
+      // CRITICAL: Log the exact URL being constructed (without exposing full API key)
+      debugLogger.websocket('ERROR', 'WebSocket URL construction debug', {
+        baseUrl: this.websocketUrl,
+        apiKeyLength: apiKey.length,
+        apiKeyPrefix: apiKey.substring(0, 8) + '...',
+        finalUrlLength: url.length,
+        urlPattern: this.websocketUrl + '***'
+      });
+      debugLogger.websocket('INFO', 'Connecting to WebSocket', { 
+        url: this.websocketUrl + '***',
+        reconnectAttempts: this.reconnectAttempts,
+        currentSocketState: this.socket ? this.socket.readyState : 'no_existing_socket',
+        apiKeyPresent: !!apiKey
+      });
       this.reconnectAttempts = 0;
 
-      this.socket = new WebSocket(url);
+      // Log pre-creation state
+      debugLogger.websocket('DEBUG', 'About to create WebSocket object', {
+        url: this.websocketUrl + '***',
+        currentSocketExists: !!this.socket,
+        currentSocketState: this.socket ? this.socket.readyState : 'null'
+      });
+
+      try {
+        this.socket = new WebSocket(url);
+        debugLogger.websocket('DEBUG', 'WebSocket object created successfully', {
+          url: this.websocketUrl + '***',
+          readyState: this.socket.readyState,
+          urlLength: url.length
+        });
+      } catch (createError) {
+        debugLogger.websocket('ERROR', 'Failed to create WebSocket object', {
+          url: this.websocketUrl + '***',
+          error: createError instanceof Error ? createError.message : String(createError),
+          errorType: createError?.constructor?.name,
+          timestamp: new Date().toISOString()
+        });
+        // Reset socket to null on creation failure
+        this.socket = null;
+        throw createError;
+      }
+
+      debugLogger.websocket('DEBUG', 'Setting up WebSocket event handlers', {
+        url: this.websocketUrl + '***',
+        readyState: this.socket.readyState,
+        socketExists: !!this.socket
+      });
 
       this.socket.onopen = () => {
         debugLogger.websocket('INFO', 'WebSocket connection established', { timestamp: new Date().toISOString() });
@@ -148,17 +193,8 @@ export class WebSocketClient {
             });
             break;
 
-          case 'ping':
-            debugLogger.websocket('DEBUG', 'Received ping (keep-alive) message', {
-              timestamp: new Date().toISOString()
-            });
-            break;
-
-          case 'pong':
-            debugLogger.websocket('DEBUG', 'Received pong (keep-alive) message', {
-              timestamp: new Date().toISOString()
-            });
-            break;
+          // Note: 'ping' and 'pong' are WebSocket frame types, not message types
+          // They should not appear in the message data, but we handle them defensively
 
           default:
             debugLogger.websocket('WARN', 'Unknown WebSocket message type received', {
@@ -172,10 +208,45 @@ export class WebSocketClient {
       };
 
       this.socket.onerror = (error) => {
-        debugLogger.websocket('ERROR', 'WebSocket error occurred', {
-          error: (error as any).message || 'Unknown error',
-          readyState: this.socket ? this.socket.readyState : 'null'
-        }, error as any);
+        // WebSocket error events are generic Event objects, not Error instances
+        // This can occur during connection attempt, socket creation, or network issues
+        // CRITICAL: This error handler might be called when this.socket is null or undefined
+        
+        const currentSocket = this.socket; // Local reference to avoid race conditions
+        const socketExists = !!currentSocket;
+        const socketState = socketExists ? currentSocket.readyState : 'no_socket';
+        const isConnecting = socketExists ? currentSocket.readyState === WS_READY_STATE.CONNECTING : false;
+        const isConnected = socketExists ? currentSocket.readyState === WS_READY_STATE.OPEN : false;
+        
+        const errorInfo = {
+          type: (error as any).type || 'unknown',
+          target: (error as any).target ? 'WebSocket' : 'unknown',
+          readyState: socketState,
+          socketExists: socketExists,
+          url: this.websocketUrl,
+          timestamp: new Date().toISOString(),
+          reconnectAttempts: this.reconnectAttempts,
+          // Additional debugging info
+          isConnecting: isConnecting,
+          isConnected: isConnected,
+          errorEventDetails: {
+            timeStamp: (error as any).timeStamp,
+            bubbles: (error as any).bubbles,
+            cancelable: (error as any).cancelable,
+            currentTarget: (error as any).currentTarget ? 'WebSocket' : 'unknown'
+          }
+        };
+        
+        debugLogger.websocket('ERROR', 'WebSocket error occurred', errorInfo);
+        
+        // Create a proper Error object for tracking
+        const websocketError = new Error(`WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? 'exists' : 'null'}, state: ${socketState})`);
+        websocketError.name = 'WebSocketError';
+        globalErrorTracker.trackError(websocketError, { 
+          category: 'WEBSOCKET', 
+          message: 'WebSocket error occurred',
+          data: errorInfo 
+        }, 'WEBSOCKET');
       };
 
       this.socket.onclose = (event) => {

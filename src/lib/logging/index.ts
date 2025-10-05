@@ -133,6 +133,38 @@ export class DebugLogger {
     return `${now.toISOString()} (+${elapsed}ms)`;
   }
 
+  /**
+   * Format data for console output to avoid [object Object]
+   */
+  private formatDataForConsole(data: unknown): string {
+    if (typeof data === 'object' && data !== null) {
+      try {
+        return JSON.stringify(data, null, 2);
+      } catch (e) {
+        return String(data);
+      }
+    }
+    return String(data ?? 'null');
+  }
+
+  /**
+   * Format error for console output
+   */
+  private formatErrorForConsole(error: Error | null): string {
+    if (!error) return 'null';
+    
+    if (error instanceof Error) {
+      return `${error.name}: ${error.message}`;
+    }
+    
+    // Handle non-Error objects (like WebSocket Event objects)
+    try {
+      return JSON.stringify(error, null, 2);
+    } catch (e) {
+      return String(error);
+    }
+  }
+
   log(
     category: LogCategory,
     level: LogLevel,
@@ -173,14 +205,14 @@ export class DebugLogger {
     case "ERROR":
       if (sanitized && error) {
         console.error(full);
-        console.error("  Data:", sanitized);
-        console.error("  Error:", error);
+        console.error("  Data:", this.formatDataForConsole(sanitized));
+        console.error("  Error:", this.formatErrorForConsole(error));
       } else if (sanitized) {
         console.error(full);
-        console.error("  Data:", sanitized);
+        console.error("  Data:", this.formatDataForConsole(sanitized));
       } else if (error) {
         console.error(full);
-        console.error("  Error:", error);
+        console.error("  Error:", this.formatErrorForConsole(error));
       } else {
         console.error(full);
       }
@@ -188,7 +220,7 @@ export class DebugLogger {
     case "WARN":
       if (sanitized) {
         console.warn(full);
-        console.warn("  Data:", sanitized);
+        console.warn("  Data:", this.formatDataForConsole(sanitized));
       } else {
         console.warn(full);
       }
@@ -196,7 +228,7 @@ export class DebugLogger {
     case "INFO":
       if (sanitized) {
         console.info(full);
-        console.info("  Data:", sanitized);
+        console.info("  Data:", this.formatDataForConsole(sanitized));
       } else {
         console.info(full);
       }

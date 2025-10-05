@@ -67,20 +67,47 @@ function sanitizeText(text: string): string {
 }
 
 /**
- * Sanitize URL to ensure it's safe
+ * Sanitize URL to prevent XSS attacks
+ * Validates URL format and ensures it's safe
  */
 function sanitizeUrl(url: string): string {
   if (!url) return '';
-
+  
   try {
-    const parsed = new URL(url);
-    // Only allow http and https protocols
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    const urlObj = new URL(url);
+    // Only allow http/https protocols
+    if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
       return '';
     }
-    return parsed.href;
-  } catch {
+    return url;
+  } catch (error) {
+    debugLogger.general('WARN', 'Invalid URL provided', { url });
     return '';
+  }
+}
+
+/**
+ * Validates if a given URL belongs to trusted domains for image loading.
+ * This includes Pushbullet domains and Google secure content domains.
+ * @param urlString The URL to validate.
+ * @returns True if the URL is from a trusted domain, false otherwise.
+ */
+function isTrustedImageUrl(urlString: string): boolean {
+  if (!urlString) {
+    return false;
+  }
+
+  try {
+    const url = new URL(urlString);
+    // Trust Pushbullet domains and Google secure content domains
+    return url.hostname.endsWith('.pushbullet.com') || 
+           url.hostname === 'lh3.googleusercontent.com' ||
+           url.hostname === 'lh4.googleusercontent.com' ||
+           url.hostname === 'lh5.googleusercontent.com' ||
+           url.hostname === 'lh6.googleusercontent.com';
+  } catch (error) {
+    debugLogger.general('WARN', 'Could not parse URL for domain check', { url: urlString });
+    return false;
   }
 }
 
@@ -219,7 +246,12 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
       iconUrl: chrome.runtime.getURL('icons/icon128.png'),
     };
 
-    let notificationOptions: chrome.notifications.NotificationOptions;
+    let notificationOptions: chrome.notifications.NotificationOptions = {
+      ...baseOptions,
+      type: 'basic',
+      title: 'Pushbullet',
+      message: 'New push received'
+    };
 
     // Handle undecrypted pushes first
     if (push.encrypted && 'ciphertext' in push) {
@@ -230,9 +262,9 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
         message: 'An encrypted push was received. To view future encrypted pushes you need to add the correct end2end password in options'
       };
       debugLogger.notifications('INFO', 'Showing notification for undecrypted push');
-    } else if (push.type === 'sms_changed' && push.notifications && push.notifications.length > 0) {
+    } else if ((push as any).type === 'sms_changed' && (push as any).notifications && (push as any).notifications.length > 0) {
       // Handle MMS / SMS with image
-      const mms = push.notifications[0];
+      const mms = (push as any).notifications[0];
       notificationOptions = {
         ...baseOptions,
         type: 'image',
@@ -249,36 +281,133 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
       if (push.type === 'note') {
         title = push.title || 'New Note';
         message = push.body || '';
+        
+        notificationOptions = {
+          ...baseOptions,
+          type: 'basic',
+          title: title,
+          message: message
+        };
       } else if (push.type === 'link') {
         title = push.title || push.url || 'New Link';
         message = push.url || '';
+        
+        notificationOptions = {
+          ...baseOptions,
+          type: 'basic',
+          title: title,
+          message: message
+        };
       } else if (push.type === 'file') {
-        // --- ADD THE NEW DEBUG LOG HERE ---
+        // Security validation for image URLs in file pushes
         debugLogger.notifications('DEBUG', 'Complete file push object received', { push });
-        // --- END OF NEW CODE ---
-
-        if (push.title) { // MMS-style file push
-          title = push.title;
-          message = push.body || `Image (${push.file_type})`;
+        
+        let fileTitle = 'New File';
+        let fileMessage = '';
+        
+        if ((push as any).title) { // MMS-style file push
+          fileTitle = (push as any).title;
+          fileMessage = (push as any).body || `Image (${(push as any).file_type})`;
         } else { // Regular file push
-          title = `New File: ${push.file_name || 'unknown file'}`;
-          message = push.body || push.file_type || '';
+          fileTitle = `New File: ${(push as any).file_name || 'unknown file'}`;
+          fileMessage = (push as any).body || (push as any).file_type || '';
+        }
+
+        // Security validation for image URLs - check both image_url and file_url
+        const imageUrl = (push as any).image_url;
+        const fileUrl = (push as any).file_url;
+        
+        // Determine which URL to use for image preview
+        let previewUrl = null;
+        if (imageUrl && isTrustedImageUrl(imageUrl)) {
+          previewUrl = imageUrl;
+        } else if (fileUrl && isTrustedImageUrl(fileUrl) && (push as any).file_type?.startsWith('image/')) {
+          previewUrl = fileUrl;
+        }
+
+        if (previewUrl) {
+          // Show image notification for trusted Pushbullet URLs
+          notificationOptions = {
+            ...baseOptions,
+            type: 'image',
+            title: fileTitle,
+            message: fileMessage,
+            imageUrl: previewUrl
+          };
+          debugLogger.notifications('INFO', 'Showing image notification for trusted file push', { 
+            fileName: (push as any).file_name,
+            previewUrl: previewUrl 
+          });
+        } else {
+          // Fallback to basic notification for security
+          notificationOptions = {
+            ...baseOptions,
+            type: 'basic',
+            title: fileTitle,
+            message: fileMessage
+          };
+          if (imageUrl && !isTrustedImageUrl(imageUrl)) {
+            debugLogger.notifications('WARN', 'Ignored image from untrusted domain for file push', { 
+              imageUrl: imageUrl 
+            });
+          }
         }
       } else if (push.type === 'mirror') {
-        title = push.title || push.application_name || 'Notification';
-        message = push.body || '';
-      }
+        const mirrorTitle = push.title || push.application_name || 'Notification';
+        const mirrorMessage = push.body || '';
 
-      notificationOptions = {
-        ...baseOptions,
-        type: 'basic',
-        title: title,
-        message: message
-      };
-      debugLogger.notifications('INFO', 'Showing basic notification', { pushType: push.type });
+        // Security validation for image URLs
+        const mirrorImageUrl = (push as any).image_url;
+        if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
+          notificationOptions = {
+            ...baseOptions,
+            type: 'image',
+            title: mirrorTitle,
+            message: mirrorMessage,
+            imageUrl: mirrorImageUrl
+          };
+          debugLogger.notifications('INFO', 'Showing image notification for trusted mirrored push', { pushType: push.type });
+        } else {
+          // Fallback to basic notification for security
+          notificationOptions = {
+            ...baseOptions,
+            type: 'basic',
+            title: mirrorTitle,
+            message: mirrorMessage
+          };
+          if (mirrorImageUrl) {
+            debugLogger.notifications('WARN', 'Ignored image from untrusted domain for mirror push', { imageUrl: mirrorImageUrl });
+          }
+        }
+      } else {
+        // Default handler for other types
+        const defaultTitle = 'Pushbullet';
+        const defaultMessage = `New ${push.type}`;
+        
+        notificationOptions = {
+          ...baseOptions,
+          type: 'basic',
+          title: defaultTitle,
+          message: defaultMessage
+        };
+        debugLogger.notifications('INFO', 'Showing basic notification', { pushType: push.type });
+      }
     }
 
-    await chrome.notifications.create(notificationId, notificationOptions);
+    // Ensure all required properties are defined
+    const finalNotificationOptions: chrome.notifications.NotificationCreateOptions = {
+      type: notificationOptions.type || 'basic',
+      title: notificationOptions.title || 'Pushbullet',
+      message: notificationOptions.message || 'New push received',
+      iconUrl: notificationOptions.iconUrl || chrome.runtime.getURL('icons/icon128.png')
+    };
+    
+    // Add optional properties if they exist
+    if (notificationOptions.imageUrl) {
+      finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
+    }
+    
+    await chrome.notifications.create(notificationId, finalNotificationOptions);
 
     if (notificationDataStore) {
       notificationDataStore.set(notificationId, push);

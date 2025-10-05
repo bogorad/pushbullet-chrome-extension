@@ -88,6 +88,33 @@
       const elapsed = Date.now() - this.startTime;
       return `${now.toISOString()} (+${elapsed}ms)`;
     }
+    /**
+     * Format data for console output to avoid [object Object]
+     */
+    formatDataForConsole(data) {
+      if (typeof data === "object" && data !== null) {
+        try {
+          return JSON.stringify(data, null, 2);
+        } catch (e) {
+          return String(data);
+        }
+      }
+      return String(data ?? "null");
+    }
+    /**
+     * Format error for console output
+     */
+    formatErrorForConsole(error) {
+      if (!error) return "null";
+      if (error instanceof Error) {
+        return `${error.name}: ${error.message}`;
+      }
+      try {
+        return JSON.stringify(error, null, 2);
+      } catch (e) {
+        return String(error);
+      }
+    }
     log(category, level, message, data = null, error = null) {
       if (!DEBUG_CONFIG.enabled || !DEBUG_CONFIG.categories[category]) return;
       const timestamp = this.getTimestamp();
@@ -118,14 +145,14 @@
         case "ERROR":
           if (sanitized && error) {
             console.error(full);
-            console.error("  Data:", sanitized);
-            console.error("  Error:", error);
+            console.error("  Data:", this.formatDataForConsole(sanitized));
+            console.error("  Error:", this.formatErrorForConsole(error));
           } else if (sanitized) {
             console.error(full);
-            console.error("  Data:", sanitized);
+            console.error("  Data:", this.formatDataForConsole(sanitized));
           } else if (error) {
             console.error(full);
-            console.error("  Error:", error);
+            console.error("  Error:", this.formatErrorForConsole(error));
           } else {
             console.error(full);
           }
@@ -133,7 +160,7 @@
         case "WARN":
           if (sanitized) {
             console.warn(full);
-            console.warn("  Data:", sanitized);
+            console.warn("  Data:", this.formatDataForConsole(sanitized));
           } else {
             console.warn(full);
           }
@@ -141,7 +168,7 @@
         case "INFO":
           if (sanitized) {
             console.info(full);
-            console.info("  Data:", sanitized);
+            console.info("  Data:", this.formatDataForConsole(sanitized));
           } else {
             console.info(full);
           }
@@ -773,9 +800,47 @@
           return;
         }
         const url = this.websocketUrl + apiKey2;
-        debugLogger.websocket("INFO", "Connecting to WebSocket", { url: this.websocketUrl + "***" });
+        debugLogger.websocket("ERROR", "WebSocket URL construction debug", {
+          baseUrl: this.websocketUrl,
+          apiKeyLength: apiKey2.length,
+          apiKeyPrefix: apiKey2.substring(0, 8) + "...",
+          finalUrlLength: url.length,
+          urlPattern: this.websocketUrl + "***"
+        });
+        debugLogger.websocket("INFO", "Connecting to WebSocket", {
+          url: this.websocketUrl + "***",
+          reconnectAttempts: this.reconnectAttempts,
+          currentSocketState: this.socket ? this.socket.readyState : "no_existing_socket",
+          apiKeyPresent: !!apiKey2
+        });
         this.reconnectAttempts = 0;
-        this.socket = new WebSocket(url);
+        debugLogger.websocket("DEBUG", "About to create WebSocket object", {
+          url: this.websocketUrl + "***",
+          currentSocketExists: !!this.socket,
+          currentSocketState: this.socket ? this.socket.readyState : "null"
+        });
+        try {
+          this.socket = new WebSocket(url);
+          debugLogger.websocket("DEBUG", "WebSocket object created successfully", {
+            url: this.websocketUrl + "***",
+            readyState: this.socket.readyState,
+            urlLength: url.length
+          });
+        } catch (createError) {
+          debugLogger.websocket("ERROR", "Failed to create WebSocket object", {
+            url: this.websocketUrl + "***",
+            error: createError instanceof Error ? createError.message : String(createError),
+            errorType: createError?.constructor?.name,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          this.socket = null;
+          throw createError;
+        }
+        debugLogger.websocket("DEBUG", "Setting up WebSocket event handlers", {
+          url: this.websocketUrl + "***",
+          readyState: this.socket.readyState,
+          socketExists: !!this.socket
+        });
         this.socket.onopen = () => {
           debugLogger.websocket("INFO", "WebSocket connection established", { timestamp: (/* @__PURE__ */ new Date()).toISOString() });
           performanceMonitor.recordWebSocketConnection(true);
@@ -822,16 +887,8 @@
                   timestamp: (/* @__PURE__ */ new Date()).toISOString()
                 });
                 break;
-              case "ping":
-                debugLogger.websocket("DEBUG", "Received ping (keep-alive) message", {
-                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
-                });
-                break;
-              case "pong":
-                debugLogger.websocket("DEBUG", "Received pong (keep-alive) message", {
-                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
-                });
-                break;
+              // Note: 'ping' and 'pong' are WebSocket frame types, not message types
+              // They should not appear in the message data, but we handle them defensively
               default:
                 debugLogger.websocket("WARN", "Unknown WebSocket message type received", {
                   type: data.type
@@ -843,10 +900,37 @@
           }
         };
         this.socket.onerror = (error) => {
-          debugLogger.websocket("ERROR", "WebSocket error occurred", {
-            error: error.message || "Unknown error",
-            readyState: this.socket ? this.socket.readyState : "null"
-          }, error);
+          const currentSocket = this.socket;
+          const socketExists = !!currentSocket;
+          const socketState = socketExists ? currentSocket.readyState : "no_socket";
+          const isConnecting = socketExists ? currentSocket.readyState === 0 /* CONNECTING */ : false;
+          const isConnected = socketExists ? currentSocket.readyState === 1 /* OPEN */ : false;
+          const errorInfo = {
+            type: error.type || "unknown",
+            target: error.target ? "WebSocket" : "unknown",
+            readyState: socketState,
+            socketExists,
+            url: this.websocketUrl,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            reconnectAttempts: this.reconnectAttempts,
+            // Additional debugging info
+            isConnecting,
+            isConnected,
+            errorEventDetails: {
+              timeStamp: error.timeStamp,
+              bubbles: error.bubbles,
+              cancelable: error.cancelable,
+              currentTarget: error.currentTarget ? "WebSocket" : "unknown"
+            }
+          };
+          debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
+          const websocketError = new Error(`WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`);
+          websocketError.name = "WebSocketError";
+          globalErrorTracker.trackError(websocketError, {
+            category: "WEBSOCKET",
+            message: "WebSocket error occurred",
+            data: errorInfo
+          }, "WEBSOCKET");
         };
         this.socket.onclose = (event) => {
           const closeInfo = {
@@ -1765,13 +1849,26 @@
   function sanitizeUrl(url) {
     if (!url) return "";
     try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      const urlObj = new URL(url);
+      if (urlObj.protocol !== "http:" && urlObj.protocol !== "https:") {
         return "";
       }
-      return parsed.href;
-    } catch {
+      return url;
+    } catch (error) {
+      debugLogger.general("WARN", "Invalid URL provided", { url });
       return "";
+    }
+  }
+  function isTrustedImageUrl(urlString) {
+    if (!urlString) {
+      return false;
+    }
+    try {
+      const url = new URL(urlString);
+      return url.hostname.endsWith(".pushbullet.com") || url.hostname === "lh3.googleusercontent.com" || url.hostname === "lh4.googleusercontent.com" || url.hostname === "lh5.googleusercontent.com" || url.hostname === "lh6.googleusercontent.com";
+    } catch (error) {
+      debugLogger.general("WARN", "Could not parse URL for domain check", { url: urlString });
+      return false;
     }
   }
   function updateExtensionTooltip(stateDescription) {
@@ -1864,7 +1961,12 @@
       const baseOptions = {
         iconUrl: chrome.runtime.getURL("icons/icon128.png")
       };
-      let notificationOptions;
+      let notificationOptions = {
+        ...baseOptions,
+        type: "basic",
+        title: "Pushbullet",
+        message: "New push received"
+      };
       if (push.encrypted && "ciphertext" in push) {
         notificationOptions = {
           ...baseOptions,
@@ -1890,31 +1992,111 @@
         if (push.type === "note") {
           title = push.title || "New Note";
           message = push.body || "";
+          notificationOptions = {
+            ...baseOptions,
+            type: "basic",
+            title,
+            message
+          };
         } else if (push.type === "link") {
           title = push.title || push.url || "New Link";
           message = push.url || "";
+          notificationOptions = {
+            ...baseOptions,
+            type: "basic",
+            title,
+            message
+          };
         } else if (push.type === "file") {
           debugLogger.notifications("DEBUG", "Complete file push object received", { push });
+          let fileTitle = "New File";
+          let fileMessage = "";
           if (push.title) {
-            title = push.title;
-            message = push.body || `Image (${push.file_type})`;
+            fileTitle = push.title;
+            fileMessage = push.body || `Image (${push.file_type})`;
           } else {
-            title = `New File: ${push.file_name || "unknown file"}`;
-            message = push.body || push.file_type || "";
+            fileTitle = `New File: ${push.file_name || "unknown file"}`;
+            fileMessage = push.body || push.file_type || "";
+          }
+          const imageUrl = push.image_url;
+          const fileUrl = push.file_url;
+          let previewUrl = null;
+          if (imageUrl && isTrustedImageUrl(imageUrl)) {
+            previewUrl = imageUrl;
+          } else if (fileUrl && isTrustedImageUrl(fileUrl) && push.file_type?.startsWith("image/")) {
+            previewUrl = fileUrl;
+          }
+          if (previewUrl) {
+            notificationOptions = {
+              ...baseOptions,
+              type: "image",
+              title: fileTitle,
+              message: fileMessage,
+              imageUrl: previewUrl
+            };
+            debugLogger.notifications("INFO", "Showing image notification for trusted file push", {
+              fileName: push.file_name,
+              previewUrl
+            });
+          } else {
+            notificationOptions = {
+              ...baseOptions,
+              type: "basic",
+              title: fileTitle,
+              message: fileMessage
+            };
+            if (imageUrl && !isTrustedImageUrl(imageUrl)) {
+              debugLogger.notifications("WARN", "Ignored image from untrusted domain for file push", {
+                imageUrl
+              });
+            }
           }
         } else if (push.type === "mirror") {
-          title = push.title || push.application_name || "Notification";
-          message = push.body || "";
+          const mirrorTitle = push.title || push.application_name || "Notification";
+          const mirrorMessage = push.body || "";
+          const mirrorImageUrl = push.image_url;
+          if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
+            notificationOptions = {
+              ...baseOptions,
+              type: "image",
+              title: mirrorTitle,
+              message: mirrorMessage,
+              imageUrl: mirrorImageUrl
+            };
+            debugLogger.notifications("INFO", "Showing image notification for trusted mirrored push", { pushType: push.type });
+          } else {
+            notificationOptions = {
+              ...baseOptions,
+              type: "basic",
+              title: mirrorTitle,
+              message: mirrorMessage
+            };
+            if (mirrorImageUrl) {
+              debugLogger.notifications("WARN", "Ignored image from untrusted domain for mirror push", { imageUrl: mirrorImageUrl });
+            }
+          }
+        } else {
+          const defaultTitle = "Pushbullet";
+          const defaultMessage = `New ${push.type}`;
+          notificationOptions = {
+            ...baseOptions,
+            type: "basic",
+            title: defaultTitle,
+            message: defaultMessage
+          };
+          debugLogger.notifications("INFO", "Showing basic notification", { pushType: push.type });
         }
-        notificationOptions = {
-          ...baseOptions,
-          type: "basic",
-          title,
-          message
-        };
-        debugLogger.notifications("INFO", "Showing basic notification", { pushType: push.type });
       }
-      await chrome.notifications.create(notificationId, notificationOptions);
+      const finalNotificationOptions = {
+        type: notificationOptions.type || "basic",
+        title: notificationOptions.title || "Pushbullet",
+        message: notificationOptions.message || "New push received",
+        iconUrl: notificationOptions.iconUrl || chrome.runtime.getURL("icons/icon128.png")
+      };
+      if (notificationOptions.imageUrl) {
+        finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
+      }
+      await chrome.notifications.create(notificationId, finalNotificationOptions);
       if (notificationDataStore2) {
         notificationDataStore2.set(notificationId, push);
       }
