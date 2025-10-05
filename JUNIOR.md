@@ -156,3 +156,71 @@ async function loadApplicationData(): Promise<void> {
 ## Conclusion
 
 By applying these strategies, you will help make our codebase more robust, easier to debug, and more user-friendly. Always think critically about the impact of an error and choose the most appropriate handling strategy. If you are unsure, it's always better to log more information and propagate the error than to silently swallow it.
+
+---
+
+## New Task: Refactor Badge Visuals
+
+### Objective
+Enhance the clarity and consistency of the extension's status indicators by removing symbolic icons from the badge text and introducing a distinct color for the `DEGRADED` state.
+
+### Rationale
+*   **Removing icons (`●`, `◐`, `○`)** from the badge text simplifies the visual feedback, relying solely on color and potentially a more descriptive text if needed.
+*   **Introducing a `cyan` color** for the `DEGRADED` state provides a clearer distinction between a temporary degraded service (polling mode) and a complete error/idle state (red). This helps users quickly understand the severity of the connection issue.
+
+### Instructions
+
+1.  **Locate `updateConnectionIcon` function:** This function is in `src/background/utils.ts`.
+
+2.  **Update `ConnectionStatus` Type:**
+    *   First, you will need to update the `ConnectionStatus` type definition to include `'degraded'`. This type is likely defined near the `updateConnectionIcon` function or in a `types` file.
+    *   *Pseudocode (Before):*
+        ```typescript
+        export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
+        ```
+    *   *Pseudocode (After):*
+        ```typescript
+        export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'degraded';
+        ```
+
+3.  **Remove Badge Icons:**
+    *   Modify the `badgeText` assignment within `updateConnectionIcon` to always set an empty string (`''`). If an empty string is not allowed by the Chrome API or causes issues, use a very minimal, non-iconic character (e.g., a single space `' '`).
+    *   *Pseudocode (Before):*
+        ```typescript
+        const badgeText = status === 'connected' ? '●' :
+                          status === 'connecting' ? '◐' :
+                            '○'; // or ''
+        ```
+    *   *Pseudocode (After):*
+        ```typescript
+        const badgeText = ''; // Or ' ' if an empty string causes issues
+        ```
+
+4.  **Introduce Cyan for `DEGRADED` State:**
+    *   Modify the `badgeColor` assignment within `updateConnectionIcon` to include a new condition for the `DEGRADED` state.
+    *   The `DEGRADED` state should map to a `cyan` color (e.g., `#00BCD4`).
+    *   The `ERROR` and `IDLE` states should remain `red`.
+    *   *Pseudocode (Before - simplified):*
+        ```typescript
+        const badgeColor = status === 'connected' ? '#4CAF50' :  // Green
+                          status === 'connecting' ? '#FFC107' :  // Yellow
+                            '#F44336';  // Red (for disconnected, idle, error)
+        ```
+    *   *Pseudocode (After):*
+        ```typescript
+        const badgeColor = status === 'connected' ? '#4CAF50' :  // Green
+                          status === 'connecting' ? '#FFC107' :  // Yellow
+                          status === 'degraded' ? '#00BCD4' :   // Cyan
+                            '#F44336';  // Red (for disconnected, idle, error)
+        ```
+
+5.  **Update `updateConnectionIcon` Call Sites:**
+    *   Review all places where `updateConnectionIcon` is called (e.g., in `src/background/index.ts`).
+    *   Ensure that when the state machine transitions to `DEGRADED`, `updateConnectionIcon('degraded')` is called.
+    *   *Pseudocode Example (in `src/background/index.ts` or `state-machine.ts`):*
+        ```typescript
+        // When state machine transitions to DEGRADED
+        updateConnectionIcon('degraded');
+        ```
+
+This task will help make the visual feedback more informative and consistent. Remember to test your changes thoroughly!
