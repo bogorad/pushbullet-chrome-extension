@@ -253,6 +253,10 @@ export async function showPushNotification(push: Push, notificationDataStore?: M
         title = push.title || push.url || 'New Link';
         message = push.url || '';
       } else if (push.type === 'file') {
+        // --- ADD THE NEW DEBUG LOG HERE ---
+        debugLogger.notifications('DEBUG', 'Complete file push object received', { push });
+        // --- END OF NEW CODE ---
+
         if (push.title) { // MMS-style file push
           title = push.title;
           message = push.body || `Image (${push.file_type})`;

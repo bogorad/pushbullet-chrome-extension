@@ -1894,6 +1894,7 @@
           title = push.title || push.url || "New Link";
           message = push.url || "";
         } else if (push.type === "file") {
+          debugLogger.notifications("DEBUG", "Complete file push object received", { push });
           if (push.title) {
             title = push.title;
             message = push.body || `Image (${push.file_type})`;

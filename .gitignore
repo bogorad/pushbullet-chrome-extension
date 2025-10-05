@@ -1,4 +1,6 @@
+.direnv
 node_modules/
+flake.lock
 package-lock.json
 pushbullet-debug-*.json
 
