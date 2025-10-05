@@ -150,10 +150,10 @@ export class DebugLogger {
       data: data ? this.sanitize(data) : null,
       error: error
         ? {
-            name: error.name,
-            message: error.message,
-            stack: (error as any).stack,
-          }
+          name: error.name,
+          message: error.message,
+          stack: (error as any).stack,
+        }
         : null,
     };
     if (error && level === "ERROR") {
@@ -170,44 +170,44 @@ export class DebugLogger {
     const full = `${prefix} ${message}`;
     const sanitized = data ? this.sanitize(data) : null;
     switch (level) {
-      case "ERROR":
-        if (sanitized && error) {
-          console.error(full);
-          console.error("  Data:", sanitized);
-          console.error("  Error:", error);
-        } else if (sanitized) {
-          console.error(full);
-          console.error("  Data:", sanitized);
-        } else if (error) {
-          console.error(full);
-          console.error("  Error:", error);
-        } else {
-          console.error(full);
-        }
-        break;
-      case "WARN":
-        if (sanitized) {
-          console.warn(full);
-          console.warn("  Data:", sanitized);
-        } else {
-          console.warn(full);
-        }
-        break;
-      case "INFO":
-        if (sanitized) {
-          console.info(full);
-          console.info("  Data:", sanitized);
-        } else {
-          console.info(full);
-        }
-        break;
-      default:
-        if (sanitized) {
-          console.log(full);
-          console.log("  Data:", sanitized);
-        } else {
-          console.log(full);
-        }
+    case "ERROR":
+      if (sanitized && error) {
+        console.error(full);
+        console.error("  Data:", sanitized);
+        console.error("  Error:", error);
+      } else if (sanitized) {
+        console.error(full);
+        console.error("  Data:", sanitized);
+      } else if (error) {
+        console.error(full);
+        console.error("  Error:", error);
+      } else {
+        console.error(full);
+      }
+      break;
+    case "WARN":
+      if (sanitized) {
+        console.warn(full);
+        console.warn("  Data:", sanitized);
+      } else {
+        console.warn(full);
+      }
+      break;
+    case "INFO":
+      if (sanitized) {
+        console.info(full);
+        console.info("  Data:", sanitized);
+      } else {
+        console.info(full);
+      }
+      break;
+    default:
+      if (sanitized) {
+        console.log(full);
+        console.log("  Data:", sanitized);
+      } else {
+        console.log(full);
+      }
     }
   }
 

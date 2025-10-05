@@ -123,48 +123,48 @@ export class WebSocketClient {
           });
 
           switch (data.type) {
-            case 'tickle':
-              if (data.subtype === 'push') {
-                // Emit tickle:push event
-                globalEventBus.emit('websocket:tickle:push');
-              } else if (data.subtype === 'device') {
-                // Emit tickle:device event
-                globalEventBus.emit('websocket:tickle:device');
-              }
-              break;
+          case 'tickle':
+            if (data.subtype === 'push') {
+              // Emit tickle:push event
+              globalEventBus.emit('websocket:tickle:push');
+            } else if (data.subtype === 'device') {
+              // Emit tickle:device event
+              globalEventBus.emit('websocket:tickle:device');
+            }
+            break;
 
-            case 'push':
-              if ('push' in data && data.push) {
-                // Emit push event with push data
-                globalEventBus.emit('websocket:push', data.push);
-              } else {
-                debugLogger.websocket('WARN', 'Push message received without push payload');
-              }
-              break;
+          case 'push':
+            if ('push' in data && data.push) {
+              // Emit push event with push data
+              globalEventBus.emit('websocket:push', data.push);
+            } else {
+              debugLogger.websocket('WARN', 'Push message received without push payload');
+            }
+            break;
 
-            case 'nop':
-              debugLogger.websocket('DEBUG', 'Received nop (keep-alive) message', {
-                timestamp: new Date().toISOString()
-              });
-              break;
+          case 'nop':
+            debugLogger.websocket('DEBUG', 'Received nop (keep-alive) message', {
+              timestamp: new Date().toISOString()
+            });
+            break;
 
-            case 'ping':
-              debugLogger.websocket('DEBUG', 'Received ping (keep-alive) message', {
-                timestamp: new Date().toISOString()
-              });
-              break;
+          case 'ping':
+            debugLogger.websocket('DEBUG', 'Received ping (keep-alive) message', {
+              timestamp: new Date().toISOString()
+            });
+            break;
 
-            case 'pong':
-              debugLogger.websocket('DEBUG', 'Received pong (keep-alive) message', {
-                timestamp: new Date().toISOString()
-              });
-              break;
+          case 'pong':
+            debugLogger.websocket('DEBUG', 'Received pong (keep-alive) message', {
+              timestamp: new Date().toISOString()
+            });
+            break;
 
-            default:
-              debugLogger.websocket('WARN', 'Unknown WebSocket message type received', {
-                type: (data as any).type
-              });
-              break;
+          default:
+            debugLogger.websocket('WARN', 'Unknown WebSocket message type received', {
+              type: (data as any).type
+            });
+            break;
           }
         } catch (error) {
           debugLogger.websocket('ERROR', 'Failed to process WebSocket message', null, error as Error);

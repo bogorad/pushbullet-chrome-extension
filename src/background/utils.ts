@@ -26,7 +26,7 @@ import { createNotificationWithTimeout } from '../app/notifications';
 import { ensureConfigLoaded } from '../app/reconnect';
 
 // Counter to ensure unique notification IDs
-let notificationCounter = 0;
+const notificationCounter = 0;
 
 // Guard flag to prevent concurrent context menu setup
 // Ensures idempotent behavior when multiple startup events fire
@@ -107,13 +107,13 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
   try {
     // Set badge text
     const badgeText = status === 'connected' ? '●' :
-                      status === 'connecting' ? '◐' :
-                      '○';
+      status === 'connecting' ? '◐' :
+        '○';
 
     // Set badge color
     const badgeColor = status === 'connected' ? '#4CAF50' :  // Green
-                       status === 'connecting' ? '#FFC107' :  // Yellow
-                       '#F44336';  // Red
+      status === 'connecting' ? '#FFC107' :  // Yellow
+        '#F44336';  // Red
 
     chrome.action.setBadgeText({ text: badgeText });
     chrome.action.setBadgeBackgroundColor({ color: badgeColor });

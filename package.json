@@ -5,8 +5,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "lint": "eslint *.js src/**/*.ts",
-    "lint:fix": "eslint *.js src/**/*.ts --fix",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

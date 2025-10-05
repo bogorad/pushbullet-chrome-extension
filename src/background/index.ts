@@ -201,19 +201,19 @@ async function restoreVisualState(): Promise<void> {
 
       // Restore icon badge color based on state
       switch (lastKnownState as ServiceWorkerState) {
-        case ServiceWorkerState.READY:
-          updateConnectionIcon('connected');
-          break;
-        case ServiceWorkerState.INITIALIZING:
-          updateConnectionIcon('connecting');
-          break;
-        case ServiceWorkerState.ERROR:
-        case ServiceWorkerState.DEGRADED:
-        case ServiceWorkerState.IDLE:
-          updateConnectionIcon('disconnected'); // This will set the badge to red
-          break;
-        default:
-          updateConnectionIcon('disconnected');
+      case ServiceWorkerState.READY:
+        updateConnectionIcon('connected');
+        break;
+      case ServiceWorkerState.INITIALIZING:
+        updateConnectionIcon('connecting');
+        break;
+      case ServiceWorkerState.ERROR:
+      case ServiceWorkerState.DEGRADED:
+      case ServiceWorkerState.IDLE:
+        updateConnectionIcon('disconnected'); // This will set the badge to red
+        break;
+      default:
+        updateConnectionIcon('disconnected');
       }
     }
   } catch (error) {
@@ -282,80 +282,80 @@ function connectWebSocket(): void {
   });
 
   globalEventBus.on('websocket:push', async (push: Push) => {
-        // RACE CONDITION FIX: Ensure configuration is loaded before processing push
-        await ensureConfigLoaded();
+    // RACE CONDITION FIX: Ensure configuration is loaded before processing push
+    await ensureConfigLoaded();
 
-        // Track push received
-        performanceMonitor.recordPushReceived();
+    // Track push received
+    performanceMonitor.recordPushReceived();
 
-        let decryptedPush = push;
+    let decryptedPush = push;
 
-        // Check if push is encrypted
-        if ('encrypted' in push && push.encrypted && 'ciphertext' in push) {
-          try {
-            // Get encryption password from storage repository
-            const password = await storageRepository.getEncryptionPassword();
+    // Check if push is encrypted
+    if ('encrypted' in push && push.encrypted && 'ciphertext' in push) {
+      try {
+        // Get encryption password from storage repository
+        const password = await storageRepository.getEncryptionPassword();
 
-            if (password && sessionCache.userInfo) {
-              debugLogger.general('INFO', 'Decrypting encrypted push', {
-                pushIden: push.iden
-              });
+        if (password && sessionCache.userInfo) {
+          debugLogger.general('INFO', 'Decrypting encrypted push', {
+            pushIden: push.iden
+          });
 
-              const decrypted = await PushbulletCrypto.decryptPush(
+          const decrypted = await PushbulletCrypto.decryptPush(
                 push as any,
                 password,
                 sessionCache.userInfo.iden
-              );
+          );
 
-              decryptedPush = decrypted as Push;
-              debugLogger.general('INFO', 'Push decrypted successfully', {
-                pushType: decryptedPush.type
-              });
-            } else {
-              debugLogger.general('WARN', 'Cannot decrypt push - no encryption password set');
-            }
-          } catch (error) {
-            debugLogger.general('ERROR', 'Failed to decrypt push', {
-              error: (error as Error).message
-            }, error as Error);
-          }
-        }
-
-        // Update cache (prepend)
-        if (sessionCache.recentPushes) {
-          sessionCache.recentPushes.unshift(decryptedPush);
-          sessionCache.lastUpdated = Date.now();
-
-          chrome.runtime.sendMessage({
-            action: 'pushesUpdated',
-            pushes: sessionCache.recentPushes
-          }).catch(() => {});
-        }
-
-        // FIX: Don't await - let notifications show immediately without blocking
-        // This allows multiple notifications to appear concurrently
-        showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
-          debugLogger.general('ERROR', 'Failed to show notification', null, error);
-          performanceMonitor.recordNotificationFailed();
-        });
-
-        // Auto-open links if setting is enabled
-        const autoOpenLinks = getAutoOpenLinks();
-        if (autoOpenLinks && isLinkPush(decryptedPush)) {
-          debugLogger.general('INFO', 'Auto-opening link push', {
-            pushIden: decryptedPush.iden,
-            url: decryptedPush.url
+          decryptedPush = decrypted as Push;
+          debugLogger.general('INFO', 'Push decrypted successfully', {
+            pushType: decryptedPush.type
           });
-
-          chrome.tabs.create({
-            url: decryptedPush.url,
-            active: false // Open in background to avoid disrupting user
-          }).catch((error) => {
-            debugLogger.general('ERROR', 'Failed to auto-open link', {
-              url: decryptedPush.url
-            }, error);
-          });
+        } else {
+          debugLogger.general('WARN', 'Cannot decrypt push - no encryption password set');
         }
+      } catch (error) {
+        debugLogger.general('ERROR', 'Failed to decrypt push', {
+          error: (error as Error).message
+        }, error as Error);
+      }
+    }
+
+    // Update cache (prepend)
+    if (sessionCache.recentPushes) {
+      sessionCache.recentPushes.unshift(decryptedPush);
+      sessionCache.lastUpdated = Date.now();
+
+      chrome.runtime.sendMessage({
+        action: 'pushesUpdated',
+        pushes: sessionCache.recentPushes
+      }).catch(() => {});
+    }
+
+    // FIX: Don't await - let notifications show immediately without blocking
+    // This allows multiple notifications to appear concurrently
+    showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+      debugLogger.general('ERROR', 'Failed to show notification', null, error);
+      performanceMonitor.recordNotificationFailed();
+    });
+
+    // Auto-open links if setting is enabled
+    const autoOpenLinks = getAutoOpenLinks();
+    if (autoOpenLinks && isLinkPush(decryptedPush)) {
+      debugLogger.general('INFO', 'Auto-opening link push', {
+        pushIden: decryptedPush.iden,
+        url: decryptedPush.url
+      });
+
+      chrome.tabs.create({
+        url: decryptedPush.url,
+        active: false // Open in background to avoid disrupting user
+      }).catch((error) => {
+        debugLogger.general('ERROR', 'Failed to auto-open link', {
+          url: decryptedPush.url
+        }, error);
+      });
+    }
   });
 
   globalEventBus.on('websocket:connected', async () => {
@@ -565,26 +565,26 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   switch (info.menuItemId) {
-    case 'push-link':
-      if (info.linkUrl && tab) {
-        pushLink(info.linkUrl, tab.title);
-      }
-      break;
-    case 'push-page':
-      if (tab && tab.url) {
-        pushLink(tab.url, tab.title);
-      }
-      break;
-    case 'push-selection':
-      if (info.selectionText && tab) {
-        pushNote('Selection from ' + (tab.title || 'page'), info.selectionText);
-      }
-      break;
-    case 'push-image':
-      if (info.srcUrl && tab) {
-        pushLink(info.srcUrl, 'Image from ' + (tab.title || 'page'));
-      }
-      break;
+  case 'push-link':
+    if (info.linkUrl && tab) {
+      pushLink(info.linkUrl, tab.title);
+    }
+    break;
+  case 'push-page':
+    if (tab && tab.url) {
+      pushLink(tab.url, tab.title);
+    }
+    break;
+  case 'push-selection':
+    if (info.selectionText && tab) {
+      pushNote('Selection from ' + (tab.title || 'page'), info.selectionText);
+    }
+    break;
+  case 'push-image':
+    if (info.srcUrl && tab) {
+      pushLink(info.srcUrl, 'Image from ' + (tab.title || 'page'));
+    }
+    break;
   }
 });
 
@@ -618,16 +618,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const prefix = '[POPUP]'; // Add a prefix to identify the source
 
       switch (level) {
-        case 'ERROR':
-          debugLogger.general('ERROR', `${prefix} ${logMessage}`, data);
-          break;
-        case 'WARN':
-          debugLogger.general('WARN', `${prefix} ${logMessage}`, data);
-          break;
-        case 'INFO':
-        default:
-          debugLogger.general('INFO', `${prefix} ${logMessage}`, data);
-          break;
+      case 'ERROR':
+        debugLogger.general('ERROR', `${prefix} ${logMessage}`, data);
+        break;
+      case 'WARN':
+        debugLogger.general('WARN', `${prefix} ${logMessage}`, data);
+        break;
+      case 'INFO':
+      default:
+        debugLogger.general('INFO', `${prefix} ${logMessage}`, data);
+        break;
       }
     }
     // Return false because we are not sending a response asynchronously.

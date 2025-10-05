@@ -16,8 +16,51 @@ vi.mock('../../src/lib/logging', () => ({
   debugLogger: {
     general: vi.fn(),
     storage: vi.fn(),
-    api: vi.fn()
+    api: vi.fn(),
+    notifications: vi.fn(),
+    websocket: vi.fn()
   }
+}));
+
+vi.mock('../../src/lib/perf', () => ({
+  performanceMonitor: {
+    recordNotificationCreated: vi.fn(),
+    recordNotificationFailed: vi.fn(),
+    recordPushReceived: vi.fn(),
+    recordWebSocketConnection: vi.fn(),
+    recordHealthCheckSuccess: vi.fn(),
+    recordHealthCheckFailure: vi.fn(),
+    getQualityMetrics: vi.fn(() => ({ consecutiveFailures: 0 }))
+  }
+}));
+
+vi.mock('../../src/app/session', () => ({
+  sessionCache: {
+    recentPushes: [],
+    lastUpdated: 0,
+    userInfo: null
+  }
+}));
+
+vi.mock('../../src/app/reconnect', () => ({
+  ensureConfigLoaded: vi.fn()
+}));
+
+vi.mock('../../src/background/state', () => ({
+  getApiKey: vi.fn(),
+  getAutoOpenLinks: vi.fn(() => false),
+  getDeviceIden: vi.fn(),
+  getDeviceNickname: vi.fn(),
+  getNotificationTimeout: vi.fn(),
+  setApiKey: vi.fn(),
+  setDeviceIden: vi.fn(),
+  setAutoOpenLinks: vi.fn(),
+  setNotificationTimeout: vi.fn(),
+  setDeviceNickname: vi.fn(),
+  setPollingMode: vi.fn(),
+  isPollingMode: vi.fn(() => false),
+  setWebSocketClient: vi.fn(),
+  WEBSOCKET_URL: 'wss://example.com/'
 }));
 
 describe('setupContextMenu - Idempotent Guard Pattern', () => {
@@ -197,6 +240,224 @@ describe('setupContextMenu - Idempotent Guard Pattern', () => {
     setupContextMenu();
     
     expect(chrome.contextMenus.removeAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Unit tests for showPushNotification function
+ * Tests notification creation for different push types including mirror notifications
+ */
+describe('showPushNotification - Notification Creation', () => {
+  let showPushNotification: any;
+
+  beforeEach(async () => {
+    // Reset module state by re-importing
+    vi.resetModules();
+    
+    // Mock chrome.runtime.getURL for icon URL generation
+    chrome.runtime.getURL = vi.fn((path: string) => `chrome-extension://fake-id/${path}`);
+    
+    // Mock chrome.notifications.create to return a promise that resolves
+    chrome.notifications.create.mockImplementation(() => Promise.resolve('notification-id'));
+    
+    // Re-import the module to get fresh state
+    const module = await import('../../src/background/utils');
+    showPushNotification = module.showPushNotification;
+    
+    // Clear mock history for chrome.notifications.create
+    chrome.notifications.create.mockClear();
+  });
+
+  it('should create a basic notification for a note push', async () => {
+    // Arrange
+    const push = { type: 'note', title: 'Test Note', body: 'This is a test' };
+
+    // Act
+    await expect(showPushNotification(push)).resolves.not.toThrow();
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('Test Note');
+    expect(notificationOptions.message).toBe('This is a test');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should create a basic notification for a link push', async () => {
+    // Arrange
+    const push = { type: 'link', title: 'Test Link', url: 'https://example.com' };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('Test Link');
+    expect(notificationOptions.message).toBe('https://example.com');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should create a basic notification for a mirror push', async () => {
+    // Arrange
+    const push = { 
+      type: 'mirror', 
+      title: 'Mirrored Title', 
+      application_name: 'TestApp', 
+      body: 'Mirrored body' 
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('Mirrored Title');
+    expect(notificationOptions.message).toBe('Mirrored body');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should use application_name for a mirror push if title is missing', async () => {
+    // Arrange
+    const push = { 
+      type: 'mirror', 
+      application_name: 'TestApp', 
+      body: 'Mirrored body' 
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.title).toBe('TestApp');
+    expect(notificationOptions.message).toBe('Mirrored body');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should use default title for a mirror push if both title and application_name are missing', async () => {
+    // Arrange
+    const push = { 
+      type: 'mirror', 
+      body: 'Mirrored body' 
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.title).toBe('Notification');
+    expect(notificationOptions.message).toBe('Mirrored body');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should create a basic notification for a file push', async () => {
+    // Arrange
+    const push = { 
+      type: 'file', 
+      file_name: 'test.jpg', 
+      file_type: 'image/jpeg',
+      body: 'A test image' 
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('New File: test.jpg');
+    expect(notificationOptions.message).toBe('A test image');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should handle MMS-style file push with title', async () => {
+    // Arrange
+    const push = { 
+      type: 'file', 
+      title: 'MMS Image',
+      body: 'Check out this image',
+      file_type: 'image/jpeg' 
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.title).toBe('MMS Image');
+    expect(notificationOptions.message).toBe('Check out this image');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should handle encrypted pushes', async () => {
+    // Arrange
+    const push = { 
+      type: 'note',
+      encrypted: true,
+      ciphertext: 'encrypted content'
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('Pushbullet');
+    expect(notificationOptions.message).toContain('encrypted push');
+    expect(notificationOptions.iconUrl).toBeDefined();
+  });
+
+  it('should store push data in notificationDataStore when provided', async () => {
+    // Arrange
+    const push = { type: 'note', title: 'Test Note', body: 'Test body' };
+    const notificationDataStore = new Map();
+
+    // Act
+    await showPushNotification(push, notificationDataStore);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [notificationId] = chrome.notifications.create.mock.calls[0];
+    
+    expect(notificationDataStore.has(notificationId)).toBe(true);
+    expect(notificationDataStore.get(notificationId)).toBe(push);
+  });
+
+  it('should generate unique notification IDs', async () => {
+    // Arrange
+    const push1 = { type: 'note', title: 'First Note', body: 'First body' };
+    const push2 = { type: 'note', title: 'Second Note', body: 'Second body' };
+
+    // Act
+    await showPushNotification(push1);
+    await showPushNotification(push2);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(2);
+    const [notificationId1] = chrome.notifications.create.mock.calls[0];
+    const [notificationId2] = chrome.notifications.create.mock.calls[1];
+    
+    expect(notificationId1).not.toBe(notificationId2);
   });
 });
 

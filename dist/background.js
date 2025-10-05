@@ -1430,6 +1430,10 @@
             lastUpdated: new Date(sessionCache.lastUpdated).toISOString()
           });
           await registerDevice(apiKeyValue, deviceIdenValue, deviceNicknameValue);
+          if (connectWebSocketFn) {
+            debugLogger.general("INFO", "Session initialized, connecting WebSocket.");
+            connectWebSocketFn();
+          }
           chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 1 });
           debugLogger.general("DEBUG", "WebSocket health check alarm created", {
             interval: "5 minutes"

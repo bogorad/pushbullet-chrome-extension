@@ -201,44 +201,44 @@ export class ServiceWorkerStateMachine {
     }
 
     switch (this.currentState) {
-      case ServiceWorkerState.IDLE:
-        if (event === 'API_KEY_SET') {
-          return ServiceWorkerState.INITIALIZING;
-        }
-        break;
+    case ServiceWorkerState.IDLE:
+      if (event === 'API_KEY_SET') {
+        return ServiceWorkerState.INITIALIZING;
+      }
+      break;
 
-      case ServiceWorkerState.INITIALIZING:
-        if (event === 'INIT_SUCCESS') {
-          return ServiceWorkerState.READY;
-        }
-        if (event === 'INIT_FAILURE') {
-          return ServiceWorkerState.ERROR;
-        }
-        break;
+    case ServiceWorkerState.INITIALIZING:
+      if (event === 'INIT_SUCCESS') {
+        return ServiceWorkerState.READY;
+      }
+      if (event === 'INIT_FAILURE') {
+        return ServiceWorkerState.ERROR;
+      }
+      break;
 
-      case ServiceWorkerState.READY:
-        if (event === 'WS_DISCONNECTED') {
-          return ServiceWorkerState.DEGRADED;
-        }
-        if (event === 'WS_PERMANENT_ERROR') {
-          return ServiceWorkerState.ERROR;
-        }
-        break;
+    case ServiceWorkerState.READY:
+      if (event === 'WS_DISCONNECTED') {
+        return ServiceWorkerState.DEGRADED;
+      }
+      if (event === 'WS_PERMANENT_ERROR') {
+        return ServiceWorkerState.ERROR;
+      }
+      break;
 
-      case ServiceWorkerState.DEGRADED:
-        if (event === 'WS_CONNECTED') {
-          return ServiceWorkerState.READY;
-        }
-        if (event === 'WS_PERMANENT_ERROR') {
-          return ServiceWorkerState.ERROR;
-        }
-        break;
+    case ServiceWorkerState.DEGRADED:
+      if (event === 'WS_CONNECTED') {
+        return ServiceWorkerState.READY;
+      }
+      if (event === 'WS_PERMANENT_ERROR') {
+        return ServiceWorkerState.ERROR;
+      }
+      break;
 
-      case ServiceWorkerState.ERROR:
-        if (event === 'API_KEY_SET') {
-          return ServiceWorkerState.INITIALIZING;
-        }
-        break;
+    case ServiceWorkerState.ERROR:
+      if (event === 'API_KEY_SET') {
+        return ServiceWorkerState.INITIALIZING;
+      }
+      break;
     }
 
     // No valid transition found, stay in current state
@@ -261,58 +261,58 @@ export class ServiceWorkerStateMachine {
     updateExtensionTooltip(this.getStateDescription());
 
     switch (state) {
-      case ServiceWorkerState.IDLE:
-        // Clean slate - clear all data
-        if (this.callbacks.onClearData) {
-          await this.callbacks.onClearData();
-        }
-        if (this.callbacks.onDisconnectWebSocket) {
-          this.callbacks.onDisconnectWebSocket();
-        }
-        break;
+    case ServiceWorkerState.IDLE:
+      // Clean slate - clear all data
+      if (this.callbacks.onClearData) {
+        await this.callbacks.onClearData();
+      }
+      if (this.callbacks.onDisconnectWebSocket) {
+        this.callbacks.onDisconnectWebSocket();
+      }
+      break;
 
-      case ServiceWorkerState.INITIALIZING:
-        // Start initialization process
-        if (this.callbacks.onInitialize) {
-          try {
-            await this.callbacks.onInitialize(data);
-            // Initialization succeeded - transition to READY
-            await this.transition('INIT_SUCCESS');
-          } catch (error) {
-            // Initialization failed - transition to ERROR
-            debugLogger.general('ERROR', '[StateMachine] Initialization failed', null, error as Error);
-            await this.transition('INIT_FAILURE');
-          }
+    case ServiceWorkerState.INITIALIZING:
+      // Start initialization process
+      if (this.callbacks.onInitialize) {
+        try {
+          await this.callbacks.onInitialize(data);
+          // Initialization succeeded - transition to READY
+          await this.transition('INIT_SUCCESS');
+        } catch (error) {
+          // Initialization failed - transition to ERROR
+          debugLogger.general('ERROR', '[StateMachine] Initialization failed', null, error as Error);
+          await this.transition('INIT_FAILURE');
         }
-        break;
+      }
+      break;
 
-      case ServiceWorkerState.READY:
-        // Stop polling if we were in DEGRADED mode
-        if (previousState === ServiceWorkerState.DEGRADED && this.callbacks.onStopPolling) {
-          this.callbacks.onStopPolling();
-        }
-        // Connect WebSocket if coming from INITIALIZING
-        if (previousState === ServiceWorkerState.INITIALIZING && this.callbacks.onConnectWebSocket) {
-          this.callbacks.onConnectWebSocket();
-        }
-        break;
+    case ServiceWorkerState.READY:
+      // Stop polling if we were in DEGRADED mode
+      if (previousState === ServiceWorkerState.DEGRADED && this.callbacks.onStopPolling) {
+        this.callbacks.onStopPolling();
+      }
+      // Connect WebSocket if coming from INITIALIZING
+      if (previousState === ServiceWorkerState.INITIALIZING && this.callbacks.onConnectWebSocket) {
+        this.callbacks.onConnectWebSocket();
+      }
+      break;
 
-      case ServiceWorkerState.DEGRADED:
-        // When we ENTER the DEGRADED state, we start polling
-        debugLogger.general('WARN', 'Entering DEGRADED state. Starting polling fallback.');
-        chrome.alarms.create('pollingFallback', { periodInMinutes: 1 });
-        // Call the callback for consistency
-        if (this.callbacks.onStartPolling) {
-          this.callbacks.onStartPolling();
-        }
-        break;
+    case ServiceWorkerState.DEGRADED:
+      // When we ENTER the DEGRADED state, we start polling
+      debugLogger.general('WARN', 'Entering DEGRADED state. Starting polling fallback.');
+      chrome.alarms.create('pollingFallback', { periodInMinutes: 1 });
+      // Call the callback for consistency
+      if (this.callbacks.onStartPolling) {
+        this.callbacks.onStartPolling();
+      }
+      break;
 
-      case ServiceWorkerState.ERROR:
-        // Show error notification
-        if (this.callbacks.onShowError) {
-          this.callbacks.onShowError('Service worker encountered an error');
-        }
-        break;
+    case ServiceWorkerState.ERROR:
+      // Show error notification
+      if (this.callbacks.onShowError) {
+        this.callbacks.onShowError('Service worker encountered an error');
+      }
+      break;
     }
   }
 
@@ -342,18 +342,18 @@ export class ServiceWorkerStateMachine {
    */
   public getStateDescription(): string {
     switch (this.currentState) {
-      case ServiceWorkerState.IDLE:
-        return 'Idle - No API key configured';
-      case ServiceWorkerState.INITIALIZING:
-        return 'Initializing - Fetching session data';
-      case ServiceWorkerState.READY:
-        return 'Ready - Connected via WebSocket';
-      case ServiceWorkerState.DEGRADED:
-        return 'Degraded - Using polling fallback';
-      case ServiceWorkerState.ERROR:
-        return 'Error - Unrecoverable error occurred';
-      default:
-        return 'Unknown state';
+    case ServiceWorkerState.IDLE:
+      return 'Idle - No API key configured';
+    case ServiceWorkerState.INITIALIZING:
+      return 'Initializing - Fetching session data';
+    case ServiceWorkerState.READY:
+      return 'Ready - Connected via WebSocket';
+    case ServiceWorkerState.DEGRADED:
+      return 'Degraded - Using polling fallback';
+    case ServiceWorkerState.ERROR:
+      return 'Error - Unrecoverable error occurred';
+    default:
+      return 'Unknown state';
     }
   }
 }

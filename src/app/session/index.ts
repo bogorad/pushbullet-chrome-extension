@@ -165,6 +165,12 @@ export async function initializeSessionCache(
         // Register device
         await registerDevice(apiKeyValue, deviceIdenValue, deviceNicknameValue);
 
+        // Connect WebSocket if the function is provided
+        if (connectWebSocketFn) {
+          debugLogger.general("INFO", "Session initialized, connecting WebSocket.");
+          connectWebSocketFn();
+        }
+
         // Start periodic health check
         chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 1 });
         debugLogger.general("DEBUG", "WebSocket health check alarm created", {
