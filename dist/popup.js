@@ -194,7 +194,6 @@
   );
   var deviceNickname = "Chrome";
   var devices = [];
-  var hasInitialized = false;
   var currentPushType = "note";
   function init() {
     console.log("Popup initializing");
@@ -216,7 +215,6 @@
     populateDeviceDropdown(response.devices);
     displayPushes(response.recentPushes);
     showSection("main");
-    hasInitialized = true;
   }
   function checkStorageForApiKey() {
     console.log("Requesting session data from background");
@@ -316,7 +314,6 @@
           }
           if (response.isAuthenticated) {
             initializeFromSessionData(response);
-            hasInitialized = true;
           } else {
             showStatus("Invalid Access Token", "error");
             showSection("login");
@@ -332,7 +329,6 @@
     await storageRepository.setApiKey(null);
     await storageRepository.setDeviceIden(null);
     apiKey = null;
-    hasInitialized = false;
     chrome.runtime.sendMessage({ action: "logout" /* LOGOUT */ }).catch((error) => {
       console.warn("Could not notify background of logout:", error.message);
     });

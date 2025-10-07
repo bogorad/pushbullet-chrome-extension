@@ -1497,6 +1497,100 @@
     }
   }
 
+  // src/infrastructure/storage/indexed-db.ts
+  var DB_NAME = "PushbulletState";
+  var DB_VERSION = 1;
+  var STORE_NAME = "session";
+  var CACHE_KEY = "main";
+  var dbPromise = null;
+  function openDb() {
+    if (dbPromise) {
+      return dbPromise;
+    }
+    dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onerror = () => {
+        debugLogger.storage("ERROR", "IndexedDB error", { error: request.error });
+        reject(request.error);
+      };
+      request.onsuccess = () => {
+        resolve(request.result);
+      };
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME);
+          debugLogger.storage("INFO", "IndexedDB object store created");
+        }
+      };
+    });
+    return dbPromise;
+  }
+  async function saveSessionCache(session) {
+    try {
+      const db = await openDb();
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      store.put(session, CACHE_KEY);
+      await new Promise((resolve) => transaction.oncomplete = resolve);
+      debugLogger.storage("DEBUG", "Session cache saved to IndexedDB");
+    } catch (error) {
+      debugLogger.storage(
+        "ERROR",
+        "Failed to save session to IndexedDB",
+        null,
+        error
+      );
+    }
+  }
+  async function loadSessionCache() {
+    try {
+      const db = await openDb();
+      const transaction = db.transaction(STORE_NAME, "readonly");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(CACHE_KEY);
+      return new Promise((resolve) => {
+        request.onsuccess = () => {
+          debugLogger.storage("DEBUG", "Session cache loaded from IndexedDB", {
+            found: !!request.result
+          });
+          resolve(request.result || null);
+        };
+        request.onerror = () => {
+          debugLogger.storage("ERROR", "Failed to load session from IndexedDB", {
+            error: request.error
+          });
+          resolve(null);
+        };
+      });
+    } catch (error) {
+      debugLogger.storage(
+        "ERROR",
+        "Failed to open IndexedDB for loading",
+        null,
+        error
+      );
+      return null;
+    }
+  }
+  async function clearSessionCache() {
+    try {
+      const db = await openDb();
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      store.clear();
+      await new Promise((resolve) => transaction.oncomplete = resolve);
+      debugLogger.storage("INFO", "IndexedDB session cache cleared");
+    } catch (error) {
+      debugLogger.storage(
+        "ERROR",
+        "Failed to clear IndexedDB session",
+        null,
+        error
+      );
+    }
+  }
+
   // src/app/session/index.ts
   var sessionCache = {
     userInfo: null,
@@ -1531,6 +1625,13 @@
         source,
         previousTimestamp: initializationState.timestamp
       });
+      return null;
+    }
+    if (sessionCache.isAuthenticated) {
+      debugLogger.general("INFO", "Session already loaded, skipping network initialization.");
+      if (connectWebSocketFn) {
+        connectWebSocketFn();
+      }
       return null;
     }
     initializationState.inProgress = true;
@@ -1610,6 +1711,7 @@
           );
         }
         initializationState.completed = true;
+        saveSessionCache(sessionCache);
         initializationState.timestamp = Date.now();
         debugLogger.general("INFO", "Initialization completed successfully", {
           source,
@@ -3042,6 +3144,7 @@
       });
       if (sessionCache.recentPushes) {
         sessionCache.recentPushes.unshift(decryptedPush);
+        saveSessionCache(sessionCache);
         sessionCache.lastUpdated = Date.now();
         chrome.runtime.sendMessage({
           action: "pushesUpdated" /* PUSHES_UPDATED */,
@@ -3128,20 +3231,27 @@
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
     await stateMachineReady;
-    try {
-      const apiKey2 = await getApiKeyWithRetries();
+    const cachedSession = await loadSessionCache();
+    if (cachedSession && cachedSession.isAuthenticated) {
+      debugLogger.general("INFO", "Restoring session from IndexedDB");
+      Object.assign(sessionCache, cachedSession);
+      const apiKey2 = await storageRepository.getApiKey();
       if (apiKey2) {
         setApiKey(apiKey2);
       }
-      await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-    } catch (error) {
-      debugLogger.storage(
-        "ERROR",
-        "Failed to read API key on startup",
-        null,
-        error
-      );
-      await stateMachine.transition("STARTUP", { hasApiKey: false });
+      await stateMachine.transition("STARTUP", { hasApiKey: true });
+    } else {
+      debugLogger.general("INFO", "No valid session in IndexedDB, performing full initialization");
+      try {
+        const apiKey2 = await getApiKeyWithRetries();
+        if (apiKey2) {
+          setApiKey(apiKey2);
+        }
+        await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+      } catch (error) {
+        debugLogger.storage("ERROR", "Failed to read API key on initial startup", null, error);
+        await stateMachine.transition("STARTUP", { hasApiKey: false });
+      }
     }
   });
   chrome.runtime.onStartup.addListener(async () => {
@@ -3161,20 +3271,27 @@
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
     await stateMachineReady;
-    try {
-      const apiKey2 = await getApiKeyWithRetries();
+    const cachedSession = await loadSessionCache();
+    if (cachedSession && cachedSession.isAuthenticated) {
+      debugLogger.general("INFO", "Restoring session from IndexedDB");
+      Object.assign(sessionCache, cachedSession);
+      const apiKey2 = await storageRepository.getApiKey();
       if (apiKey2) {
         setApiKey(apiKey2);
       }
-      await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-    } catch (error) {
-      debugLogger.storage(
-        "ERROR",
-        "Failed to read API key on startup",
-        null,
-        error
-      );
-      await stateMachine.transition("STARTUP", { hasApiKey: false });
+      await stateMachine.transition("STARTUP", { hasApiKey: true });
+    } else {
+      debugLogger.general("INFO", "No valid session in IndexedDB, performing full initialization");
+      try {
+        const apiKey2 = await getApiKeyWithRetries();
+        if (apiKey2) {
+          setApiKey(apiKey2);
+        }
+        await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+      } catch (error) {
+        debugLogger.storage("ERROR", "Failed to read API key on initial startup", null, error);
+        await stateMachine.transition("STARTUP", { hasApiKey: false });
+      }
     }
   });
   chrome.notifications.onClicked.addListener((notificationId) => {
@@ -3360,6 +3477,8 @@
         return storageRepository.setApiKey(null);
       }).then(() => {
         return storageRepository.setDeviceIden(null);
+      }).then(() => {
+        return clearSessionCache();
       }).then(() => {
         sendResponse({ success: true });
       }).catch((error) => {

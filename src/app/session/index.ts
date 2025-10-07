@@ -7,6 +7,7 @@ import {
   registerDevice,
 } from "../api/client";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
+import { saveSessionCache } from "../../infrastructure/storage/indexed-db";
 
 // Session cache state
 export const sessionCache: SessionCache = {
@@ -72,6 +73,18 @@ export async function initializeSessionCache(
       source,
       previousTimestamp: initializationState.timestamp,
     });
+    return null;
+  }
+
+  // --- ADD THIS GUARD CLAUSE ---
+  // If the session is already authenticated (e.g., loaded from IndexedDB),
+  // then there is no work to do here.
+  if (sessionCache.isAuthenticated) {
+    debugLogger.general("INFO", "Session already loaded, skipping network initialization.");
+    // We must still connect the WebSocket.
+    if (connectWebSocketFn) {
+      connectWebSocketFn();
+    }
     return null;
   }
 
@@ -183,8 +196,10 @@ export async function initializeSessionCache(
         );
       }
 
-      initializationState.completed = true;
-      initializationState.timestamp = Date.now();
+       initializationState.completed = true;
+       // Save our freshly built session to the database for next time.
+       saveSessionCache(sessionCache);
+       initializationState.timestamp = Date.now();
       debugLogger.general("INFO", "Initialization completed successfully", {
         source,
         timestamp: new Date(initializationState.timestamp).toISOString(),

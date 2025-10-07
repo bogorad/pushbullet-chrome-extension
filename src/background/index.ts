@@ -54,6 +54,7 @@ import {
 import { validatePrivilegedMessage } from "../lib/security/message-validation";
 import type { Push } from "../types/domain";
 import { isLinkPush } from "../types/domain";
+import { saveSessionCache, loadSessionCache, clearSessionCache } from "../infrastructure/storage/indexed-db";
 
 // Load debug configuration
 debugConfigManager.loadConfig();
@@ -234,19 +235,19 @@ async function restoreVisualState(): Promise<void> {
 
       // Restore icon badge color based on state
       switch (lastKnownState as ServiceWorkerState) {
-        case ServiceWorkerState.READY:
-          updateConnectionIcon("connected");
-          break;
-        case ServiceWorkerState.INITIALIZING:
-          updateConnectionIcon("connecting");
-          break;
-        case ServiceWorkerState.ERROR:
-        case ServiceWorkerState.DEGRADED:
-        case ServiceWorkerState.IDLE:
-          updateConnectionIcon("disconnected"); // This will set the badge to red
-          break;
-        default:
-          updateConnectionIcon("disconnected");
+      case ServiceWorkerState.READY:
+        updateConnectionIcon("connected");
+        break;
+      case ServiceWorkerState.INITIALIZING:
+        updateConnectionIcon("connecting");
+        break;
+      case ServiceWorkerState.ERROR:
+      case ServiceWorkerState.DEGRADED:
+      case ServiceWorkerState.IDLE:
+        updateConnectionIcon("disconnected"); // This will set the badge to red
+        break;
+      default:
+        updateConnectionIcon("disconnected");
       }
     }
   } catch (error) {
@@ -396,6 +397,8 @@ function connectWebSocket(): void {
     // Update cache (prepend)
     if (sessionCache.recentPushes) {
       sessionCache.recentPushes.unshift(decryptedPush);
+      // Save the updated cache (with the new push) to our database.
+      saveSessionCache(sessionCache);
       sessionCache.lastUpdated = Date.now();
 
       chrome.runtime
@@ -528,24 +531,38 @@ chrome.runtime.onInstalled.addListener(async () => {
   // This ensures the state machine has loaded its persisted state from storage
   await stateMachineReady;
 
-  // STARTUP AMNESIA FIX + STORAGE RACE CONDITION FIX:
-  // Read API key from storage with retry logic to handle chrome.storage being unavailable
-  // immediately after service worker restart. This ensures both the state machine transition
-  // and onInitialize callback work correctly even when storage is transiently unavailable.
-  try {
-    const apiKey = await getApiKeyWithRetries();
+  const cachedSession = await loadSessionCache();
+
+  if (cachedSession && cachedSession.isAuthenticated) {
+    // --- FAST PATH: We found a saved session! ---
+    debugLogger.general('INFO', 'Restoring session from IndexedDB');
+
+    // Restore the entire session cache into memory
+    Object.assign(sessionCache, cachedSession);
+
+    // Also restore the API key to the in-memory state variable
+    const apiKey = await storageRepository.getApiKey();
     if (apiKey) {
       setApiKey(apiKey);
     }
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
-  } catch (error) {
-    debugLogger.storage(
-      "ERROR",
-      "Failed to read API key on startup",
-      null,
-      error as Error,
-    );
-    await stateMachine.transition("STARTUP", { hasApiKey: false });
+
+    // Tell the state machine we are starting up with a valid session
+    await stateMachine.transition('STARTUP', { hasApiKey: true });
+
+  } else {
+    // --- SLOW PATH: No saved session (first run or after logout) ---
+    debugLogger.general('INFO', 'No valid session in IndexedDB, performing full initialization');
+    try {
+      const apiKey = await getApiKeyWithRetries();
+      if (apiKey) {
+        setApiKey(apiKey);
+      }
+      // This will trigger the expensive network initialization
+      await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+    } catch (error) {
+      debugLogger.storage('ERROR', 'Failed to read API key on initial startup', null, error as Error);
+      await stateMachine.transition('STARTUP', { hasApiKey: false });
+    }
   }
 });
 
@@ -582,24 +599,38 @@ chrome.runtime.onStartup.addListener(async () => {
   // This ensures the state machine has loaded its persisted state from storage
   await stateMachineReady;
 
-  // STARTUP AMNESIA FIX + STORAGE RACE CONDITION FIX:
-  // Read API key from storage with retry logic to handle chrome.storage being unavailable
-  // immediately after service worker restart. This ensures both the state machine transition
-  // and onInitialize callback work correctly even when storage is transiently unavailable.
-  try {
-    const apiKey = await getApiKeyWithRetries();
+  const cachedSession = await loadSessionCache();
+
+  if (cachedSession && cachedSession.isAuthenticated) {
+    // --- FAST PATH: We found a saved session! ---
+    debugLogger.general('INFO', 'Restoring session from IndexedDB');
+
+    // Restore the entire session cache into memory
+    Object.assign(sessionCache, cachedSession);
+
+    // Also restore the API key to the in-memory state variable
+    const apiKey = await storageRepository.getApiKey();
     if (apiKey) {
       setApiKey(apiKey);
     }
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
-  } catch (error) {
-    debugLogger.storage(
-      "ERROR",
-      "Failed to read API key on startup",
-      null,
-      error as Error,
-    );
-    await stateMachine.transition("STARTUP", { hasApiKey: false });
+
+    // Tell the state machine we are starting up with a valid session
+    await stateMachine.transition('STARTUP', { hasApiKey: true });
+
+  } else {
+    // --- SLOW PATH: No saved session (first run or after logout) ---
+    debugLogger.general('INFO', 'No valid session in IndexedDB, performing full initialization');
+    try {
+      const apiKey = await getApiKeyWithRetries();
+      if (apiKey) {
+        setApiKey(apiKey);
+      }
+      // This will trigger the expensive network initialization
+      await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+    } catch (error) {
+      debugLogger.storage('ERROR', 'Failed to read API key on initial startup', null, error as Error);
+      await stateMachine.transition('STARTUP', { hasApiKey: false });
+    }
   }
 });
 
@@ -679,26 +710,26 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   switch (info.menuItemId) {
-    case "push-link":
-      if (info.linkUrl && tab) {
-        pushLink(info.linkUrl, tab.title);
-      }
-      break;
-    case "push-page":
-      if (tab && tab.url) {
-        pushLink(tab.url, tab.title);
-      }
-      break;
-    case "push-selection":
-      if (info.selectionText && tab) {
-        pushNote("Selection from " + (tab.title || "page"), info.selectionText);
-      }
-      break;
-    case "push-image":
-      if (info.srcUrl && tab) {
-        pushLink(info.srcUrl, "Image from " + (tab.title || "page"));
-      }
-      break;
+  case "push-link":
+    if (info.linkUrl && tab) {
+      pushLink(info.linkUrl, tab.title);
+    }
+    break;
+  case "push-page":
+    if (tab && tab.url) {
+      pushLink(tab.url, tab.title);
+    }
+    break;
+  case "push-selection":
+    if (info.selectionText && tab) {
+      pushNote("Selection from " + (tab.title || "page"), info.selectionText);
+    }
+    break;
+  case "push-image":
+    if (info.srcUrl && tab) {
+      pushLink(info.srcUrl, "Image from " + (tab.title || "page"));
+    }
+    break;
   }
 });
 
@@ -727,16 +758,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const prefix = "[POPUP]"; // Add a prefix to identify the source
 
       switch (level) {
-        case "ERROR":
-          debugLogger.general("ERROR", `${prefix} ${logMessage}`, data);
-          break;
-        case "WARN":
-          debugLogger.general("WARN", `${prefix} ${logMessage}`, data);
-          break;
-        case "INFO":
-        default:
-          debugLogger.general("INFO", `${prefix} ${logMessage}`, data);
-          break;
+      case "ERROR":
+        debugLogger.general("ERROR", `${prefix} ${logMessage}`, data);
+        break;
+      case "WARN":
+        debugLogger.general("WARN", `${prefix} ${logMessage}`, data);
+        break;
+      case "INFO":
+      default:
+        debugLogger.general("INFO", `${prefix} ${logMessage}`, data);
+        break;
       }
     }
     // Return false because we are not sending a response asynchronously.
@@ -860,6 +891,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .then(() => {
         return storageRepository.setDeviceIden(null);
+      })
+      .then(() => {
+        return clearSessionCache();
       })
       .then(() => {
         sendResponse({ success: true });

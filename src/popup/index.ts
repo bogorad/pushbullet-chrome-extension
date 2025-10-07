@@ -95,7 +95,6 @@ const openDebugDashboardBtn = getElementById<HTMLButtonElement>(
 // State variables
 let deviceNickname = "Chrome";
 const devices: Device[] = [];
-let hasInitialized = false;
 let currentPushType: PushType = "note";
 // websocket variable removed - background script manages the single WebSocket connection
 
@@ -139,8 +138,6 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
 
   // Connection status is now shown via badge icon (no UI indicator needed)
   // WebSocket connection is managed by background script - popup receives updates via chrome.runtime.onMessage
-
-  hasInitialized = true;
 }
 
 /**
@@ -154,7 +151,7 @@ function checkStorageForApiKey(): void {
 
   // Request session data from background script (single source of truth)
   chrome.runtime.sendMessage(
-            { action: MessageAction.GET_SESSION_DATA },
+    { action: MessageAction.GET_SESSION_DATA },
     async (response: SessionData) => {
       if (chrome.runtime.lastError) {
         console.error("Error getting session data:", chrome.runtime.lastError);
@@ -293,7 +290,6 @@ async function saveApiKey(): Promise<void> {
 
         if (response.isAuthenticated) {
           initializeFromSessionData(response);
-          hasInitialized = true;
         } else {
           showStatus("Invalid Access Token", "error");
           showSection("login");
@@ -314,7 +310,6 @@ async function logout(): Promise<void> {
   await storageRepository.setApiKey(null);
   await storageRepository.setDeviceIden(null);
   apiKey = null;
-  hasInitialized = false;
 
   // Notify background script to disconnect WebSocket
   chrome.runtime.sendMessage({ action: MessageAction.LOGOUT }).catch((error) => {
@@ -782,7 +777,7 @@ async function sendPush(): Promise<void> {
           clearPushForm();
           showStatus("Push sent successfully!", "success");
           chrome.runtime.sendMessage(
-    { action: MessageAction.GET_SESSION_DATA },
+            { action: MessageAction.GET_SESSION_DATA },
             (sessionResponse: SessionData) => {
               if (sessionResponse && sessionResponse.recentPushes) {
                 displayPushes(sessionResponse.recentPushes);

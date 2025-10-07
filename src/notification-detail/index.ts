@@ -51,7 +51,7 @@ function isTrustedImageUrl(urlString: string): boolean {
   
   try {
     const url = new URL(urlString);
-        return url.hostname.endsWith('.pushbullet.com') || 
+    return url.hostname.endsWith('.pushbullet.com') || 
                /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);  } catch {
     return false;
   }
