@@ -764,6 +764,7 @@
     socket = null;
     reconnectAttempts = 0;
     reconnectTimeout = null;
+    pongTimeout = null;
     /**
      * Get current WebSocket instance
      */
@@ -889,13 +890,13 @@
                 }
                 break;
               case "nop":
-                debugLogger.websocket(
-                  "DEBUG",
-                  "Received nop (keep-alive) message",
-                  {
-                    timestamp: (/* @__PURE__ */ new Date()).toISOString()
-                  }
-                );
+                if (this.pongTimeout !== null) {
+                  clearTimeout(this.pongTimeout);
+                  this.pongTimeout = null;
+                }
+                debugLogger.websocket("DEBUG", "Pong received (via nop)", {
+                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
+                });
                 break;
               // Note: 'ping' and 'pong' are WebSocket frame types, not message types
               // They should not appear in the message data, but we handle them defensively
@@ -1045,6 +1046,31 @@
      */
     resetReconnectAttempts() {
       this.reconnectAttempts = 0;
+    }
+    /**
+     * Send a ping to test connection health
+     */
+    ping() {
+      if (this.pongTimeout !== null) {
+        return;
+      }
+      if (this.socket === null || this.socket.readyState !== 1 /* OPEN */) {
+        return;
+      }
+      try {
+        this.socket.send(JSON.stringify({ type: "nop" }));
+        debugLogger.websocket("DEBUG", "Ping sent (as nop)", {
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        this.pongTimeout = setTimeout(() => {
+          debugLogger.websocket("WARN", "Pong not received in 10 seconds. Assuming connection is dead.");
+          this.socket?.close();
+        }, 1e4);
+      } catch (error) {
+        debugLogger.websocket("ERROR", "Failed to send ping", {
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        }, error);
+      }
     }
   };
 
@@ -2389,24 +2415,13 @@
       debugLogger.general("ERROR", "Polling fetch failed", null, error);
     }
   }
-  function performWebSocketHealthCheck(wsClient, connectFn) {
-    const apiKey2 = getApiKey();
-    if (apiKey2 && (!wsClient || !wsClient.isConnected())) {
-      debugLogger.websocket(
-        "WARN",
-        "Health check failed - WebSocket not connected",
-        {
-          hasWebSocket: !!wsClient,
-          isConnected: wsClient ? wsClient.isConnected() : false
-        }
-      );
+  function performWebSocketHealthCheck(wsClient) {
+    if (wsClient && wsClient.isConnected()) {
+      debugLogger.websocket("DEBUG", "Performing active health check (ping).");
+      wsClient.ping();
+    } else if (getApiKey()) {
+      debugLogger.websocket("WARN", "Health check found client is disconnected.");
       performanceMonitor.recordHealthCheckFailure();
-      connectFn();
-    } else if (wsClient && wsClient.isConnected()) {
-      debugLogger.websocket("DEBUG", "Health check passed - WebSocket connected");
-      performanceMonitor.recordHealthCheckSuccess();
-    } else {
-      debugLogger.websocket("DEBUG", "Health check skipped - no API key");
     }
   }
   function updatePopupConnectionState(state) {
@@ -2754,6 +2769,7 @@
           }
           break;
         case "initializing" /* INITIALIZING */:
+          updateConnectionIcon("connecting");
           if (this.callbacks.onInitialize) {
             try {
               await this.callbacks.onInitialize(data);
@@ -3012,7 +3028,6 @@
   }
   function connectWebSocket() {
     recoveryTimerStart = Date.now();
-    updateConnectionIcon("connecting");
     if (websocketClient2) {
       debugLogger.websocket(
         "INFO",
@@ -3288,7 +3303,7 @@
       );
     } else if (alarm.name === "websocketHealthCheck") {
       await ensureConfigLoaded();
-      performWebSocketHealthCheck(websocketClient2, connectWebSocket);
+      performWebSocketHealthCheck(websocketClient2);
       chrome.storage.local.set({ lastSeenAlive: Date.now() });
     } else if (alarm.name === "pollingFallback") {
       performPollingFetch();
