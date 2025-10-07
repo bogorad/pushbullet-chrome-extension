@@ -20,6 +20,20 @@ export const sessionCache: SessionCache = {
   deviceNickname: "Chrome",
 };
 
+/**
+ * Reset the session cache to its initial, unauthenticated state.
+ * This ensures no stale data remains when logging out.
+ */
+export function resetSessionCache(): void {
+  sessionCache.userInfo = null;
+  sessionCache.devices = [];
+  sessionCache.recentPushes = [];
+  sessionCache.isAuthenticated = false;
+  sessionCache.lastUpdated = 0;
+  sessionCache.autoOpenLinks = true;
+  sessionCache.deviceNickname = "Chrome";
+}
+
 
 
 // Promise singleton for single-flight initialization

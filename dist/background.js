@@ -1601,15 +1601,18 @@
     autoOpenLinks: true,
     deviceNickname: "Chrome"
   };
-  var initializationState = {
-    inProgress: false,
-    completed: false,
-    error: null,
-    timestamp: null
-  };
+  function resetSessionCache() {
+    sessionCache.userInfo = null;
+    sessionCache.devices = [];
+    sessionCache.recentPushes = [];
+    sessionCache.isAuthenticated = false;
+    sessionCache.lastUpdated = 0;
+    sessionCache.autoOpenLinks = true;
+    sessionCache.deviceNickname = "Chrome";
+  }
   var initPromise = null;
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
-    if (initializationState.inProgress && initPromise) {
+    if (initPromise) {
       debugLogger.general(
         "INFO",
         "Initialization already in progress, returning existing promise",
@@ -1620,13 +1623,6 @@
       );
       return initPromise;
     }
-    if (initializationState.completed) {
-      debugLogger.general("WARN", "Already initialized, skipping", {
-        source,
-        previousTimestamp: initializationState.timestamp
-      });
-      return null;
-    }
     if (sessionCache.isAuthenticated) {
       debugLogger.general("INFO", "Session already loaded, skipping network initialization.");
       if (connectWebSocketFn) {
@@ -1634,7 +1630,6 @@
       }
       return null;
     }
-    initializationState.inProgress = true;
     initPromise = (async () => {
       try {
         debugLogger.general("INFO", "Initializing session cache", {
@@ -1710,16 +1705,13 @@
             "No API key available - session cache not initialized"
           );
         }
-        initializationState.completed = true;
         saveSessionCache(sessionCache);
-        initializationState.timestamp = Date.now();
         debugLogger.general("INFO", "Initialization completed successfully", {
           source,
-          timestamp: new Date(initializationState.timestamp).toISOString()
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
         return apiKeyValue;
       } catch (error) {
-        initializationState.error = error;
         debugLogger.general(
           "ERROR",
           "Error initializing session cache",
@@ -1731,7 +1723,6 @@
         sessionCache.isAuthenticated = false;
         throw error;
       } finally {
-        initializationState.inProgress = false;
         initPromise = null;
       }
     })();
@@ -2989,10 +2980,7 @@
       updateConnectionIcon("disconnected");
     },
     onClearData: async () => {
-      sessionCache.userInfo = null;
-      sessionCache.devices = [];
-      sessionCache.recentPushes = [];
-      sessionCache.lastUpdated = null;
+      resetSessionCache();
     },
     onDisconnectWebSocket: () => {
       disconnectWebSocket();
@@ -3771,13 +3759,7 @@
         deviceCount: sessionCache.devices?.length || 0,
         pushCount: sessionCache.recentPushes?.length || 0
       },
-      websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false,
-      initializationState: {
-        inProgress: initializationState.inProgress,
-        completed: initializationState.completed,
-        timestamp: initializationState.timestamp ? new Date(initializationState.timestamp).toISOString() : null,
-        hasError: !!initializationState.error
-      }
+      websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
     };
   };
   debugLogger.general("INFO", "Background service worker initialized", {

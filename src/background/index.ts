@@ -15,6 +15,7 @@ import {
   sessionCache,
   initializeSessionCache,
   refreshSessionCache,
+  resetSessionCache,
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
@@ -178,11 +179,8 @@ const stateMachineCallbacks = {
     updateConnectionIcon("disconnected");
   },
   onClearData: async () => {
-    // Clear session cache
-    sessionCache.userInfo = null;
-    sessionCache.devices = [];
-    sessionCache.recentPushes = [];
-    sessionCache.lastUpdated = null;
+    // Clear session cache to initial state
+    resetSessionCache();
   },
   onDisconnectWebSocket: () => {
     disconnectWebSocket();
