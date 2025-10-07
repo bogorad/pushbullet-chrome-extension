@@ -705,8 +705,10 @@ export function setupContextMenu(): void {
           contexts: ["link"],
         });
         if (chrome.runtime.lastError) {
+          const lastError = chrome.runtime.lastError as any;
+          const errorMessage = lastError.message || 'Unknown error';
           debugLogger.general("ERROR", "Failed to create push-link menu", {
-            error: chrome.runtime.lastError.message,
+            error: errorMessage,
           });
         }
 
@@ -716,8 +718,10 @@ export function setupContextMenu(): void {
           contexts: ["page"],
         });
         if (chrome.runtime.lastError) {
+          const lastError = chrome.runtime.lastError as any;
+          const errorMessage = lastError.message || 'Unknown error';
           debugLogger.general("ERROR", "Failed to create push-page menu", {
-            error: chrome.runtime.lastError.message,
+            error: errorMessage,
           });
         }
 
@@ -727,8 +731,10 @@ export function setupContextMenu(): void {
           contexts: ["selection"],
         });
         if (chrome.runtime.lastError) {
+          const lastError = chrome.runtime.lastError as any;
+          const errorMessage = lastError.message || 'Unknown error';
           debugLogger.general("ERROR", "Failed to create push-selection menu", {
-            error: chrome.runtime.lastError.message,
+            error: errorMessage,
           });
         }
 
@@ -738,8 +744,10 @@ export function setupContextMenu(): void {
           contexts: ["image"],
         });
         if (chrome.runtime.lastError) {
+          const lastError = chrome.runtime.lastError as any;
+          const errorMessage = lastError.message || 'Unknown error';
           debugLogger.general("ERROR", "Failed to create push-image menu", {
-            error: chrome.runtime.lastError.message,
+            error: errorMessage,
           });
         }
 

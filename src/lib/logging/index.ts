@@ -364,9 +364,9 @@ export class DebugConfigManager {
       );
     }
   }
-  updateConfig(updates: Partial<DebugConfig>) {
+  async updateConfig(updates: Partial<DebugConfig>) {
     Object.assign(DEBUG_CONFIG, updates);
-    void this.saveConfig();
+    await this.saveConfig();
     debugLogger.general("INFO", "Debug configuration updated", updates);
   }
   toggleCategory(category: LogCategory) {

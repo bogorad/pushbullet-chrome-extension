@@ -1114,7 +1114,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(() => {
           sendResponse({ success: true });
         })
-        .catch((error) => {
+        .catch((error: any) => {
           debugLogger.general(
             "ERROR",
             "Failed to update debug config",

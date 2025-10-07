@@ -2,7 +2,7 @@
  * Popup page - Full TypeScript implementation
  */
 
-import type { Push, Device, UserInfo } from "../types/domain";
+import type { Push, Device, User } from "../types/domain";
 import { MessageAction } from "../types/domain";
 import {
   getElementById,
@@ -28,7 +28,7 @@ import { storageRepository } from "../infrastructure/storage/storage.repository"
 interface SessionData {
   isAuthenticated: boolean;
   devices: Device[];
-  userInfo: UserInfo;
+  userInfo: User;
   recentPushes: Push[];
   autoOpenLinks: boolean;
   websocketConnected?: boolean;
@@ -370,7 +370,7 @@ async function logout(): Promise<void> {
 /**
  * Update user info
  */
-function updateUserInfo(userInfo: UserInfo): void {
+function updateUserInfo(userInfo: User): void {
   userName.textContent = userInfo.name || userInfo.email;
 
   if (userInfo.image_url) {

@@ -98,7 +98,17 @@ export interface DismissalPush extends PushBase {
   source_user_iden?: string;
 }
 
-export type Push = LinkPush | NotePush | FilePush | MirrorPush | DismissalPush;
+export interface SmsChangedPush extends PushBase {
+  type: 'sms_changed';
+  notifications?: Array<{
+    title?: string;
+    body?: string;
+    timestamp?: number;
+    image_url?: string;
+  }>;
+}
+
+export type Push = LinkPush | NotePush | FilePush | MirrorPush | DismissalPush | SmsChangedPush;
 
 // ============================================================================
 // Session and State Types
@@ -211,6 +221,7 @@ export enum MessageAction {
   CLEAR_ALL_LOGS = 'clearAllLogs',
   UPDATE_DEBUG_CONFIG = 'updateDebugConfig',
   EXPORT_DEBUG_DATA = 'exportDebugData',
+  GET_DEBUG_SUMMARY = 'getDebugSummary',
   CONNECTION_STATE_CHANGED = 'connectionStateChanged',
   AUTO_OPEN_LINKS_CHANGED = 'autoOpenLinksChanged',
   ENCRYPTION_PASSWORD_CHANGED = 'encryptionPasswordChanged',

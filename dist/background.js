@@ -291,9 +291,9 @@
         );
       }
     }
-    updateConfig(updates) {
+    async updateConfig(updates) {
       Object.assign(DEBUG_CONFIG, updates);
-      void this.saveConfig();
+      await this.saveConfig();
       debugLogger.general("INFO", "Debug configuration updated", updates);
     }
     toggleCategory(category) {
@@ -538,27 +538,6 @@
   var wsStateMonitor = new WebSocketStateMonitor();
 
   // src/types/domain.ts
-  var MessageAction = /* @__PURE__ */ ((MessageAction2) => {
-    MessageAction2["GET_SESSION_DATA"] = "getSessionData";
-    MessageAction2["API_KEY_CHANGED"] = "apiKeyChanged";
-    MessageAction2["SESSION_DATA_UPDATED"] = "sessionDataUpdated";
-    MessageAction2["PUSHES_UPDATED"] = "pushesUpdated";
-    MessageAction2["SETTINGS_CHANGED"] = "settingsChanged";
-    MessageAction2["LOGOUT"] = "logout";
-    MessageAction2["REFRESH_SESSION"] = "refreshSession";
-    MessageAction2["UPDATE_DEVICE_NICKNAME"] = "updateDeviceNickname";
-    MessageAction2["LOG"] = "log";
-    MessageAction2["SEND_PUSH"] = "sendPush";
-    MessageAction2["GET_NOTIFICATION_DATA"] = "getNotificationData";
-    MessageAction2["CLEAR_ALL_LOGS"] = "clearAllLogs";
-    MessageAction2["UPDATE_DEBUG_CONFIG"] = "updateDebugConfig";
-    MessageAction2["EXPORT_DEBUG_DATA"] = "exportDebugData";
-    MessageAction2["CONNECTION_STATE_CHANGED"] = "connectionStateChanged";
-    MessageAction2["AUTO_OPEN_LINKS_CHANGED"] = "autoOpenLinksChanged";
-    MessageAction2["ENCRYPTION_PASSWORD_CHANGED"] = "encryptionPasswordChanged";
-    MessageAction2["DEBUG_MODE_CHANGED"] = "debugModeChanged";
-    return MessageAction2;
-  })(MessageAction || {});
   function isLinkPush(push) {
     return push.type === "link";
   }
@@ -2474,8 +2453,10 @@
             contexts: ["link"]
           });
           if (chrome.runtime.lastError) {
+            const lastError = chrome.runtime.lastError;
+            const errorMessage = lastError.message || "Unknown error";
             debugLogger.general("ERROR", "Failed to create push-link menu", {
-              error: chrome.runtime.lastError.message
+              error: errorMessage
             });
           }
           chrome.contextMenus.create({
@@ -2484,8 +2465,10 @@
             contexts: ["page"]
           });
           if (chrome.runtime.lastError) {
+            const lastError = chrome.runtime.lastError;
+            const errorMessage = lastError.message || "Unknown error";
             debugLogger.general("ERROR", "Failed to create push-page menu", {
-              error: chrome.runtime.lastError.message
+              error: errorMessage
             });
           }
           chrome.contextMenus.create({
@@ -2494,8 +2477,10 @@
             contexts: ["selection"]
           });
           if (chrome.runtime.lastError) {
+            const lastError = chrome.runtime.lastError;
+            const errorMessage = lastError.message || "Unknown error";
             debugLogger.general("ERROR", "Failed to create push-selection menu", {
-              error: chrome.runtime.lastError.message
+              error: errorMessage
             });
           }
           chrome.contextMenus.create({
@@ -2504,8 +2489,10 @@
             contexts: ["image"]
           });
           if (chrome.runtime.lastError) {
+            const lastError = chrome.runtime.lastError;
+            const errorMessage = lastError.message || "Unknown error";
             debugLogger.general("ERROR", "Failed to create push-image menu", {
-              error: chrome.runtime.lastError.message
+              error: errorMessage
             });
           }
           debugLogger.general("INFO", "Context menu created successfully");
@@ -3559,7 +3546,7 @@
         }
       })();
       return true;
-    } else if (message.action === MessageAction.GET_DEBUG_SUMMARY) {
+    } else if (message.action === "getDebugSummary" /* GET_DEBUG_SUMMARY */) {
       (async () => {
         await stateMachineReady;
         const logData = debugLogger.exportLogs();

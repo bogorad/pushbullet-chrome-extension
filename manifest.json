@@ -1,6 +1,6 @@
 {
   "name": "Pushbullet for Chrome with SMS reception (Unofficial)",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "UNOFFICIAL Manifest-V3-compatible Pushbullet client - not affiliated with Pushbullet Inc.",
   "manifest_version": 3,
   "icons": {
