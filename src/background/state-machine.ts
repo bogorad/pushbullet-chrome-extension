@@ -272,6 +272,8 @@ export class ServiceWorkerStateMachine {
       break;
 
     case ServiceWorkerState.INITIALIZING:
+      // The INITIALIZING state is now responsible for the "connecting" UI.
+      updateConnectionIcon('connecting');
       // Start initialization process
       if (this.callbacks.onInitialize) {
         try {

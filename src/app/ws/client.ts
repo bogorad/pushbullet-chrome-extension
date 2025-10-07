@@ -35,6 +35,7 @@ export class WebSocketClient {
   private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private pongTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private websocketUrl: string,
@@ -203,15 +204,17 @@ export class WebSocketClient {
             }
             break;
 
-          case "nop":
-            debugLogger.websocket(
-              "DEBUG",
-              "Received nop (keep-alive) message",
-              {
-                timestamp: new Date().toISOString(),
-              },
-            );
-            break;
+           case "nop":
+             // This is a "pong" from the server. It proves the connection is alive.
+             // Clear the timeout we are about to set in the ping() method.
+             if (this.pongTimeout !== null) {
+               clearTimeout(this.pongTimeout);
+               this.pongTimeout = null;
+             }
+             debugLogger.websocket("DEBUG", "Pong received (via nop)", {
+               timestamp: new Date().toISOString(),
+             });
+             break;
 
             // Note: 'ping' and 'pong' are WebSocket frame types, not message types
             // They should not appear in the message data, but we handle them defensively
@@ -401,5 +404,45 @@ export class WebSocketClient {
    */
   resetReconnectAttempts(): void {
     this.reconnectAttempts = 0;
+  }
+
+  /**
+   * Send a ping to test connection health
+   */
+  ping(): void {
+    // If a ping is already in progress, don't send another one.
+    if (this.pongTimeout !== null) {
+      return;
+    }
+
+    // If the socket isn't open, we can't send anything.
+    if (this.socket === null || this.socket.readyState !== WS_READY_STATE.OPEN) {
+      return;
+    }
+
+    try {
+      // 1. Send a "ping" to the server by sending a nop message.
+      this.socket.send(JSON.stringify({ type: "nop" }));
+      debugLogger.websocket("DEBUG", "Ping sent (as nop)", {
+        timestamp: new Date().toISOString(),
+      });
+
+      // 2. Set a timeout. If we don't get a pong back in 10 seconds,
+      //    we will assume the connection is dead.
+      this.pongTimeout = setTimeout(() => {
+        debugLogger.websocket("WARN", "Pong not received in 10 seconds. Assuming connection is dead.");
+
+        // 3. Forcefully close the connection from our side.
+        //    This is the key step! By closing it ourselves, we guarantee
+        //    that the onclose event will fire, which will trigger our
+        //    state machine to transition to DEGRADED.
+        this.socket?.close();
+      }, 10000); // 10-second timeout
+
+    } catch (error) {
+      debugLogger.websocket("ERROR", "Failed to send ping", {
+        timestamp: new Date().toISOString(),
+      }, error as Error);
+    }
   }
 }

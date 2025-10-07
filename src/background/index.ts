@@ -264,9 +264,6 @@ function connectWebSocket(): void {
   // MV3 LIFECYCLE TRACKING: Start recovery timer
   recoveryTimerStart = Date.now();
 
-  // Set connecting status
-  updateConnectionIcon("connecting");
-
   // SECURITY FIX (H-02): Dispose existing socket before creating new one
   if (websocketClient) {
     debugLogger.websocket(
@@ -680,7 +677,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   } else if (alarm.name === "websocketHealthCheck") {
     // SERVICE WORKER AMNESIA FIX: Ensure config is loaded before performing health check
     await ensureConfigLoaded();
-    performWebSocketHealthCheck(websocketClient, connectWebSocket);
+    performWebSocketHealthCheck(websocketClient);
     // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
     chrome.storage.local.set({ lastSeenAlive: Date.now() });
   } else if (alarm.name === "pollingFallback") {

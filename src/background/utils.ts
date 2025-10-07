@@ -623,30 +623,16 @@ export async function performPollingFetch(): Promise<void> {
 /**
  * Perform WebSocket health check
  */
-export function performWebSocketHealthCheck(
-  wsClient: any,
-  connectFn: () => void,
-): void {
-  const apiKey = getApiKey();
-
-  // If we have an API key but WebSocket is not connected, reconnect
-  if (apiKey && (!wsClient || !wsClient.isConnected())) {
-    debugLogger.websocket(
-      "WARN",
-      "Health check failed - WebSocket not connected",
-      {
-        hasWebSocket: !!wsClient,
-        isConnected: wsClient ? wsClient.isConnected() : false,
-      },
-    );
-
+export function performWebSocketHealthCheck(wsClient: any): void {
+  // If we have a client and it thinks it's connected, send a ping to be sure.
+  if (wsClient && wsClient.isConnected()) {
+    debugLogger.websocket("DEBUG", "Performing active health check (ping).");
+    wsClient.ping();
+  } else if (getApiKey()) {
+    // If we're not connected but should be, log it. The reconnect alarm
+    // will handle the actual reconnection attempt.
+    debugLogger.websocket("WARN", "Health check found client is disconnected.");
     performanceMonitor.recordHealthCheckFailure();
-    connectFn();
-  } else if (wsClient && wsClient.isConnected()) {
-    debugLogger.websocket("DEBUG", "Health check passed - WebSocket connected");
-    performanceMonitor.recordHealthCheckSuccess();
-  } else {
-    debugLogger.websocket("DEBUG", "Health check skipped - no API key");
   }
 }
 
