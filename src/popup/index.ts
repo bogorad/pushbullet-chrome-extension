@@ -2,12 +2,15 @@
  * Popup page - Full TypeScript implementation
  */
 
-import type { Push, Device, User } from "../types/domain";
+import type { Push, Device, User, SessionDataResponse } from "../types/domain";
 import { MessageAction } from "../types/domain";
 import {
   getElementById,
 } from "../lib/ui/dom";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
+
+// Response type for API key save operations
+type SaveKeyResponse = SessionDataResponse | { success: false; error?: string };
 
 // API URLs - MOSTLY REMOVED
 // ARCHITECTURAL CHANGE: Popup no longer makes direct API calls
@@ -27,12 +30,12 @@ import { storageRepository } from "../infrastructure/storage/storage.repository"
 // Type definitions
 interface SessionData {
   isAuthenticated: boolean;
+  userInfo: User | null;
   devices: Device[];
-  userInfo: User;
   recentPushes: Push[];
   autoOpenLinks: boolean;
   websocketConnected?: boolean;
-  deviceNickname?: string;
+  deviceNickname: string;
 }
 
 type PushType = "note" | "link" | "file";
@@ -117,10 +120,8 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
   }
 
   // Update device nickname
-  if (response.deviceNickname) {
-    deviceNickname = response.deviceNickname;
-    console.log("Device nickname:", deviceNickname);
-  }
+  deviceNickname = response.deviceNickname;
+  console.log("Device nickname:", deviceNickname);
 
   // Update user info
   if (response.userInfo) {
@@ -256,7 +257,6 @@ async function saveApiKey(): Promise<void> {
     await storageRepository.setApiKey(newApiKey);
     await storageRepository.setDeviceNickname(newNickname);
 
-    apiKey = newApiKey;
     deviceNickname = newNickname;
 
     // Notify background to validate and initialize
@@ -267,7 +267,7 @@ async function saveApiKey(): Promise<void> {
         apiKey: newApiKey,
         deviceNickname: newNickname,
       },
-      (response: SessionData) => {
+      (response: SaveKeyResponse) => {
         if (chrome.runtime.lastError) {
           console.error(
             "Error notifying background:",
@@ -278,20 +278,21 @@ async function saveApiKey(): Promise<void> {
           return;
         }
 
-        // Response contains session data after background has completed initialization
-        if (response.success === false) {
+        // Type guard: Check if response is a successful session object
+        if ('isAuthenticated' in response) {
+          // Response is SessionData
+          if (response.isAuthenticated) {
+            initializeFromSessionData(response);
+          } else {
+            showStatus("Invalid Access Token", "error");
+            showSection("login");
+          }
+        } else {
+          // Response is error object
           showStatus(
             `Error: ${response.error || "Invalid Access Token"}`,
             "error",
           );
-          showSection("login");
-          return;
-        }
-
-        if (response.isAuthenticated) {
-          initializeFromSessionData(response);
-        } else {
-          showStatus("Invalid Access Token", "error");
           showSection("login");
         }
       },
@@ -309,7 +310,6 @@ async function logout(): Promise<void> {
   // WebSocket disconnection is handled by background script
   await storageRepository.setApiKey(null);
   await storageRepository.setDeviceIden(null);
-  apiKey = null;
 
   // Notify background script to disconnect WebSocket
   chrome.runtime.sendMessage({ action: MessageAction.LOGOUT }).catch((error) => {
@@ -371,7 +371,7 @@ async function logout(): Promise<void> {
  * Update user info
  */
 function updateUserInfo(userInfo: User): void {
-  userName.textContent = userInfo.name || userInfo.email;
+  userName.textContent = userInfo.name || userInfo.email || '';
 
   if (userInfo.image_url) {
     userImage.src = userInfo.image_url;
@@ -416,60 +416,29 @@ function displayPushes(pushes: Push[]): void {
   const recentPushes = pushes.slice(0, 10);
 
   recentPushes.forEach((push) => {
-    let title = push.title;
-    let body = push.body;
-    const url = push.url;
+    // Declare variables to hold the content for this specific push
+    let title: string | undefined;
+    let body: string | undefined;
+    let url: string | undefined;
 
-    // Handle mirrored SMS notifications (check before generic sms_changed)
-    // The application_name might vary between Android phones, so we check if it includes 'messaging'
-    if (
-      push.type === "mirror" &&
-      push.application_name?.toLowerCase().includes("messaging")
-    ) {
-      title = `SMS: ${push.title}`;
-      body = push.body || "";
-      const pushItem = document.createElement("div");
-      pushItem.className = "push-item";
-      pushItem.classList.add("push-sms"); // Add visual indicator
-
-      // Timestamp
-      if (push.created) {
-        const timestamp = new Date(push.created * 1000);
-        const timeElement = document.createElement("div");
-        timeElement.className = "push-time";
-        timeElement.textContent = formatTimestamp(timestamp);
-        pushItem.appendChild(timeElement);
+    // Use type guards based on 'push.type' to safely access properties
+    if (push.type === 'note') {
+      title = push.title;
+      body = push.body;
+    } else if (push.type === 'link') {
+      title = push.title;
+      url = push.url;
+      body = push.body;
+    } else if (push.type === 'mirror') {
+      title = `SMS: ${push.title || ''}`;
+      body = push.body;
+    } else if (push.type === 'sms_changed') {
+      // This also fixes the 'sms is possibly undefined' error
+      if (push.notifications && push.notifications.length > 0) {
+        const sms = push.notifications[0]!;
+        title = sms.title;
+        body = sms.body;
       }
-
-      // Title
-      if (title) {
-        const titleEl = document.createElement("div");
-        titleEl.className = "push-title";
-        titleEl.textContent = title;
-        pushItem.appendChild(titleEl);
-      }
-
-      // Body
-      if (body) {
-        const bodyEl = document.createElement("div");
-        bodyEl.className = "push-body";
-        bodyEl.textContent = body;
-        pushItem.appendChild(bodyEl);
-      }
-
-      pushesList.appendChild(pushItem);
-      return; // Early return to avoid duplicate processing
-    }
-
-    // Handle legacy SMS pushes (fallback)
-    if (
-      push.type === "sms_changed" &&
-      push.notifications &&
-      push.notifications.length > 0
-    ) {
-      const sms = push.notifications[0];
-      title = sms.title || "SMS";
-      body = sms.body || "";
     }
 
     // Skip empty
@@ -480,8 +449,10 @@ function displayPushes(pushes: Push[]): void {
     const pushItem = document.createElement("div");
     pushItem.className = "push-item";
 
-    // Add SMS badge
-    if (push.type === "sms_changed") {
+    // Add SMS badge for SMS-related pushes
+    if (push.type === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
+      pushItem.classList.add("push-sms");
+    } else if (push.type === "sms_changed") {
       pushItem.classList.add("push-sms");
     }
 
@@ -498,17 +469,17 @@ function displayPushes(pushes: Push[]): void {
     if (title) {
       const titleEl = document.createElement("div");
       titleEl.className = "push-title";
-      titleEl.textContent = title;
+      titleEl.textContent = title || '';
       pushItem.appendChild(titleEl);
     }
 
     // URL
     if (url) {
       const urlEl = document.createElement("a");
-      urlEl.href = url;
+      urlEl.href = url as string;
       urlEl.target = "_blank";
       urlEl.className = "push-url";
-      urlEl.textContent = url;
+      urlEl.textContent = url || '';
       pushItem.appendChild(urlEl);
     }
 
@@ -516,7 +487,7 @@ function displayPushes(pushes: Push[]): void {
     if (body) {
       const bodyEl = document.createElement("div");
       bodyEl.className = "push-body";
-      bodyEl.textContent = body;
+      bodyEl.textContent = body || '';
       pushItem.appendChild(bodyEl);
     }
 
@@ -598,10 +569,10 @@ async function togglePushType(type: PushType): Promise<void> {
         active: true,
         currentWindow: true,
       });
-      if (tabs[0]) {
-        linkUrlInput.value = tabs[0].url || "";
-        linkTitleInput.value = tabs[0].title || "";
-      }
+       if (tabs[0]) {
+         linkUrlInput.value = tabs[0].url ? tabs[0].url : "";
+         linkTitleInput.value = tabs[0].title ? tabs[0].title : "";
+       }
     } catch (error) {
       console.error("Error getting current tab info:", error);
     }
@@ -658,21 +629,22 @@ async function sendPush(): Promise<void> {
         showStatus("Please enter a URL for the link.", "error");
         return;
       }
-    } else if (pushType === "file") {
-      logToBackground("INFO", '[sendPush] Handling "file" type.');
-      const file = fileInput.files?.[0];
-      if (!file) {
-        logToBackground(
-          "WARN",
-          "[sendPush] Exiting: File type selected but no file is attached.",
-        );
-        showStatus("Please select a file to attach.", "error");
-        return;
-      }
+      } else if (pushType === "file") {
+        logToBackground("INFO", '[sendPush] Handling "file" type.');
+        const file = fileInput.files?.[0];
 
-      showStatus("Uploading file...", "info");
+        showStatus("Uploading file...", "info");
 
-      try {
+        try {
+          // Check if file exists
+          if (!file) {
+            logToBackground(
+              "WARN",
+              "[sendPush] Exiting: File type selected but no file is attached.",
+            );
+            showStatus("Please select a file to attach.", "error");
+            return;
+          }
         const uploadApiKey = await storageRepository.getApiKey();
         if (!uploadApiKey) {
           logToBackground(
@@ -709,7 +681,7 @@ async function sendPush(): Promise<void> {
         // Upload to S3
         const formData = new FormData();
         Object.keys(uploadData.data).forEach((key) => {
-          formData.append(key, uploadData.data[key]);
+          formData.append(key, uploadData.data[key] as string);
         });
         formData.append("file", file);
 

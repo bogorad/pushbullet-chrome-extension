@@ -3425,7 +3425,6 @@
         });
       }).then(() => {
         sendResponse({
-          success: true,
           isAuthenticated: stateMachine.isInState("ready" /* READY */) || stateMachine.isInState("degraded" /* DEGRADED */),
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,

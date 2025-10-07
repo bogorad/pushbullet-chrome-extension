@@ -838,8 +838,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.deviceNickname) {
       savePromise = savePromise.then(() => {
         setDeviceNickname(message.deviceNickname);
-        sessionCache.deviceNickname = message.deviceNickname;
-        return storageRepository.setDeviceNickname(message.deviceNickname);
+        sessionCache.deviceNickname = message.deviceNickname as string;
+        return storageRepository.setDeviceNickname(message.deviceNickname as string);
       });
     }
 
@@ -855,7 +855,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => {
         // Send response with session data after state machine completes
         sendResponse({
-          success: true,
           isAuthenticated:
             stateMachine.isInState(ServiceWorkerState.READY) ||
             stateMachine.isInState(ServiceWorkerState.DEGRADED),

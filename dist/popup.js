@@ -205,10 +205,8 @@
       showSection("login");
       return;
     }
-    if (response.deviceNickname) {
-      deviceNickname = response.deviceNickname;
-      console.log("Device nickname:", deviceNickname);
-    }
+    deviceNickname = response.deviceNickname;
+    console.log("Device nickname:", deviceNickname);
     if (response.userInfo) {
       updateUserInfo(response.userInfo);
     }
@@ -286,7 +284,6 @@
     try {
       await storageRepository.setApiKey(newApiKey);
       await storageRepository.setDeviceNickname(newNickname);
-      apiKey = newApiKey;
       deviceNickname = newNickname;
       chrome.runtime.sendMessage(
         {
@@ -304,18 +301,18 @@
             showSection("login");
             return;
           }
-          if (response.success === false) {
+          if ("isAuthenticated" in response) {
+            if (response.isAuthenticated) {
+              initializeFromSessionData(response);
+            } else {
+              showStatus("Invalid Access Token", "error");
+              showSection("login");
+            }
+          } else {
             showStatus(
               `Error: ${response.error || "Invalid Access Token"}`,
               "error"
             );
-            showSection("login");
-            return;
-          }
-          if (response.isAuthenticated) {
-            initializeFromSessionData(response);
-          } else {
-            showStatus("Invalid Access Token", "error");
             showSection("login");
           }
         }
@@ -328,7 +325,6 @@
   async function logout() {
     await storageRepository.setApiKey(null);
     await storageRepository.setDeviceIden(null);
-    apiKey = null;
     chrome.runtime.sendMessage({ action: "logout" /* LOGOUT */ }).catch((error) => {
       console.warn("Could not notify background of logout:", error.message);
     });
@@ -337,7 +333,7 @@
     deviceNicknameInput.value = "";
   }
   function updateUserInfo(userInfo) {
-    userName.textContent = userInfo.name || userInfo.email;
+    userName.textContent = userInfo.name || userInfo.email || "";
     if (userInfo.image_url) {
       userImage.src = userInfo.image_url;
       userImage.style.display = "block";
@@ -365,48 +361,34 @@
     }
     const recentPushes = pushes.slice(0, 10);
     recentPushes.forEach((push) => {
-      let title = push.title;
-      let body = push.body;
-      const url = push.url;
-      if (push.type === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
-        title = `SMS: ${push.title}`;
-        body = push.body || "";
-        const pushItem2 = document.createElement("div");
-        pushItem2.className = "push-item";
-        pushItem2.classList.add("push-sms");
-        if (push.created) {
-          const timestamp = new Date(push.created * 1e3);
-          const timeElement = document.createElement("div");
-          timeElement.className = "push-time";
-          timeElement.textContent = formatTimestamp(timestamp);
-          pushItem2.appendChild(timeElement);
+      let title;
+      let body;
+      let url;
+      if (push.type === "note") {
+        title = push.title;
+        body = push.body;
+      } else if (push.type === "link") {
+        title = push.title;
+        url = push.url;
+        body = push.body;
+      } else if (push.type === "mirror") {
+        title = `SMS: ${push.title || ""}`;
+        body = push.body;
+      } else if (push.type === "sms_changed") {
+        if (push.notifications && push.notifications.length > 0) {
+          const sms = push.notifications[0];
+          title = sms.title;
+          body = sms.body;
         }
-        if (title) {
-          const titleEl = document.createElement("div");
-          titleEl.className = "push-title";
-          titleEl.textContent = title;
-          pushItem2.appendChild(titleEl);
-        }
-        if (body) {
-          const bodyEl = document.createElement("div");
-          bodyEl.className = "push-body";
-          bodyEl.textContent = body;
-          pushItem2.appendChild(bodyEl);
-        }
-        pushesList.appendChild(pushItem2);
-        return;
-      }
-      if (push.type === "sms_changed" && push.notifications && push.notifications.length > 0) {
-        const sms = push.notifications[0];
-        title = sms.title || "SMS";
-        body = sms.body || "";
       }
       if (!title && !body && !url) {
         return;
       }
       const pushItem = document.createElement("div");
       pushItem.className = "push-item";
-      if (push.type === "sms_changed") {
+      if (push.type === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
+        pushItem.classList.add("push-sms");
+      } else if (push.type === "sms_changed") {
         pushItem.classList.add("push-sms");
       }
       if (push.created) {
@@ -419,7 +401,7 @@
       if (title) {
         const titleEl = document.createElement("div");
         titleEl.className = "push-title";
-        titleEl.textContent = title;
+        titleEl.textContent = title || "";
         pushItem.appendChild(titleEl);
       }
       if (url) {
@@ -427,13 +409,13 @@
         urlEl.href = url;
         urlEl.target = "_blank";
         urlEl.className = "push-url";
-        urlEl.textContent = url;
+        urlEl.textContent = url || "";
         pushItem.appendChild(urlEl);
       }
       if (body) {
         const bodyEl = document.createElement("div");
         bodyEl.className = "push-body";
-        bodyEl.textContent = body;
+        bodyEl.textContent = body || "";
         pushItem.appendChild(bodyEl);
       }
       pushesList.appendChild(pushItem);
@@ -493,8 +475,8 @@
           currentWindow: true
         });
         if (tabs[0]) {
-          linkUrlInput.value = tabs[0].url || "";
-          linkTitleInput.value = tabs[0].title || "";
+          linkUrlInput.value = tabs[0].url ? tabs[0].url : "";
+          linkTitleInput.value = tabs[0].title ? tabs[0].title : "";
         }
       } catch (error) {
         console.error("Error getting current tab info:", error);
@@ -542,16 +524,16 @@
       } else if (pushType === "file") {
         logToBackground("INFO", '[sendPush] Handling "file" type.');
         const file = fileInput.files?.[0];
-        if (!file) {
-          logToBackground(
-            "WARN",
-            "[sendPush] Exiting: File type selected but no file is attached."
-          );
-          showStatus("Please select a file to attach.", "error");
-          return;
-        }
         showStatus("Uploading file...", "info");
         try {
+          if (!file) {
+            logToBackground(
+              "WARN",
+              "[sendPush] Exiting: File type selected but no file is attached."
+            );
+            showStatus("Please select a file to attach.", "error");
+            return;
+          }
           const uploadApiKey = await storageRepository.getApiKey();
           if (!uploadApiKey) {
             logToBackground(

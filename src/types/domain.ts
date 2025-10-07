@@ -234,11 +234,11 @@ export interface GetSessionDataMessage {
 
 export interface SessionDataResponse {
   isAuthenticated: boolean;
-  userInfo?: User | null;
-  devices?: Device[];
-  recentPushes?: Push[];
-  autoOpenLinks?: boolean;
-  deviceNickname?: string;
+  userInfo: User | null;
+  devices: Device[];
+  recentPushes: Push[];
+  autoOpenLinks: boolean;
+  deviceNickname: string;
   websocketConnected?: boolean;
 }
 
