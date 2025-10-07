@@ -557,8 +557,6 @@ export function checkPollingMode(): void {
     // Start polling alarm
     chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
 
-    updateConnectionIcon("degraded");
-
     debugLogger.general("INFO", "Polling mode activated", {
       interval: "1 minute",
     });

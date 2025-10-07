@@ -16,7 +16,7 @@
  */
 
 import { debugLogger } from '../lib/logging';
-import { updateExtensionTooltip } from './utils';
+import { updateExtensionTooltip, updateConnectionIcon } from './utils';
 
 /**
  * Service Worker States
@@ -300,6 +300,8 @@ export class ServiceWorkerStateMachine {
     case ServiceWorkerState.DEGRADED:
       // When we ENTER the DEGRADED state, we start polling
       debugLogger.general('WARN', 'Entering DEGRADED state. Starting polling fallback.');
+      // Directly update the icon to reflect the new state
+      updateConnectionIcon('degraded');
       chrome.alarms.create('pollingFallback', { periodInMinutes: 1 });
       // Call the callback for consistency
       if (this.callbacks.onStartPolling) {

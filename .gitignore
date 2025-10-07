@@ -1,3 +1,4 @@
+.env
 .direnv
 node_modules/
 flake.lock

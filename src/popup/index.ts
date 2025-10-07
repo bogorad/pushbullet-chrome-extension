@@ -569,10 +569,10 @@ async function togglePushType(type: PushType): Promise<void> {
         active: true,
         currentWindow: true,
       });
-       if (tabs[0]) {
-         linkUrlInput.value = tabs[0].url ? tabs[0].url : "";
-         linkTitleInput.value = tabs[0].title ? tabs[0].title : "";
-       }
+      if (tabs[0]) {
+        linkUrlInput.value = tabs[0].url ? tabs[0].url : "";
+        linkTitleInput.value = tabs[0].title ? tabs[0].title : "";
+      }
     } catch (error) {
       console.error("Error getting current tab info:", error);
     }
@@ -629,22 +629,22 @@ async function sendPush(): Promise<void> {
         showStatus("Please enter a URL for the link.", "error");
         return;
       }
-      } else if (pushType === "file") {
-        logToBackground("INFO", '[sendPush] Handling "file" type.');
-        const file = fileInput.files?.[0];
+    } else if (pushType === "file") {
+      logToBackground("INFO", '[sendPush] Handling "file" type.');
+      const file = fileInput.files?.[0];
 
-        showStatus("Uploading file...", "info");
+      showStatus("Uploading file...", "info");
 
-        try {
-          // Check if file exists
-          if (!file) {
-            logToBackground(
-              "WARN",
-              "[sendPush] Exiting: File type selected but no file is attached.",
-            );
-            showStatus("Please select a file to attach.", "error");
-            return;
-          }
+      try {
+        // Check if file exists
+        if (!file) {
+          logToBackground(
+            "WARN",
+            "[sendPush] Exiting: File type selected but no file is attached.",
+          );
+          showStatus("Please select a file to attach.", "error");
+          return;
+        }
         const uploadApiKey = await storageRepository.getApiKey();
         if (!uploadApiKey) {
           logToBackground(

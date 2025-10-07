@@ -2345,7 +2345,6 @@
       );
       setPollingMode(true);
       chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
-      updateConnectionIcon("degraded");
       debugLogger.general("INFO", "Polling mode activated", {
         interval: "1 minute"
       });
@@ -2775,6 +2774,7 @@
           break;
         case "degraded" /* DEGRADED */:
           debugLogger.general("WARN", "Entering DEGRADED state. Starting polling fallback.");
+          updateConnectionIcon("degraded");
           chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
           if (this.callbacks.onStartPolling) {
             this.callbacks.onStartPolling();
@@ -3162,7 +3162,6 @@
     });
     globalEventBus.on("websocket:disconnected", () => {
       stateMachine.transition("WS_DISCONNECTED");
-      updateConnectionIcon("disconnected");
     });
     globalEventBus.on("websocket:polling:check", () => {
       checkPollingMode();

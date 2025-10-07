@@ -468,7 +468,6 @@ function connectWebSocket(): void {
   globalEventBus.on("websocket:disconnected", () => {
     // Trigger state machine transition
     stateMachine.transition("WS_DISCONNECTED");
-    updateConnectionIcon("disconnected");
   });
 
   globalEventBus.on("websocket:polling:check", () => {
