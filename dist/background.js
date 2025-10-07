@@ -1915,14 +1915,18 @@
       const url = new URL(urlString);
       return url.hostname.endsWith(".pushbullet.com") || /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);
     } catch {
-      debugLogger.general("WARN", "Could not parse URL for domain check", { url: urlString });
+      debugLogger.general("WARN", "Could not parse URL for domain check", {
+        url: urlString
+      });
       return false;
     }
   }
   function updateExtensionTooltip(stateDescription) {
     try {
       chrome.action.setTitle({ title: stateDescription });
-      debugLogger.general("DEBUG", "Updated extension tooltip", { stateDescription });
+      debugLogger.general("DEBUG", "Updated extension tooltip", {
+        stateDescription
+      });
     } catch (error2) {
       debugLogger.general("ERROR", "Exception setting tooltip", {
         stateDescription,
@@ -1933,16 +1937,14 @@
   function updateConnectionIcon(status) {
     try {
       const badgeText = status === "connected" ? "\u25CF" : status === "connecting" ? "\u25D0" : "\u25CB";
-      const badgeColor = status === "connected" ? "#4CAF50" : (
-        // Green
-        status === "connecting" ? "#FFC107" : (
-          // Yellow
-          "#F44336"
-        )
-      );
+      const badgeColor = status === "connected" ? "#4CAF50" : status === "connecting" ? "#FFC107" : "#F44336";
       chrome.action.setBadgeText({ text: badgeText });
       chrome.action.setBadgeBackgroundColor({ color: badgeColor });
-      debugLogger.general("DEBUG", "Updated connection status badge", { status, badgeText, badgeColor });
+      debugLogger.general("DEBUG", "Updated connection status badge", {
+        status,
+        badgeText,
+        badgeColor
+      });
     } catch {
       debugLogger.general("ERROR", "Exception setting badge", {
         status,
@@ -1969,12 +1971,21 @@
       sessionCache.recentPushes = pushes;
       sessionCache.lastUpdated = Date.now();
       for (const push of newPushes) {
-        debugLogger.general("INFO", "Showing notification for new push from tickle", {
-          pushIden: push.iden,
-          pushType: push.type
-        });
+        debugLogger.general(
+          "INFO",
+          "Showing notification for new push from tickle",
+          {
+            pushIden: push.iden,
+            pushType: push.type
+          }
+        );
         showPushNotification(push, notificationDataStore2).catch((error2) => {
-          debugLogger.general("ERROR", "Failed to show notification", { pushIden: push.iden }, error2);
+          debugLogger.general(
+            "ERROR",
+            "Failed to show notification",
+            { pushIden: push.iden },
+            error2
+          );
         });
         const autoOpenLinks2 = getAutoOpenLinks();
         if (autoOpenLinks2 && isLinkPush(push)) {
@@ -1987,9 +1998,14 @@
             active: false
             // Open in background to avoid disrupting user
           }).catch((error2) => {
-            debugLogger.general("ERROR", "Failed to auto-open link from tickle", {
-              url: push.url
-            }, error2);
+            debugLogger.general(
+              "ERROR",
+              "Failed to auto-open link from tickle",
+              {
+                url: push.url
+              },
+              error2
+            );
           });
         }
       }
@@ -1999,12 +2015,25 @@
       }).catch(() => {
       });
     } catch (error2) {
-      debugLogger.general("ERROR", "Failed to refresh pushes", null, error2);
+      debugLogger.general(
+        "ERROR",
+        "Failed to refresh pushes",
+        null,
+        error2
+      );
     }
   }
   var counter = 0;
   async function showPushNotification(push, notificationDataStore2) {
     try {
+      if (push.type === "sms_changed" && (!push.notifications || push.notifications.length === 0)) {
+        debugLogger.notifications(
+          "INFO",
+          "Ignoring sms_changed push with no notification content (deletion event).",
+          { pushIden: push.iden }
+        );
+        return;
+      }
       const notificationId = `pushbullet-push-${counter++}-${Date.now()}`;
       const baseOptions = {
         iconUrl: chrome.runtime.getURL("icons/icon128.png")
@@ -2022,18 +2051,44 @@
           title: "Pushbullet",
           message: "An encrypted push was received. To view future encrypted pushes you need to add the correct end2end password in options"
         };
-        debugLogger.notifications("INFO", "Showing notification for undecrypted push");
+        debugLogger.notifications(
+          "INFO",
+          "Showing notification for undecrypted push"
+        );
       } else if (push.type === "sms_changed" && push.notifications && push.notifications.length > 0) {
-        const mms = push.notifications[0];
-        notificationOptions = {
-          ...baseOptions,
-          type: "image",
-          title: mms.title || "New Message",
-          message: mms.body || "",
-          imageUrl: mms.image_url || ""
-          // Set the image for the notification
-        };
-        debugLogger.notifications("INFO", "Showing image notification for MMS");
+        debugLogger.notifications(
+          "DEBUG",
+          "Complete sms_changed push object received",
+          { push }
+        );
+        const sms = push.notifications[0];
+        if (!sms.body) {
+          debugLogger.notifications("INFO", "Ignoring empty/deleted SMS push", {
+            pushIden: push.iden
+          });
+          return;
+        }
+        const title = sms.title || "New SMS";
+        const message = sms.body || "";
+        const imageUrl = sms.image_url;
+        if (imageUrl && isTrustedImageUrl(imageUrl)) {
+          notificationOptions = {
+            ...baseOptions,
+            type: "image",
+            title,
+            message,
+            imageUrl
+          };
+          debugLogger.notifications("INFO", "Showing image notification for MMS");
+        } else {
+          notificationOptions = {
+            ...baseOptions,
+            type: "basic",
+            title,
+            message
+          };
+          debugLogger.notifications("INFO", "Showing basic notification for SMS");
+        }
       } else {
         let title = "Pushbullet";
         let message = "";
@@ -2056,7 +2111,11 @@
             message
           };
         } else if (push.type === "file") {
-          debugLogger.notifications("DEBUG", "Complete file push object received", { push });
+          debugLogger.notifications(
+            "DEBUG",
+            "Complete file push object received",
+            { push }
+          );
           let fileTitle = "New File";
           let fileMessage = "";
           if (push.title) {
@@ -2082,10 +2141,14 @@
               message: fileMessage,
               imageUrl: previewUrl
             };
-            debugLogger.notifications("INFO", "Showing image notification for trusted file push", {
-              fileName: push.file_name,
-              previewUrl
-            });
+            debugLogger.notifications(
+              "INFO",
+              "Showing image notification for trusted file push",
+              {
+                fileName: push.file_name,
+                previewUrl
+              }
+            );
           } else {
             notificationOptions = {
               ...baseOptions,
@@ -2094,9 +2157,13 @@
               message: fileMessage
             };
             if (imageUrl && !isTrustedImageUrl(imageUrl)) {
-              debugLogger.notifications("WARN", "Ignored image from untrusted domain for file push", {
-                imageUrl
-              });
+              debugLogger.notifications(
+                "WARN",
+                "Ignored image from untrusted domain for file push",
+                {
+                  imageUrl
+                }
+              );
             }
           }
         } else if (push.type === "mirror") {
@@ -2111,7 +2178,11 @@
               message: mirrorMessage,
               imageUrl: mirrorImageUrl
             };
-            debugLogger.notifications("INFO", "Showing image notification for trusted mirrored push", { pushType: push.type });
+            debugLogger.notifications(
+              "INFO",
+              "Showing image notification for trusted mirrored push",
+              { pushType: push.type }
+            );
           } else {
             notificationOptions = {
               ...baseOptions,
@@ -2120,7 +2191,11 @@
               message: mirrorMessage
             };
             if (mirrorImageUrl) {
-              debugLogger.notifications("WARN", "Ignored image from untrusted domain for mirror push", { imageUrl: mirrorImageUrl });
+              debugLogger.notifications(
+                "WARN",
+                "Ignored image from untrusted domain for mirror push",
+                { imageUrl: mirrorImageUrl }
+              );
             }
           }
         } else {
@@ -2132,7 +2207,9 @@
             title: defaultTitle,
             message: defaultMessage
           };
-          debugLogger.notifications("INFO", "Showing basic notification", { pushType: push.type });
+          debugLogger.notifications("INFO", "Showing basic notification", {
+            pushType: push.type
+          });
         }
       }
       const finalNotificationOptions = {
@@ -2149,26 +2226,43 @@
         notificationDataStore2.set(notificationId, push);
       }
       performanceMonitor.recordNotificationCreated();
-      debugLogger.notifications("INFO", "Push notification created", { notificationId, pushType: push.type });
+      debugLogger.notifications("INFO", "Push notification created", {
+        notificationId,
+        pushType: push.type
+      });
     } catch (error2) {
       performanceMonitor.recordNotificationFailed();
-      debugLogger.notifications("ERROR", "Failed to show push notification", { pushIden: push.iden }, error2);
+      debugLogger.notifications(
+        "ERROR",
+        "Failed to show push notification",
+        { pushIden: push.iden },
+        error2
+      );
     }
   }
   function checkPollingMode() {
     const qualityMetrics = performanceMonitor.getQualityMetrics();
     if (qualityMetrics.consecutiveFailures >= 3 && !isPollingMode()) {
-      debugLogger.general("WARN", "Entering polling mode due to consecutive failures", {
-        consecutiveFailures: qualityMetrics.consecutiveFailures
-      });
+      debugLogger.general(
+        "WARN",
+        "Entering polling mode due to consecutive failures",
+        {
+          consecutiveFailures: qualityMetrics.consecutiveFailures
+        }
+      );
       setPollingMode(true);
       chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
-      debugLogger.general("INFO", "Polling mode activated", { interval: "1 minute" });
+      debugLogger.general("INFO", "Polling mode activated", {
+        interval: "1 minute"
+      });
     }
   }
   function stopPollingMode() {
     if (isPollingMode()) {
-      debugLogger.general("INFO", "Stopping polling mode - WebSocket reconnected");
+      debugLogger.general(
+        "INFO",
+        "Stopping polling mode - WebSocket reconnected"
+      );
       setPollingMode(false);
       chrome.alarms.clear("pollingFallback");
     }
@@ -2204,10 +2298,14 @@
   function performWebSocketHealthCheck(wsClient, connectFn) {
     const apiKey2 = getApiKey();
     if (apiKey2 && (!wsClient || !wsClient.isConnected())) {
-      debugLogger.websocket("WARN", "Health check failed - WebSocket not connected", {
-        hasWebSocket: !!wsClient,
-        isConnected: wsClient ? wsClient.isConnected() : false
-      });
+      debugLogger.websocket(
+        "WARN",
+        "Health check failed - WebSocket not connected",
+        {
+          hasWebSocket: !!wsClient,
+          isConnected: wsClient ? wsClient.isConnected() : false
+        }
+      );
       performanceMonitor.recordHealthCheckFailure();
       connectFn();
     } else if (wsClient && wsClient.isConnected()) {
@@ -2226,16 +2324,23 @@
   }
   function setupContextMenu() {
     if (isSettingUpContextMenu) {
-      debugLogger.general("INFO", "Context menu setup already in progress, skipping");
+      debugLogger.general(
+        "INFO",
+        "Context menu setup already in progress, skipping"
+      );
       return;
     }
     isSettingUpContextMenu = true;
     try {
       chrome.contextMenus.removeAll(() => {
         if (chrome.runtime.lastError) {
-          debugLogger.general("ERROR", "Failed to remove existing context menus", {
-            error: chrome.runtime.lastError.message
-          });
+          debugLogger.general(
+            "ERROR",
+            "Failed to remove existing context menus",
+            {
+              error: chrome.runtime.lastError.message
+            }
+          );
           isSettingUpContextMenu = false;
           return;
         }
@@ -2286,7 +2391,12 @@
         }
       });
     } catch (error2) {
-      debugLogger.general("ERROR", "Failed to create context menu", null, error2);
+      debugLogger.general(
+        "ERROR",
+        "Failed to create context menu",
+        null,
+        error2
+      );
       isSettingUpContextMenu = false;
     }
   }
@@ -2319,17 +2429,19 @@
         throw new Error(`Failed to push link: ${response.status}`);
       }
       debugLogger.general("INFO", "Link pushed successfully", { url, title });
-      createNotificationWithTimeout(
-        "pushbullet-link-sent",
-        {
-          type: "basic",
-          iconUrl: "icons/icon128.png",
-          title: "Link Sent",
-          message: title || url
-        }
-      );
+      createNotificationWithTimeout("pushbullet-link-sent", {
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "Link Sent",
+        message: title || url
+      });
     } catch (error2) {
-      debugLogger.general("ERROR", "Failed to push link", { url, title }, error2);
+      debugLogger.general(
+        "ERROR",
+        "Failed to push link",
+        { url, title },
+        error2
+      );
     }
   }
   async function pushNote(title, body) {
@@ -2357,17 +2469,19 @@
         throw new Error(`Failed to push note: ${response.status}`);
       }
       debugLogger.general("INFO", "Note pushed successfully", { title });
-      createNotificationWithTimeout(
-        "pushbullet-note-sent",
-        {
-          type: "basic",
-          iconUrl: "icons/icon128.png",
-          title: "Note Sent",
-          message: title
-        }
-      );
+      createNotificationWithTimeout("pushbullet-note-sent", {
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "Note Sent",
+        message: title
+      });
     } catch (error2) {
-      debugLogger.general("ERROR", "Failed to push note", { title }, error2);
+      debugLogger.general(
+        "ERROR",
+        "Failed to push note",
+        { title },
+        error2
+      );
     }
   }
 
@@ -2682,18 +2796,32 @@
       try {
         const apiKey2 = await storageRepository.getApiKey();
         if (apiKey2) {
-          debugLogger.storage("INFO", `API key found on attempt ${i + 1}/${attempts}`);
+          debugLogger.storage(
+            "INFO",
+            `API key found on attempt ${i + 1}/${attempts}`
+          );
           return apiKey2;
         }
-        debugLogger.storage("DEBUG", `API key not found on attempt ${i + 1}/${attempts}, will retry`);
+        debugLogger.storage(
+          "DEBUG",
+          `API key not found on attempt ${i + 1}/${attempts}, will retry`
+        );
       } catch (error2) {
-        debugLogger.storage("WARN", `Error getting API key on attempt ${i + 1}/${attempts}`, null, error2);
+        debugLogger.storage(
+          "WARN",
+          `Error getting API key on attempt ${i + 1}/${attempts}`,
+          null,
+          error2
+        );
       }
       if (i < attempts - 1) {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
-    debugLogger.storage("WARN", `API key not found after ${attempts} retry attempts - assuming no key configured`);
+    debugLogger.storage(
+      "WARN",
+      `API key not found after ${attempts} retry attempts - assuming no key configured`
+    );
     return null;
   }
   var websocketClient2 = null;
@@ -2732,11 +2860,17 @@
       disconnectWebSocket();
     }
   };
-  var stateMachineReady = ServiceWorkerStateMachine.create(stateMachineCallbacks).then((sm) => {
+  var stateMachineReady = ServiceWorkerStateMachine.create(
+    stateMachineCallbacks
+  ).then((sm) => {
     stateMachine = sm;
-    debugLogger.general("INFO", "[Background] State machine initialized and ready", {
-      currentState: stateMachine.getCurrentState()
-    });
+    debugLogger.general(
+      "INFO",
+      "[Background] State machine initialized and ready",
+      {
+        currentState: stateMachine.getCurrentState()
+      }
+    );
   });
   async function restoreVisualState() {
     try {
@@ -2745,7 +2879,9 @@
         "lastKnownStateDescription"
       ]);
       if (lastKnownState) {
-        debugLogger.general("INFO", "Restoring visual state from storage", { state: lastKnownState });
+        debugLogger.general("INFO", "Restoring visual state from storage", {
+          state: lastKnownState
+        });
         if (lastKnownStateDescription) {
           updateExtensionTooltip(lastKnownStateDescription);
         }
@@ -2766,18 +2902,29 @@
         }
       }
     } catch (error2) {
-      debugLogger.general("ERROR", "Failed to restore visual state", null, error2);
+      debugLogger.general(
+        "ERROR",
+        "Failed to restore visual state",
+        null,
+        error2
+      );
     }
   }
   function connectWebSocket() {
     recoveryTimerStart = Date.now();
     updateConnectionIcon("connecting");
     if (websocketClient2) {
-      debugLogger.websocket("INFO", "Disposing existing WebSocket before reconnecting");
+      debugLogger.websocket(
+        "INFO",
+        "Disposing existing WebSocket before reconnecting"
+      );
       websocketClient2.disconnect();
       websocketClient2 = null;
     }
-    debugLogger.websocket("DEBUG", "Cleaning up old event listeners before reconnecting");
+    debugLogger.websocket(
+      "DEBUG",
+      "Cleaning up old event listeners before reconnecting"
+    );
     globalEventBus.removeAllListeners("websocket:tickle:push");
     globalEventBus.removeAllListeners("websocket:tickle:device");
     globalEventBus.removeAllListeners("websocket:push");
@@ -2829,15 +2976,23 @@
               pushType: decryptedPush.type
             });
           } else {
-            debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+            debugLogger.general(
+              "WARN",
+              "Cannot decrypt push - no encryption password set"
+            );
           }
         } catch (error2) {
-          debugLogger.general("ERROR", "Failed to decrypt push", {
-            error: error2.message
-          }, error2);
+          debugLogger.general(
+            "ERROR",
+            "Failed to decrypt push",
+            {
+              error: error2.message
+            },
+            error2
+          );
         }
       }
-      const displayableTypes = ["mirror", "note", "link"];
+      const displayableTypes = ["mirror", "note", "link", "sms_changed"];
       if (!displayableTypes.includes(decryptedPush.type)) {
         debugLogger.general("INFO", "Ignoring non-displayable push of type", {
           pushType: decryptedPush.type,
@@ -2858,10 +3013,17 @@
         }).catch(() => {
         });
       }
-      showPushNotification(decryptedPush, notificationDataStore).catch((error2) => {
-        debugLogger.general("ERROR", "Failed to show notification", null, error2);
-        performanceMonitor.recordNotificationFailed();
-      });
+      showPushNotification(decryptedPush, notificationDataStore).catch(
+        (error2) => {
+          debugLogger.general(
+            "ERROR",
+            "Failed to show notification",
+            null,
+            error2
+          );
+          performanceMonitor.recordNotificationFailed();
+        }
+      );
       const autoOpenLinks2 = getAutoOpenLinks();
       if (autoOpenLinks2 && isLinkPush(decryptedPush)) {
         debugLogger.general("INFO", "Auto-opening link push", {
@@ -2873,18 +3035,27 @@
           active: false
           // Open in background to avoid disrupting user
         }).catch((error2) => {
-          debugLogger.general("ERROR", "Failed to auto-open link", {
-            url: decryptedPush.url
-          }, error2);
+          debugLogger.general(
+            "ERROR",
+            "Failed to auto-open link",
+            {
+              url: decryptedPush.url
+            },
+            error2
+          );
         });
       }
     });
     globalEventBus.on("websocket:connected", async () => {
       const recoveryTime = Date.now() - recoveryTimerStart;
-      debugLogger.performance("INFO", "WebSocket recovery time", { duration: recoveryTime });
+      debugLogger.performance("INFO", "WebSocket recovery time", {
+        duration: recoveryTime
+      });
       const { recoveryTimings = [] } = await chrome.storage.local.get("recoveryTimings");
       recoveryTimings.push(recoveryTime);
-      await chrome.storage.local.set({ recoveryTimings: recoveryTimings.slice(-20) });
+      await chrome.storage.local.set({
+        recoveryTimings: recoveryTimings.slice(-20)
+      });
       stateMachine.transition("WS_CONNECTED");
       updateConnectionIcon("connected");
     });
@@ -2928,7 +3099,12 @@
       }
       await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
     } catch (error2) {
-      debugLogger.storage("ERROR", "Failed to read API key on startup", null, error2);
+      debugLogger.storage(
+        "ERROR",
+        "Failed to read API key on startup",
+        null,
+        error2
+      );
       await stateMachine.transition("STARTUP", { hasApiKey: false });
     }
   });
@@ -2936,10 +3112,14 @@
     const { restarts = 0 } = await chrome.storage.local.get("restarts");
     await chrome.storage.local.set({ restarts: restarts + 1 });
     await restoreVisualState();
-    debugLogger.general("INFO", "Browser started - reinitializing Pushbullet extension", {
-      reason: "onStartup",
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
+    debugLogger.general(
+      "INFO",
+      "Browser started - reinitializing Pushbullet extension",
+      {
+        reason: "onStartup",
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      }
+    );
     setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onStartup");
     setupContextMenu();
@@ -2952,7 +3132,12 @@
       }
       await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
     } catch (error2) {
-      debugLogger.storage("ERROR", "Failed to read API key on startup", null, error2);
+      debugLogger.storage(
+        "ERROR",
+        "Failed to read API key on startup",
+        null,
+        error2
+      );
       await stateMachine.transition("STARTUP", { hasApiKey: false });
     }
   });
@@ -2983,7 +3168,10 @@
       });
       connectWebSocket();
     } else if (alarm.name === "websocketReconnect") {
-      debugLogger.websocket("WARN", "Reconnection alarm triggered but no API key available");
+      debugLogger.websocket(
+        "WARN",
+        "Reconnection alarm triggered but no API key available"
+      );
     } else if (alarm.name === "websocketHealthCheck") {
       await ensureConfigLoaded();
       performWebSocketHealthCheck(websocketClient2, connectWebSocket);
@@ -3028,11 +3216,15 @@
   });
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!validatePrivilegedMessage(message.action, sender)) {
-      debugLogger.general("ERROR", "Rejected privileged message from untrusted sender", {
-        action: message.action,
-        senderId: sender?.id,
-        senderUrl: sender?.url
-      });
+      debugLogger.general(
+        "ERROR",
+        "Rejected privileged message from untrusted sender",
+        {
+          action: message.action,
+          senderId: sender?.id,
+          senderUrl: sender?.url
+        }
+      );
       sendResponse({ success: false, error: "Unauthorized" });
       return false;
     } else if (message.action === "log") {
@@ -3060,7 +3252,10 @@
           await ensureConfigLoaded();
           const storedApiKey = await storageRepository.getApiKey();
           if (storedApiKey && !sessionCache.isAuthenticated) {
-            debugLogger.general("WARN", "Service worker wake-up detected - reloading session from storage.");
+            debugLogger.general(
+              "WARN",
+              "Service worker wake-up detected - reloading session from storage."
+            );
             await initializeSessionCache("onMessageWakeup", connectWebSocket, {
               setApiKey,
               setDeviceIden,
@@ -3079,8 +3274,16 @@
             websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
           });
         } catch (error2) {
-          debugLogger.general("ERROR", "Error handling getSessionData after wake-up", null, error2);
-          sendResponse({ isAuthenticated: false, error: error2.message });
+          debugLogger.general(
+            "ERROR",
+            "Error handling getSessionData after wake-up",
+            null,
+            error2
+          );
+          sendResponse({
+            isAuthenticated: false,
+            error: error2.message
+          });
         }
       })();
       return true;
@@ -3095,7 +3298,9 @@
         });
       }
       savePromise.then(() => stateMachineReady).then(() => {
-        return stateMachine.transition("API_KEY_SET", { apiKey: message.apiKey });
+        return stateMachine.transition("API_KEY_SET", {
+          apiKey: message.apiKey
+        });
       }).then(() => {
         sendResponse({
           success: true,
@@ -3141,7 +3346,12 @@
               deviceNickname: sessionCache.deviceNickname
             });
           }).catch((error2) => {
-            debugLogger.general("ERROR", "Error refreshing session", null, error2);
+            debugLogger.general(
+              "ERROR",
+              "Error refreshing session",
+              null,
+              error2
+            );
             sendResponse({ isAuthenticated: false });
           });
         } else {
@@ -3176,7 +3386,9 @@
       }
       if (message.notificationTimeout !== void 0) {
         setNotificationTimeout(message.notificationTimeout);
-        promises.push(storageRepository.setNotificationTimeout(message.notificationTimeout));
+        promises.push(
+          storageRepository.setNotificationTimeout(message.notificationTimeout)
+        );
       }
       Promise.all(promises).then(() => {
         sendResponse({ success: true });
@@ -3197,7 +3409,12 @@
             await storageRepository.setDeviceNickname(message.nickname);
             sendResponse({ success: true });
           }).catch((error2) => {
-            debugLogger.general("ERROR", "Error updating device nickname", null, error2);
+            debugLogger.general(
+              "ERROR",
+              "Error updating device nickname",
+              null,
+              error2
+            );
             sendResponse({ success: false, error: error2.message });
           });
         } else {
@@ -3279,7 +3496,12 @@
         debugConfigManager.updateConfig(message.config).then(() => {
           sendResponse({ success: true });
         }).catch((error2) => {
-          debugLogger.general("ERROR", "Failed to update debug config", null, error2);
+          debugLogger.general(
+            "ERROR",
+            "Failed to update debug config",
+            null,
+            error2
+          );
           sendResponse({ success: false, error: error2.message });
         });
       } else {
@@ -3334,7 +3556,10 @@
           await ensureConfigLoaded();
           const apiKey2 = getApiKey();
           if (!apiKey2) {
-            sendResponse({ success: false, error: "Not logged in. Please try again." });
+            sendResponse({
+              success: false,
+              error: "Not logged in. Please try again."
+            });
             return;
           }
           const pushData = message.pushData;
@@ -3365,7 +3590,12 @@
           await refreshPushes(notificationDataStore);
           sendResponse({ success: true });
         } catch (error2) {
-          debugLogger.general("ERROR", "Failed to send push", { pushType: message.pushData?.type }, error2);
+          debugLogger.general(
+            "ERROR",
+            "Failed to send push",
+            { pushType: message.pushData?.type },
+            error2
+          );
           sendResponse({ success: false, error: error2.message });
         }
       })();
