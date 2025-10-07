@@ -320,9 +320,7 @@ export class DebugConfigManager {
   async loadConfig() {
     try {
       debugLogger.storage("DEBUG", "Loading debug configuration from storage");
-      const result = await new Promise<any>((resolve) => {
-        chrome.storage.local.get(["debugConfig"], (items) => resolve(items));
-      });
+      const result = await chrome.storage.local.get(["debugConfig"]);
       if (result.debugConfig) {
         Object.assign(DEBUG_CONFIG, result.debugConfig as Partial<DebugConfig>);
         debugLogger.storage(
@@ -349,11 +347,7 @@ export class DebugConfigManager {
   async saveConfig() {
     try {
       debugLogger.storage("DEBUG", "Saving debug configuration to storage");
-      await new Promise((resolve) => {
-        chrome.storage.local.set({ debugConfig: DEBUG_CONFIG }, () =>
-          resolve(null),
-        );
-      });
+      await chrome.storage.local.set({ debugConfig: DEBUG_CONFIG });
       debugLogger.storage("INFO", "Debug configuration saved to storage");
     } catch (error: any) {
       debugLogger.storage(

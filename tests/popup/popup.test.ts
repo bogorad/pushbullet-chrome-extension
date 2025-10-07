@@ -1,60 +1,95 @@
 // tests/popup/popup.test.ts
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+// Import necessary tools
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 
 // Chrome API is mocked globally in tests/setup.ts
 declare const chrome: any
 
-// Import the HTML content of the popup to simulate the DOM
-const popupHtml = fs.readFileSync(path.resolve('popup.html'), 'utf8')
-
-// Mock the modules our popup depends on
+// Mock the storage repository dependency
 vi.mock('src/infrastructure/storage/storage.repository', () => ({
   storageRepository: {
     setApiKey: vi.fn(),
     setDeviceNickname: vi.fn(),
     setDeviceIden: vi.fn(),
-    getApiKey: vi.fn(),
-    getScrollToRecentPushes: vi.fn(),
+    getScrollToRecentPushes: vi.fn().mockResolvedValue(false),
     removeScrollToRecentPushes: vi.fn()
   }
 }))
-vi.mock('src/lib/ui/dom', () => ({
-  getElementById: vi.fn((id) => document.getElementById(id))
-}))
+
+// Read the HTML file content from the disk once
+const popupHtml = fs.readFileSync(path.resolve('popup.html'), 'utf8')
 
 describe('Popup UI and Logic', () => {
-  beforeEach(() => {
-    // 1. Set up the DOM
-    // Load the popup's HTML into the test environment
+  beforeAll(() => {
+    // Set up the DOM once for all popup tests
     document.body.innerHTML = popupHtml
+  })
 
-    // 2. Reset all mocks to ensure test isolation
+  beforeEach(() => {
+    // Reset all mocks to ensure tests don't interfere with each other
     vi.resetAllMocks()
   })
 
-  afterEach(() => {
-    // Clean up the DOM and mocks after each test
+  afterAll(() => {
+    // Clean up the DOM after all tests
     document.body.innerHTML = ''
-    vi.clearAllMocks()
   })
 
-  describe('Initial Rendering', () => {
-    it('should show the loading section initially', async () => {
-      // ARRANGE: Set up DOM
-      document.body.innerHTML = popupHtml
-
-      // ACT: Import the popup script, which calls init and shows loading
-      await import('./../../src/popup/index.ts')
-
-      // ASSERT:
-      expect(document.getElementById('loading-section')!.style.display).toBe('flex')
-      expect(document.getElementById('login-section')!.style.display).toBe('none')
-      expect(document.getElementById('main-section')!.style.display).toBe('none')
+  // --- TEST CASE 1: Unauthenticated User ---
+  it('should show the login section if the user is not authenticated', async () => {
+    // ARRANGE: Set up our mocks BEFORE running the script.
+    // We will tell the mocked chrome API how to respond.
+    chrome.runtime.sendMessage.mockImplementation((message, callback) => {
+      if (message.action === 'getSessionData') {
+        // Simulate the background script responding that the user is not logged in.
+        callback({ isAuthenticated: false })
+      }
     })
+
+    // ACT: Import the popup module and call init
+    const { init } = await vi.importActual('../../src/popup/index.ts') as { init: () => void }
+    init()
+
+    // ASSERT: Check if the DOM is in the correct state.
+    const loginSection = document.getElementById('login-section')
+    const mainSection = document.getElementById('main-section')
+
+    expect(loginSection!.style.display).toBe('block')
+    expect(mainSection!.style.display).toBe('none')
   })
 
-  // ... More tests can be added later ...
+  // --- TEST CASE 2: Authenticated User ---
+  it('should show the main section if the user is authenticated', async () => {
+    // ARRANGE:
+    const mockSession = {
+      isAuthenticated: true,
+      userInfo: { name: 'Test User', email: 'test@example.com' },
+      devices: [],
+      recentPushes: [],
+      autoOpenLinks: true,
+      deviceNickname: 'Chrome'
+    }
+
+    chrome.runtime.sendMessage.mockImplementation((message, callback) => {
+      if (message.action === 'getSessionData') {
+        callback(mockSession)
+      }
+    })
+
+    // ACT: Import the popup module and call init
+    const { init } = await vi.importActual('../../src/popup/index.ts') as { init: () => void }
+    init()
+
+    // ASSERT:
+    const loginSection = document.getElementById('login-section')
+    const mainSection = document.getElementById('main-section')
+    const userNameElement = document.getElementById('user-name')
+
+    expect(mainSection!.style.display).toBe('block')
+    expect(loginSection!.style.display).toBe('none')
+    expect(userNameElement!.textContent).toBe('Test User')
+  })
 })

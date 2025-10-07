@@ -53,20 +53,20 @@ const createChromeMock = () => {
       openOptionsPage: vi.fn(),
       getURL: vi.fn()
     },
-    storage: {
-      sync: {
-        get: vi.fn(),
-        set: vi.fn(),
-        remove: vi.fn(),
-        clear: vi.fn()
+      storage: {
+        sync: {
+          get: vi.fn(() => ({})),
+          set: vi.fn(),
+          remove: vi.fn(),
+          clear: vi.fn()
+        },
+        local: {
+          get: vi.fn(() => ({})),
+          set: vi.fn(),
+          remove: vi.fn(),
+          clear: vi.fn()
+        }
       },
-      local: {
-        get: vi.fn(),
-        set: vi.fn(),
-        remove: vi.fn(),
-        clear: vi.fn()
-      }
-    },
     contextMenus: {
       create: vi.fn(),
       removeAll: vi.fn(),

@@ -869,6 +869,9 @@ chrome.runtime.onMessage.addListener((message, _, __) => {
   }
 });
 
+// Export init for testing
+export { init };
+
 // Initialize on DOM load
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
