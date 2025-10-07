@@ -196,8 +196,29 @@ export interface StorageConfig {
 // Chrome Message Types
 // ============================================================================
 
+export enum MessageAction {
+  GET_SESSION_DATA = 'getSessionData',
+  API_KEY_CHANGED = 'apiKeyChanged',
+  SESSION_DATA_UPDATED = 'sessionDataUpdated',
+  PUSHES_UPDATED = 'pushesUpdated',
+  SETTINGS_CHANGED = 'settingsChanged',
+  LOGOUT = 'logout',
+  REFRESH_SESSION = 'refreshSession',
+  UPDATE_DEVICE_NICKNAME = 'updateDeviceNickname',
+  LOG = 'log',
+  SEND_PUSH = 'sendPush',
+  GET_NOTIFICATION_DATA = 'getNotificationData',
+  CLEAR_ALL_LOGS = 'clearAllLogs',
+  UPDATE_DEBUG_CONFIG = 'updateDebugConfig',
+  EXPORT_DEBUG_DATA = 'exportDebugData',
+  CONNECTION_STATE_CHANGED = 'connectionStateChanged',
+  AUTO_OPEN_LINKS_CHANGED = 'autoOpenLinksChanged',
+  ENCRYPTION_PASSWORD_CHANGED = 'encryptionPasswordChanged',
+  DEBUG_MODE_CHANGED = 'debugModeChanged',
+}
+
 export interface GetSessionDataMessage {
-  action: 'getSessionData';
+  action: MessageAction.GET_SESSION_DATA;
 }
 
 export interface SessionDataResponse {
@@ -211,13 +232,13 @@ export interface SessionDataResponse {
 }
 
 export interface ApiKeyChangedMessage {
-  action: 'apiKeyChanged';
+  action: MessageAction.API_KEY_CHANGED;
   apiKey: string;
   deviceNickname?: string;
 }
 
 export interface SessionDataUpdatedMessage {
-  action: 'sessionDataUpdated';
+  action: MessageAction.SESSION_DATA_UPDATED;
   isAuthenticated: boolean;
   userInfo?: User | null;
   devices?: Device[];
@@ -227,26 +248,26 @@ export interface SessionDataUpdatedMessage {
 }
 
 export interface PushesUpdatedMessage {
-  action: 'pushesUpdated';
+  action: MessageAction.PUSHES_UPDATED;
   pushes: Push[];
 }
 
 export interface SettingsChangedMessage {
-  action: 'settingsChanged';
+  action: MessageAction.SETTINGS_CHANGED;
   autoOpenLinks?: boolean;
   notificationTimeout?: number;
 }
 
 export interface LogoutMessage {
-  action: 'logout';
+  action: MessageAction.LOGOUT;
 }
 
 export interface RefreshSessionMessage {
-  action: 'refreshSession';
+  action: MessageAction.REFRESH_SESSION;
 }
 
 export interface UpdateDeviceNicknameMessage {
-  action: 'updateDeviceNickname';
+  action: MessageAction.UPDATE_DEVICE_NICKNAME;
   nickname: string;
 }
 

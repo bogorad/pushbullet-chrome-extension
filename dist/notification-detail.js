@@ -33,7 +33,7 @@
       return;
     }
     chrome.runtime.sendMessage({
-      action: "getNotificationData",
+      action: "getNotificationData" /* GET_NOTIFICATION_DATA */,
       notificationId
     }, (response) => {
       if (response && response.push) {

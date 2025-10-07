@@ -126,8 +126,9 @@ export function showPermanentWebSocketError(closeInfo: { code: number; reason?: 
   try {
     chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
     chrome.action.setBadgeText({ text: 'ERR' });
-  } catch {
-    // noop
+  } catch (error) {
+    // Log badge setting errors - these are non-critical UI updates
+    debugLogger.general("WARN", "Failed to set error badge", null, error as Error);
   }
 }
 
@@ -137,8 +138,9 @@ export function showPermanentWebSocketError(closeInfo: { code: number; reason?: 
 export function clearErrorBadge(): void {
   try {
     chrome.action.setBadgeText({ text: '' });
-  } catch {
-    // ignore
+  } catch (error) {
+    // Log badge clearing errors - these are non-critical UI updates
+    debugLogger.general("WARN", "Failed to clear error badge", null, error as Error);
   }
 }
 

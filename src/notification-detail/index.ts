@@ -3,6 +3,7 @@
  */
 
 import type { Push } from '../types/domain';
+import { MessageAction } from '../types/domain';
 import { getElementById, querySelector, setText } from '../lib/ui/dom';
 
 let pushData: Push | null = null;
@@ -29,7 +30,7 @@ function loadNotification(): void {
 
   // Request notification data from background
   chrome.runtime.sendMessage({
-    action: 'getNotificationData',
+    action: MessageAction.GET_NOTIFICATION_DATA,
     notificationId: notificationId
   }, (response: { success: boolean; push?: Push; error?: string }) => {
     if (response && response.push) {

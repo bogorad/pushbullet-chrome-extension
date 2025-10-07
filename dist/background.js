@@ -35,8 +35,8 @@
             `[Logger] Rehydrated ${this.logs.length} logs from persistent storage.`
           );
         }
-      } catch (error2) {
-        console.error("[Logger] Failed to rehydrate logs:", error2);
+      } catch (error) {
+        console.error("[Logger] Failed to rehydrate logs:", error);
       }
     }
     /**
@@ -49,8 +49,8 @@
           this.logs = this.logs.slice(this.logs.length - MAX_PERSISTENT_LOGS);
         }
         await chrome.storage.local.set({ [STORAGE_KEY]: this.logs });
-      } catch (error2) {
-        console.error("[Logger] Failed to flush logs to storage:", error2);
+      } catch (error) {
+        console.error("[Logger] Failed to flush logs to storage:", error);
       }
     }
     /**
@@ -104,18 +104,18 @@
     /**
      * Format error for console output
      */
-    formatErrorForConsole(error2) {
-      if (!error2) return "null";
-      if (error2 instanceof Error) {
-        return `${error2.name}: ${error2.message}`;
+    formatErrorForConsole(error) {
+      if (!error) return "null";
+      if (error instanceof Error) {
+        return `${error.name}: ${error.message}`;
       }
       try {
-        return JSON.stringify(error2, null, 2);
+        return JSON.stringify(error, null, 2);
       } catch {
-        return String(error2);
+        return String(error);
       }
     }
-    log(category, level, message, data = null, error2 = null) {
+    log(category, level, message, data = null, error = null) {
       if (!DEBUG_CONFIG.enabled || !DEBUG_CONFIG.categories[category]) return;
       const timestamp = this.getTimestamp();
       const entry = {
@@ -124,15 +124,15 @@
         level,
         message,
         data: data ? this.sanitize(data) : null,
-        error: error2 ? {
-          name: error2.name,
-          message: error2.message,
-          stack: error2.stack
+        error: error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
         } : null
       };
-      if (error2 && level === "ERROR") {
+      if (error && level === "ERROR") {
         globalErrorTracker.trackError(
-          error2,
+          error,
           { category, message, data: data ? this.sanitize(data) : null },
           category
         );
@@ -143,16 +143,16 @@
       const sanitized = data ? this.sanitize(data) : null;
       switch (level) {
         case "ERROR":
-          if (sanitized && error2) {
+          if (sanitized && error) {
             console.error(full);
             console.error("  Data:", this.formatDataForConsole(sanitized));
-            console.error("  Error:", this.formatErrorForConsole(error2));
+            console.error("  Error:", this.formatErrorForConsole(error));
           } else if (sanitized) {
             console.error(full);
             console.error("  Data:", this.formatDataForConsole(sanitized));
-          } else if (error2) {
+          } else if (error) {
             console.error(full);
-            console.error("  Error:", this.formatErrorForConsole(error2));
+            console.error("  Error:", this.formatErrorForConsole(error));
           } else {
             console.error(full);
           }
@@ -182,26 +182,26 @@
           }
       }
     }
-    websocket(level, message, data, error2) {
-      this.log("WEBSOCKET", level, message, data, error2 || null);
+    websocket(level, message, data, error) {
+      this.log("WEBSOCKET", level, message, data, error || null);
     }
-    notifications(level, message, data, error2) {
-      this.log("NOTIFICATIONS", level, message, data, error2 || null);
+    notifications(level, message, data, error) {
+      this.log("NOTIFICATIONS", level, message, data, error || null);
     }
-    api(level, message, data, error2) {
-      this.log("API", level, message, data, error2 || null);
+    api(level, message, data, error) {
+      this.log("API", level, message, data, error || null);
     }
-    storage(level, message, data, error2) {
-      this.log("STORAGE", level, message, data, error2 || null);
+    storage(level, message, data, error) {
+      this.log("STORAGE", level, message, data, error || null);
     }
-    general(level, message, data, error2) {
-      this.log("GENERAL", level, message, data, error2 || null);
+    general(level, message, data, error) {
+      this.log("GENERAL", level, message, data, error || null);
     }
-    performance(level, message, data, error2) {
-      this.log("PERFORMANCE", level, message, data, error2 || null);
+    performance(level, message, data, error) {
+      this.log("PERFORMANCE", level, message, data, error || null);
     }
-    error(message, data, error2) {
-      this.log("ERROR", "ERROR", message, data, error2 || null);
+    error(message, data, error) {
+      this.log("ERROR", "ERROR", message, data, error || null);
     }
     startTimer(name) {
       this.performanceMarkers.set(name, Date.now());
@@ -263,12 +263,12 @@
             DEBUG_CONFIG
           );
         }
-      } catch (error2) {
+      } catch (error) {
         debugLogger.storage(
           "ERROR",
           "Failed to load debug configuration",
           null,
-          error2
+          error
         );
       }
     }
@@ -282,12 +282,12 @@
           );
         });
         debugLogger.storage("INFO", "Debug configuration saved to storage");
-      } catch (error2) {
+      } catch (error) {
         debugLogger.storage(
           "ERROR",
           "Failed to save debug configuration",
           null,
-          error2
+          error
         );
       }
     }
@@ -344,13 +344,13 @@
     errors = [];
     errorCounts = /* @__PURE__ */ new Map();
     criticalErrors = [];
-    trackError(error2, context = {}, category = "GENERAL") {
+    trackError(error, context = {}, category = "GENERAL") {
       const entry = {
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         category,
-        message: error2.message,
-        name: error2.name,
-        stack: error2.stack,
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
         context
       };
       this.errors.push(entry);
@@ -385,7 +385,8 @@
         "GLOBAL"
       );
     });
-  } catch {
+  } catch (error) {
+    console.warn("Failed to set up global unhandled rejection handler:", error);
   }
   try {
     self.addEventListener(
@@ -522,7 +523,8 @@
         const state = globalThis.websocket ? globalThis.websocket.readyState : null;
         try {
           globalThis.debugLogger?.websocket("DEBUG", "WebSocket state check", { state });
-        } catch {
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to log WebSocket state check", null, error);
         }
       }, 3e4);
     }
@@ -536,6 +538,27 @@
   var wsStateMonitor = new WebSocketStateMonitor();
 
   // src/types/domain.ts
+  var MessageAction = /* @__PURE__ */ ((MessageAction2) => {
+    MessageAction2["GET_SESSION_DATA"] = "getSessionData";
+    MessageAction2["API_KEY_CHANGED"] = "apiKeyChanged";
+    MessageAction2["SESSION_DATA_UPDATED"] = "sessionDataUpdated";
+    MessageAction2["PUSHES_UPDATED"] = "pushesUpdated";
+    MessageAction2["SETTINGS_CHANGED"] = "settingsChanged";
+    MessageAction2["LOGOUT"] = "logout";
+    MessageAction2["REFRESH_SESSION"] = "refreshSession";
+    MessageAction2["UPDATE_DEVICE_NICKNAME"] = "updateDeviceNickname";
+    MessageAction2["LOG"] = "log";
+    MessageAction2["SEND_PUSH"] = "sendPush";
+    MessageAction2["GET_NOTIFICATION_DATA"] = "getNotificationData";
+    MessageAction2["CLEAR_ALL_LOGS"] = "clearAllLogs";
+    MessageAction2["UPDATE_DEBUG_CONFIG"] = "updateDebugConfig";
+    MessageAction2["EXPORT_DEBUG_DATA"] = "exportDebugData";
+    MessageAction2["CONNECTION_STATE_CHANGED"] = "connectionStateChanged";
+    MessageAction2["AUTO_OPEN_LINKS_CHANGED"] = "autoOpenLinksChanged";
+    MessageAction2["ENCRYPTION_PASSWORD_CHANGED"] = "encryptionPasswordChanged";
+    MessageAction2["DEBUG_MODE_CHANGED"] = "debugModeChanged";
+    return MessageAction2;
+  })(MessageAction || {});
   function isLinkPush(push) {
     return push.type === "link";
   }
@@ -573,10 +596,10 @@
             });
           }, timeout);
         }
-      } catch (error2) {
+      } catch (error) {
         debugLogger.notifications("ERROR", "Failed to set notification timeout", {
-          error: error2.message
-        }, error2);
+          error: error.message
+        }, error);
       }
     });
   }
@@ -598,13 +621,15 @@
     try {
       chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
       chrome.action.setBadgeText({ text: "ERR" });
-    } catch {
+    } catch (error) {
+      debugLogger.general("WARN", "Failed to set error badge", null, error);
     }
   }
   function clearErrorBadge() {
     try {
       chrome.action.setBadgeText({ text: "" });
-    } catch {
+    } catch (error) {
+      debugLogger.general("WARN", "Failed to clear error badge", null, error);
     }
   }
 
@@ -676,8 +701,8 @@
         eventListeners.forEach((listener) => {
           try {
             listener(data);
-          } catch (error2) {
-            console.error(`Error in event listener for '${event}':`, error2);
+          } catch (error) {
+            console.error(`Error in event listener for '${event}':`, error);
           }
         });
       }
@@ -912,24 +937,24 @@
                 );
                 break;
             }
-          } catch (error2) {
+          } catch (error) {
             debugLogger.websocket(
               "ERROR",
               "Failed to process WebSocket message",
               null,
-              error2
+              error
             );
           }
         };
-        this.socket.onerror = (error2) => {
+        this.socket.onerror = (error) => {
           const currentSocket = this.socket;
           const socketExists = !!currentSocket;
           const socketState = socketExists ? currentSocket.readyState : "no_socket";
           const isConnecting = socketExists ? currentSocket.readyState === 0 /* CONNECTING */ : false;
           const isConnected = socketExists ? currentSocket.readyState === 1 /* OPEN */ : false;
           const errorInfo = {
-            type: error2.type || "unknown",
-            target: error2.target ? "WebSocket" : "unknown",
+            type: error.type || "unknown",
+            target: error.target ? "WebSocket" : "unknown",
             readyState: socketState,
             socketExists,
             url: this.websocketUrl,
@@ -939,10 +964,10 @@
             isConnecting,
             isConnected,
             errorEventDetails: {
-              timeStamp: error2.timeStamp,
-              bubbles: error2.bubbles,
-              cancelable: error2.cancelable,
-              currentTarget: error2.currentTarget ? "WebSocket" : "unknown"
+              timeStamp: error.timeStamp,
+              bubbles: error.bubbles,
+              cancelable: error.cancelable,
+              currentTarget: error.currentTarget ? "WebSocket" : "unknown"
             }
           };
           debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
@@ -1003,7 +1028,7 @@
             when: Date.now() + 3e4
           });
         };
-      } catch (error2) {
+      } catch (error) {
         debugLogger.websocket(
           "ERROR",
           "Failed to create WebSocket connection",
@@ -1011,7 +1036,7 @@
             url: this.websocketUrl + "***",
             hasApiKey: !!this.getApiKey()
           },
-          error2
+          error
         );
       }
     }
@@ -1027,12 +1052,12 @@
           this.socket.close();
           this.socket = null;
           wsStateMonitor.stopMonitoring();
-        } catch (error2) {
+        } catch (error) {
           debugLogger.websocket(
             "ERROR",
             "Error disconnecting WebSocket",
             null,
-            error2
+            error
           );
         }
       }
@@ -1050,282 +1075,6 @@
       this.reconnectAttempts = 0;
     }
   };
-
-  // src/app/api/client.ts
-  var API_BASE_URL = "https://api.pushbullet.com/v2";
-  var PUSHES_URL = `${API_BASE_URL}/pushes`;
-  var DEVICES_URL = `${API_BASE_URL}/devices`;
-  var USER_INFO_URL = `${API_BASE_URL}/users/me`;
-  function authHeaders(apiKey2) {
-    return { "Access-Token": apiKey2 };
-  }
-  async function fetchUserInfo(apiKey2) {
-    const startTime = Date.now();
-    debugLogger.api("INFO", "Fetching user info", { url: USER_INFO_URL, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
-    try {
-      const response = await fetch(USER_INFO_URL, { headers: authHeaders(apiKey2) });
-      const duration = Date.now() - startTime;
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        const error2 = new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
-        debugLogger.api("ERROR", "User info fetch failed", {
-          url: USER_INFO_URL,
-          status: response.status,
-          statusText: response.statusText,
-          duration: `${duration}ms`,
-          errorText
-        }, error2);
-        throw error2;
-      }
-      const data = await response.json();
-      debugLogger.api("INFO", "User info fetched successfully", {
-        url: USER_INFO_URL,
-        status: response.status,
-        duration: `${duration}ms`,
-        userEmail: data.email ? data.email.substring(0, 3) + "***" : "unknown",
-        userName: data.name || "unknown"
-      });
-      return data;
-    } catch (error2) {
-      const duration = Date.now() - startTime;
-      debugLogger.api("ERROR", "User info fetch error", {
-        url: USER_INFO_URL,
-        duration: `${duration}ms`,
-        error: error2.message
-      }, error2);
-      throw error2;
-    }
-  }
-  async function fetchDevices(apiKey2) {
-    const startTime = Date.now();
-    debugLogger.api("INFO", "Fetching devices", { url: DEVICES_URL, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
-    try {
-      const response = await fetch(DEVICES_URL, { headers: authHeaders(apiKey2) });
-      const duration = Date.now() - startTime;
-      if (!response.ok) {
-        const error2 = new Error(`Failed to fetch devices: ${response.status} ${response.statusText}`);
-        debugLogger.api("ERROR", "Devices fetch failed", {
-          url: DEVICES_URL,
-          status: response.status,
-          statusText: response.statusText,
-          duration: `${duration}ms`
-        }, error2);
-        throw error2;
-      }
-      const data = await response.json();
-      const activeDevices = data.devices.filter((device) => device.active);
-      debugLogger.api("INFO", "Devices fetched successfully", {
-        url: DEVICES_URL,
-        status: response.status,
-        duration: `${duration}ms`,
-        totalDevices: data.devices.length,
-        activeDevices: activeDevices.length
-      });
-      return activeDevices;
-    } catch (error2) {
-      const duration = Date.now() - startTime;
-      debugLogger.api("ERROR", "Devices fetch error", {
-        url: DEVICES_URL,
-        duration: `${duration}ms`,
-        error: error2.message
-      }, error2);
-      throw error2;
-    }
-  }
-  async function fetchRecentPushes(apiKey2) {
-    const startTime = Date.now();
-    const url = `${PUSHES_URL}?limit=20`;
-    debugLogger.api("INFO", "Fetching recent pushes", { url, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
-    try {
-      const response = await fetch(url, { headers: authHeaders(apiKey2) });
-      const duration = Date.now() - startTime;
-      if (!response.ok) {
-        const error2 = new Error(`Failed to fetch pushes: ${response.status} ${response.statusText}`);
-        debugLogger.api("ERROR", "Pushes fetch failed", {
-          url,
-          status: response.status,
-          statusText: response.statusText,
-          duration: `${duration}ms`
-        }, error2);
-        throw error2;
-      }
-      const data = await response.json();
-      const filteredPushes = data.pushes.filter((push) => {
-        const hasContent = "title" in push && push.title || "body" in push && push.body || "url" in push && push.url || "file_name" in push && push.file_name || "file_url" in push && push.file_url;
-        return hasContent && !push.dismissed;
-      });
-      debugLogger.api("INFO", "Pushes fetched successfully", {
-        url,
-        status: response.status,
-        duration: `${duration}ms`,
-        totalPushes: data.pushes.length,
-        filteredPushes: filteredPushes.length,
-        pushTypes: filteredPushes.map((p) => p.type).join(", ")
-      });
-      return filteredPushes;
-    } catch (error2) {
-      const duration = Date.now() - startTime;
-      debugLogger.api("ERROR", "Pushes fetch error", {
-        url,
-        duration: `${duration}ms`,
-        error: error2.message
-      }, error2);
-      throw error2;
-    }
-  }
-  async function registerDevice(apiKey2, deviceIden2, deviceNickname2) {
-    debugLogger.general("INFO", "Starting device registration process", {
-      hasApiKey: !!apiKey2,
-      currentDeviceIden: deviceIden2,
-      deviceNickname: deviceNickname2,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    const result = await new Promise((resolve) => {
-      chrome.storage.local.get(["deviceRegistrationInProgress"], (items) => resolve(items));
-    });
-    if (result.deviceRegistrationInProgress) {
-      debugLogger.general("INFO", "Device registration already in progress - waiting for completion");
-      return new Promise((resolve) => {
-        const listener = (changes) => {
-          if (changes.deviceRegistrationInProgress && !changes.deviceRegistrationInProgress.newValue) {
-            chrome.storage.onChanged.removeListener(listener);
-            debugLogger.general("INFO", "Device registration completed by another process");
-            resolve({ deviceIden: deviceIden2 || "", needsUpdate: false });
-          }
-        };
-        chrome.storage.onChanged.addListener(listener);
-      });
-    }
-    try {
-      await chrome.storage.local.set({ deviceRegistrationInProgress: true });
-      const storageResult = await new Promise((resolve) => {
-        chrome.storage.local.get(["deviceIden"], (items) => resolve(items));
-      });
-      if (storageResult.deviceIden) {
-        const existingIden = storageResult.deviceIden;
-        debugLogger.general("INFO", "Device already registered", { deviceIden: existingIden, deviceNickname: deviceNickname2 });
-        try {
-          await updateDeviceNickname(apiKey2, existingIden, deviceNickname2);
-          await chrome.storage.local.set({ deviceRegistrationInProgress: false });
-          return { deviceIden: existingIden, needsUpdate: false };
-        } catch (error2) {
-          debugLogger.general("WARN", "Failed to update existing device, will re-register", {
-            error: error2.message,
-            deviceIden: existingIden
-          });
-          await chrome.storage.local.remove(["deviceIden"]);
-        }
-      }
-      debugLogger.general("INFO", "Registering new device with Pushbullet API", { deviceNickname: deviceNickname2, url: DEVICES_URL });
-      const registrationData = {
-        nickname: deviceNickname2,
-        model: "Chrome",
-        manufacturer: "Google",
-        push_token: "",
-        app_version: 8623,
-        icon: "browser",
-        has_sms: false,
-        type: "chrome"
-      };
-      debugLogger.api("INFO", "Sending device registration request", {
-        url: DEVICES_URL,
-        method: "POST",
-        deviceData: registrationData
-      });
-      const startTime = Date.now();
-      const response = await fetch(DEVICES_URL, {
-        method: "POST",
-        headers: {
-          ...authHeaders(apiKey2),
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(registrationData)
-      });
-      const duration = Date.now() - startTime;
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        const error2 = new Error(`Failed to register device: ${response.status} ${response.statusText} - ${errorText}`);
-        debugLogger.api("ERROR", "Device registration failed", {
-          url: DEVICES_URL,
-          status: response.status,
-          statusText: response.statusText,
-          duration: `${duration}ms`,
-          errorText
-        }, error2);
-        await chrome.storage.local.set({ deviceRegistrationInProgress: false });
-        throw error2;
-      }
-      const device = await response.json();
-      const newDeviceIden = device.iden;
-      debugLogger.api("INFO", "Device registered successfully", {
-        url: DEVICES_URL,
-        status: response.status,
-        duration: `${duration}ms`,
-        deviceIden: newDeviceIden,
-        deviceNickname: device.nickname
-      });
-      await chrome.storage.local.set({ deviceIden: newDeviceIden });
-      await chrome.storage.local.set({ deviceRegistrationInProgress: false });
-      debugLogger.general("INFO", "Device registration completed", {
-        deviceIden: newDeviceIden,
-        deviceNickname: device.nickname
-      });
-      return { deviceIden: newDeviceIden, needsUpdate: false };
-    } catch (error2) {
-      await chrome.storage.local.set({ deviceRegistrationInProgress: false });
-      debugLogger.general("ERROR", "Error in registerDevice function", {
-        errorMessage: error2.message,
-        errorStack: error2.stack
-      });
-      throw error2;
-    }
-  }
-  async function updateDeviceNickname(apiKey2, deviceIden2, newNickname) {
-    debugLogger.general("INFO", "Updating device nickname", {
-      deviceIden: deviceIden2,
-      newNickname,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    try {
-      const url = `${DEVICES_URL}/${deviceIden2}`;
-      const startTime = Date.now();
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          ...authHeaders(apiKey2),
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ nickname: newNickname })
-      });
-      const duration = Date.now() - startTime;
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        const error2 = new Error(`Failed to update device nickname: ${response.status} ${response.statusText} - ${errorText}`);
-        debugLogger.api("ERROR", "Device nickname update failed", {
-          url,
-          status: response.status,
-          statusText: response.statusText,
-          duration: `${duration}ms`,
-          errorText
-        }, error2);
-        throw error2;
-      }
-      const device = await response.json();
-      debugLogger.api("INFO", "Device nickname updated successfully", {
-        url,
-        status: response.status,
-        duration: `${duration}ms`,
-        deviceIden: deviceIden2,
-        newNickname: device.nickname
-      });
-    } catch (error2) {
-      debugLogger.general("ERROR", "Error in updateDeviceNickname function", {
-        errorMessage: error2.message,
-        errorStack: error2.stack
-      });
-      throw error2;
-    }
-  }
 
   // src/infrastructure/storage/storage.repository.ts
   var ChromeStorageRepository = class {
@@ -1443,6 +1192,19 @@
       await chrome.storage.local.remove(["scrollToRecentPushes"]);
     }
     /**
+     * Get Device Registration In Progress flag from local storage
+     */
+    async getDeviceRegistrationInProgress() {
+      const result = await chrome.storage.local.get(["deviceRegistrationInProgress"]);
+      return result.deviceRegistrationInProgress || false;
+    }
+    /**
+     * Set Device Registration In Progress flag in local storage
+     */
+    async setDeviceRegistrationInProgress(inProgress) {
+      await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
+    }
+    /**
      * Clear all storage (both sync and local)
      */
     async clear() {
@@ -1463,6 +1225,277 @@
     }
   };
   var storageRepository = new ChromeStorageRepository();
+
+  // src/app/api/client.ts
+  var API_BASE_URL = "https://api.pushbullet.com/v2";
+  var PUSHES_URL = `${API_BASE_URL}/pushes`;
+  var DEVICES_URL = `${API_BASE_URL}/devices`;
+  var USER_INFO_URL = `${API_BASE_URL}/users/me`;
+  function authHeaders(apiKey2) {
+    return { "Access-Token": apiKey2 };
+  }
+  async function fetchUserInfo(apiKey2) {
+    const startTime = Date.now();
+    debugLogger.api("INFO", "Fetching user info", { url: USER_INFO_URL, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+    try {
+      const response = await fetch(USER_INFO_URL, { headers: authHeaders(apiKey2) });
+      const duration = Date.now() - startTime;
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "Unknown error");
+        const error = new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
+        debugLogger.api("ERROR", "User info fetch failed", {
+          url: USER_INFO_URL,
+          status: response.status,
+          statusText: response.statusText,
+          duration: `${duration}ms`,
+          errorText
+        }, error);
+        throw error;
+      }
+      const data = await response.json();
+      debugLogger.api("INFO", "User info fetched successfully", {
+        url: USER_INFO_URL,
+        status: response.status,
+        duration: `${duration}ms`,
+        userEmail: data.email ? data.email.substring(0, 3) + "***" : "unknown",
+        userName: data.name || "unknown"
+      });
+      return data;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      debugLogger.api("ERROR", "User info fetch error", {
+        url: USER_INFO_URL,
+        duration: `${duration}ms`,
+        error: error.message
+      }, error);
+      throw error;
+    }
+  }
+  async function fetchDevices(apiKey2) {
+    const startTime = Date.now();
+    debugLogger.api("INFO", "Fetching devices", { url: DEVICES_URL, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+    try {
+      const response = await fetch(DEVICES_URL, { headers: authHeaders(apiKey2) });
+      const duration = Date.now() - startTime;
+      if (!response.ok) {
+        const error = new Error(`Failed to fetch devices: ${response.status} ${response.statusText}`);
+        debugLogger.api("ERROR", "Devices fetch failed", {
+          url: DEVICES_URL,
+          status: response.status,
+          statusText: response.statusText,
+          duration: `${duration}ms`
+        }, error);
+        throw error;
+      }
+      const data = await response.json();
+      const activeDevices = data.devices.filter((device) => device.active);
+      debugLogger.api("INFO", "Devices fetched successfully", {
+        url: DEVICES_URL,
+        status: response.status,
+        duration: `${duration}ms`,
+        totalDevices: data.devices.length,
+        activeDevices: activeDevices.length
+      });
+      return activeDevices;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      debugLogger.api("ERROR", "Devices fetch error", {
+        url: DEVICES_URL,
+        duration: `${duration}ms`,
+        error: error.message
+      }, error);
+      throw error;
+    }
+  }
+  async function fetchRecentPushes(apiKey2) {
+    const startTime = Date.now();
+    const url = `${PUSHES_URL}?limit=20`;
+    debugLogger.api("INFO", "Fetching recent pushes", { url, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+    try {
+      const response = await fetch(url, { headers: authHeaders(apiKey2) });
+      const duration = Date.now() - startTime;
+      if (!response.ok) {
+        const error = new Error(`Failed to fetch pushes: ${response.status} ${response.statusText}`);
+        debugLogger.api("ERROR", "Pushes fetch failed", {
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          duration: `${duration}ms`
+        }, error);
+        throw error;
+      }
+      const data = await response.json();
+      const filteredPushes = data.pushes.filter((push) => {
+        const hasContent = "title" in push && push.title || "body" in push && push.body || "url" in push && push.url || "file_name" in push && push.file_name || "file_url" in push && push.file_url;
+        return hasContent && !push.dismissed;
+      });
+      debugLogger.api("INFO", "Pushes fetched successfully", {
+        url,
+        status: response.status,
+        duration: `${duration}ms`,
+        totalPushes: data.pushes.length,
+        filteredPushes: filteredPushes.length,
+        pushTypes: filteredPushes.map((p) => p.type).join(", ")
+      });
+      return filteredPushes;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      debugLogger.api("ERROR", "Pushes fetch error", {
+        url,
+        duration: `${duration}ms`,
+        error: error.message
+      }, error);
+      throw error;
+    }
+  }
+  async function registerDevice(apiKey2, deviceIden2, deviceNickname2) {
+    debugLogger.general("INFO", "Starting device registration process", {
+      hasApiKey: !!apiKey2,
+      currentDeviceIden: deviceIden2,
+      deviceNickname: deviceNickname2,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    const deviceRegistrationInProgress = await storageRepository.getDeviceRegistrationInProgress();
+    if (deviceRegistrationInProgress) {
+      debugLogger.general("INFO", "Device registration already in progress - waiting for completion");
+      return new Promise((resolve) => {
+        const listener = (changes) => {
+          if (changes.deviceRegistrationInProgress && !changes.deviceRegistrationInProgress.newValue) {
+            chrome.storage.onChanged.removeListener(listener);
+            debugLogger.general("INFO", "Device registration completed by another process");
+            resolve({ deviceIden: deviceIden2 || "", needsUpdate: false });
+          }
+        };
+        chrome.storage.onChanged.addListener(listener);
+      });
+    }
+    try {
+      await storageRepository.setDeviceRegistrationInProgress(true);
+      const existingDeviceIden = await storageRepository.getDeviceIden();
+      if (existingDeviceIden) {
+        debugLogger.general("INFO", "Device already registered", { deviceIden: existingDeviceIden, deviceNickname: deviceNickname2 });
+        try {
+          await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
+          await storageRepository.setDeviceRegistrationInProgress(false);
+          return { deviceIden: existingDeviceIden, needsUpdate: false };
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to update existing device, will re-register", {
+            error: error.message,
+            deviceIden: existingDeviceIden
+          });
+          await storageRepository.setDeviceIden(null);
+        }
+      }
+      debugLogger.general("INFO", "Registering new device with Pushbullet API", { deviceNickname: deviceNickname2, url: DEVICES_URL });
+      const registrationData = {
+        nickname: deviceNickname2,
+        model: "Chrome",
+        manufacturer: "Google",
+        push_token: "",
+        app_version: 8623,
+        icon: "browser",
+        has_sms: false,
+        type: "chrome"
+      };
+      debugLogger.api("INFO", "Sending device registration request", {
+        url: DEVICES_URL,
+        method: "POST",
+        deviceData: registrationData
+      });
+      const startTime = Date.now();
+      const response = await fetch(DEVICES_URL, {
+        method: "POST",
+        headers: {
+          ...authHeaders(apiKey2),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(registrationData)
+      });
+      const duration = Date.now() - startTime;
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "Unknown error");
+        const error = new Error(`Failed to register device: ${response.status} ${response.statusText} - ${errorText}`);
+        debugLogger.api("ERROR", "Device registration failed", {
+          url: DEVICES_URL,
+          status: response.status,
+          statusText: response.statusText,
+          duration: `${duration}ms`,
+          errorText
+        }, error);
+        await storageRepository.setDeviceRegistrationInProgress(false);
+        throw error;
+      }
+      const device = await response.json();
+      const newDeviceIden = device.iden;
+      debugLogger.api("INFO", "Device registered successfully", {
+        url: DEVICES_URL,
+        status: response.status,
+        duration: `${duration}ms`,
+        deviceIden: newDeviceIden,
+        deviceNickname: device.nickname
+      });
+      await storageRepository.setDeviceIden(newDeviceIden);
+      await storageRepository.setDeviceRegistrationInProgress(false);
+      debugLogger.general("INFO", "Device registration completed", {
+        deviceIden: newDeviceIden,
+        deviceNickname: device.nickname
+      });
+      return { deviceIden: newDeviceIden, needsUpdate: false };
+    } catch (error) {
+      await storageRepository.setDeviceRegistrationInProgress(false);
+      debugLogger.general("ERROR", "Error in registerDevice function", {
+        errorMessage: error.message,
+        errorStack: error.stack
+      });
+      throw error;
+    }
+  }
+  async function updateDeviceNickname(apiKey2, deviceIden2, newNickname) {
+    debugLogger.general("INFO", "Updating device nickname", {
+      deviceIden: deviceIden2,
+      newNickname,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    try {
+      const url = `${DEVICES_URL}/${deviceIden2}`;
+      const startTime = Date.now();
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          ...authHeaders(apiKey2),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ nickname: newNickname })
+      });
+      const duration = Date.now() - startTime;
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "Unknown error");
+        const error = new Error(`Failed to update device nickname: ${response.status} ${response.statusText} - ${errorText}`);
+        debugLogger.api("ERROR", "Device nickname update failed", {
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          duration: `${duration}ms`,
+          errorText
+        }, error);
+        throw error;
+      }
+      const device = await response.json();
+      debugLogger.api("INFO", "Device nickname updated successfully", {
+        url,
+        status: response.status,
+        duration: `${duration}ms`,
+        deviceIden: deviceIden2,
+        newNickname: device.nickname
+      });
+    } catch (error) {
+      debugLogger.general("ERROR", "Error in updateDeviceNickname function", {
+        errorMessage: error.message,
+        errorStack: error.stack
+      });
+      throw error;
+    }
+  }
 
   // src/app/session/index.ts
   var sessionCache = {
@@ -1583,18 +1616,18 @@
           timestamp: new Date(initializationState.timestamp).toISOString()
         });
         return apiKeyValue;
-      } catch (error2) {
-        initializationState.error = error2;
+      } catch (error) {
+        initializationState.error = error;
         debugLogger.general(
           "ERROR",
           "Error initializing session cache",
           {
-            error: error2.message || error2.name || "Unknown error"
+            error: error.message || error.name || "Unknown error"
           },
-          error2
+          error
         );
         sessionCache.isAuthenticated = false;
-        throw error2;
+        throw error;
       } finally {
         initializationState.inProgress = false;
         initPromise = null;
@@ -1637,16 +1670,16 @@
         );
         sessionCache.isAuthenticated = false;
       }
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general(
         "ERROR",
         "Error refreshing session cache",
         {
-          error: error2.message
+          error: error.message
         },
-        error2
+        error
       );
-      throw error2;
+      throw error;
     }
   }
 
@@ -1667,7 +1700,8 @@
           if (apiKey2) {
             stateSetters.setApiKey(apiKey2);
           }
-        } catch {
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to load API key from storage", null, error);
         }
       }
       if (needsDeviceIden) {
@@ -1676,7 +1710,8 @@
           if (deviceIden2) {
             stateSetters.setDeviceIden(deviceIden2);
           }
-        } catch {
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to load device identifier from storage", null, error);
         }
       }
       if (needsNickname) {
@@ -1685,7 +1720,8 @@
           if (deviceNickname2 !== null && deviceNickname2 !== void 0) {
             stateSetters.setDeviceNickname(deviceNickname2);
           }
-        } catch {
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to load device nickname from storage", null, error);
         }
       }
       if (needsAutoOpen) {
@@ -1694,7 +1730,8 @@
           if (autoOpenLinks2 !== null && autoOpenLinks2 !== void 0) {
             stateSetters.setAutoOpenLinks(autoOpenLinks2);
           }
-        } catch {
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to load auto-open links setting from storage", null, error);
         }
       }
       if (needsTimeout) {
@@ -1703,7 +1740,8 @@
           if (notificationTimeout2 !== null && notificationTimeout2 !== void 0) {
             stateSetters.setNotificationTimeout(notificationTimeout2);
           }
-        } catch {
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to load notification timeout from storage", null, error);
         }
       }
       try {
@@ -1714,14 +1752,16 @@
           notificationTimeout: stateGetters.getNotificationTimeout(),
           deviceNickname: stateGetters.getDeviceNickname()
         });
-      } catch {
+      } catch (error) {
+        console.warn("Failed to log ensureConfigLoaded completion:", error);
       }
     } catch (e) {
       try {
         debugLogger.storage("WARN", "ensureConfigLoaded encountered an error", {
           error: e && e.message
         });
-      } catch {
+      } catch (error) {
+        console.warn("Failed to log ensureConfigLoaded error:", error);
       }
     }
   }
@@ -1927,10 +1967,10 @@
       debugLogger.general("DEBUG", "Updated extension tooltip", {
         stateDescription
       });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general("ERROR", "Exception setting tooltip", {
         stateDescription,
-        error: error2.message
+        error: error.message
       });
     }
   }
@@ -1945,11 +1985,11 @@
         badgeText,
         badgeColor
       });
-    } catch {
+    } catch (error) {
       debugLogger.general("ERROR", "Exception setting badge", {
         status,
         error: error.message
-      });
+      }, error);
     }
   }
   async function refreshPushes(notificationDataStore2) {
@@ -1979,12 +2019,12 @@
             pushType: push.type
           }
         );
-        showPushNotification(push, notificationDataStore2).catch((error2) => {
+        showPushNotification(push, notificationDataStore2).catch((error) => {
           debugLogger.general(
             "ERROR",
             "Failed to show notification",
             { pushIden: push.iden },
-            error2
+            error
           );
         });
         const autoOpenLinks2 = getAutoOpenLinks();
@@ -1997,14 +2037,14 @@
             url: push.url,
             active: false
             // Open in background to avoid disrupting user
-          }).catch((error2) => {
+          }).catch((error) => {
             debugLogger.general(
               "ERROR",
               "Failed to auto-open link from tickle",
               {
                 url: push.url
               },
-              error2
+              error
             );
           });
         }
@@ -2014,12 +2054,12 @@
         pushes
       }).catch(() => {
       });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general(
         "ERROR",
         "Failed to refresh pushes",
         null,
-        error2
+        error
       );
     }
   }
@@ -2055,21 +2095,15 @@
           "INFO",
           "Showing notification for undecrypted push"
         );
-      } else if (push.type === "sms_changed" && push.notifications && push.notifications.length > 0) {
+      } else if (push.type === "sms_changed") {
         debugLogger.notifications(
           "DEBUG",
           "Complete sms_changed push object received",
           { push }
         );
         const sms = push.notifications[0];
-        if (!sms.body) {
-          debugLogger.notifications("INFO", "Ignoring empty/deleted SMS push", {
-            pushIden: push.iden
-          });
-          return;
-        }
         const title = sms.title || "New SMS";
-        const message = sms.body || "";
+        const message = sms.body;
         const imageUrl = sms.image_url;
         if (imageUrl && isTrustedImageUrl(imageUrl)) {
           notificationOptions = {
@@ -2230,13 +2264,13 @@
         notificationId,
         pushType: push.type
       });
-    } catch (error2) {
+    } catch (error) {
       performanceMonitor.recordNotificationFailed();
       debugLogger.notifications(
         "ERROR",
         "Failed to show push notification",
         { pushIden: push.iden },
-        error2
+        error
       );
     }
   }
@@ -2293,8 +2327,8 @@
         }).catch(() => {
         });
       }
-    } catch (error2) {
-      debugLogger.general("ERROR", "Polling fetch failed", null, error2);
+    } catch (error) {
+      debugLogger.general("ERROR", "Polling fetch failed", null, error);
     }
   }
   function performWebSocketHealthCheck(wsClient, connectFn) {
@@ -2392,12 +2426,12 @@
           isSettingUpContextMenu = false;
         }
       });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general(
         "ERROR",
         "Failed to create context menu",
         null,
-        error2
+        error
       );
       isSettingUpContextMenu = false;
     }
@@ -2437,12 +2471,12 @@
         title: "Link Sent",
         message: title || url
       });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general(
         "ERROR",
         "Failed to push link",
         { url, title },
-        error2
+        error
       );
     }
   }
@@ -2477,12 +2511,12 @@
         title: "Note Sent",
         message: title
       });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general(
         "ERROR",
         "Failed to push note",
         { title },
-        error2
+        error
       );
     }
   }
@@ -2527,8 +2561,8 @@
             initialState: instance.currentState
           });
         }
-      } catch (error2) {
-        debugLogger.storage("ERROR", "[StateMachine] Failed to hydrate state, defaulting to IDLE", null, error2);
+      } catch (error) {
+        debugLogger.storage("ERROR", "[StateMachine] Failed to hydrate state, defaulting to IDLE", null, error);
         instance.currentState = "idle" /* IDLE */;
       }
       return instance;
@@ -2569,8 +2603,8 @@
             lastKnownStateDescription: this.getStateDescription()
           });
           debugLogger.storage("DEBUG", "[StateMachine] Persisted new state to storage", { state: this.currentState });
-        } catch (error2) {
-          debugLogger.storage("ERROR", "[StateMachine] Failed to persist state", null, error2);
+        } catch (error) {
+          debugLogger.storage("ERROR", "[StateMachine] Failed to persist state", null, error);
         }
       } else {
         debugLogger.general("DEBUG", `[StateMachine] No transition`, {
@@ -2658,8 +2692,8 @@
             try {
               await this.callbacks.onInitialize(data);
               await this.transition("INIT_SUCCESS");
-            } catch (error2) {
-              debugLogger.general("ERROR", "[StateMachine] Initialization failed", null, error2);
+            } catch (error) {
+              debugLogger.general("ERROR", "[StateMachine] Initialization failed", null, error);
               await this.transition("INIT_FAILURE");
             }
           }
@@ -2808,12 +2842,12 @@
           "DEBUG",
           `API key not found on attempt ${i + 1}/${attempts}, will retry`
         );
-      } catch (error2) {
+      } catch (error) {
         debugLogger.storage(
           "WARN",
           `Error getting API key on attempt ${i + 1}/${attempts}`,
           null,
-          error2
+          error
         );
       }
       if (i < attempts - 1) {
@@ -2848,8 +2882,8 @@
     onStopPolling: () => {
       stopPollingMode();
     },
-    onShowError: (error2) => {
-      debugLogger.general("ERROR", "[StateMachine] Error state", { error: error2 });
+    onShowError: (error) => {
+      debugLogger.general("ERROR", "[StateMachine] Error state", { error });
       updateConnectionIcon("disconnected");
     },
     onClearData: async () => {
@@ -2903,12 +2937,12 @@
             updateConnectionIcon("disconnected");
         }
       }
-    } catch (error2) {
+    } catch (error) {
       debugLogger.general(
         "ERROR",
         "Failed to restore visual state",
         null,
-        error2
+        error
       );
     }
   }
@@ -2947,7 +2981,7 @@
         sessionCache.devices = devices;
         sessionCache.lastUpdated = Date.now();
         chrome.runtime.sendMessage({
-          action: "sessionDataUpdated",
+          action: "sessionDataUpdated" /* SESSION_DATA_UPDATED */,
           devices,
           userInfo: sessionCache.userInfo,
           recentPushes: sessionCache.recentPushes,
@@ -2983,14 +3017,14 @@
               "Cannot decrypt push - no encryption password set"
             );
           }
-        } catch (error2) {
+        } catch (error) {
           debugLogger.general(
             "ERROR",
             "Failed to decrypt push",
             {
-              error: error2.message
+              error: error.message
             },
-            error2
+            error
           );
         }
       }
@@ -3010,18 +3044,18 @@
         sessionCache.recentPushes.unshift(decryptedPush);
         sessionCache.lastUpdated = Date.now();
         chrome.runtime.sendMessage({
-          action: "pushesUpdated",
+          action: "pushesUpdated" /* PUSHES_UPDATED */,
           pushes: sessionCache.recentPushes
         }).catch(() => {
         });
       }
       showPushNotification(decryptedPush, notificationDataStore).catch(
-        (error2) => {
+        (error) => {
           debugLogger.general(
             "ERROR",
             "Failed to show notification",
             null,
-            error2
+            error
           );
           performanceMonitor.recordNotificationFailed();
         }
@@ -3036,14 +3070,14 @@
           url: decryptedPush.url,
           active: false
           // Open in background to avoid disrupting user
-        }).catch((error2) => {
+        }).catch((error) => {
           debugLogger.general(
             "ERROR",
             "Failed to auto-open link",
             {
               url: decryptedPush.url
             },
-            error2
+            error
           );
         });
       }
@@ -3100,12 +3134,12 @@
         setApiKey(apiKey2);
       }
       await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.storage(
         "ERROR",
         "Failed to read API key on startup",
         null,
-        error2
+        error
       );
       await stateMachine.transition("STARTUP", { hasApiKey: false });
     }
@@ -3133,12 +3167,12 @@
         setApiKey(apiKey2);
       }
       await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-    } catch (error2) {
+    } catch (error) {
       debugLogger.storage(
         "ERROR",
         "Failed to read API key on startup",
         null,
-        error2
+        error
       );
       await stateMachine.transition("STARTUP", { hasApiKey: false });
     }
@@ -3229,7 +3263,7 @@
       );
       sendResponse({ success: false, error: "Unauthorized" });
       return false;
-    } else if (message.action === "log") {
+    } else if (message.action === "log" /* LOG */) {
       if (message.payload) {
         const { level, message: logMessage, data } = message.payload;
         const prefix = "[POPUP]";
@@ -3248,7 +3282,7 @@
       }
       return false;
     }
-    if (message.action === "getSessionData") {
+    if (message.action === "getSessionData" /* GET_SESSION_DATA */) {
       (async () => {
         try {
           await ensureConfigLoaded();
@@ -3275,21 +3309,21 @@
             deviceNickname: getDeviceNickname(),
             websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
           });
-        } catch (error2) {
+        } catch (error) {
           debugLogger.general(
             "ERROR",
             "Error handling getSessionData after wake-up",
             null,
-            error2
+            error
           );
           sendResponse({
             isAuthenticated: false,
-            error: error2.message
+            error: error.message
           });
         }
       })();
       return true;
-    } else if (message.action === "apiKeyChanged") {
+    } else if (message.action === "apiKeyChanged" /* API_KEY_CHANGED */) {
       setApiKey(message.apiKey);
       let savePromise = storageRepository.setApiKey(message.apiKey);
       if (message.deviceNickname) {
@@ -3314,12 +3348,12 @@
           deviceNickname: sessionCache.deviceNickname,
           websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
         });
-      }).catch((error2) => {
-        debugLogger.general("ERROR", "Error saving API key", null, error2);
-        sendResponse({ success: false, error: error2.message });
+      }).catch((error) => {
+        debugLogger.general("ERROR", "Error saving API key", null, error);
+        sendResponse({ success: false, error: error.message });
       });
       return true;
-    } else if (message.action === "logout") {
+    } else if (message.action === "logout" /* LOGOUT */) {
       stateMachineReady.then(() => {
         return stateMachine.transition("LOGOUT");
       }).then(() => {
@@ -3328,12 +3362,12 @@
         return storageRepository.setDeviceIden(null);
       }).then(() => {
         sendResponse({ success: true });
-      }).catch((error2) => {
-        debugLogger.general("ERROR", "Error during logout", null, error2);
-        sendResponse({ success: false, error: error2.message });
+      }).catch((error) => {
+        debugLogger.general("ERROR", "Error during logout", null, error);
+        sendResponse({ success: false, error: error.message });
       });
       return true;
-    } else if (message.action === "refreshSession") {
+    } else if (message.action === "refreshSession" /* REFRESH_SESSION */) {
       (async () => {
         await ensureConfigLoaded();
         const apiKey2 = getApiKey();
@@ -3347,12 +3381,12 @@
               autoOpenLinks: sessionCache.autoOpenLinks,
               deviceNickname: sessionCache.deviceNickname
             });
-          }).catch((error2) => {
+          }).catch((error) => {
             debugLogger.general(
               "ERROR",
               "Error refreshing session",
               null,
-              error2
+              error
             );
             sendResponse({ isAuthenticated: false });
           });
@@ -3361,7 +3395,7 @@
         }
       })();
       return true;
-    } else if (message.action === "settingsChanged") {
+    } else if (message.action === "settingsChanged" /* SETTINGS_CHANGED */) {
       const promises = [];
       if (message.settings?.deviceNickname) {
         const newNickname = message.settings.deviceNickname;
@@ -3394,12 +3428,12 @@
       }
       Promise.all(promises).then(() => {
         sendResponse({ success: true });
-      }).catch((error2) => {
-        debugLogger.general("ERROR", "Error saving settings", null, error2);
-        sendResponse({ success: false, error: error2.message });
+      }).catch((error) => {
+        debugLogger.general("ERROR", "Error saving settings", null, error);
+        sendResponse({ success: false, error: error.message });
       });
       return true;
-    } else if (message.action === "updateDeviceNickname") {
+    } else if (message.action === "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */) {
       (async () => {
         await ensureConfigLoaded();
         const apiKey2 = getApiKey();
@@ -3410,21 +3444,21 @@
             sessionCache.deviceNickname = message.nickname;
             await storageRepository.setDeviceNickname(message.nickname);
             sendResponse({ success: true });
-          }).catch((error2) => {
+          }).catch((error) => {
             debugLogger.general(
               "ERROR",
               "Error updating device nickname",
               null,
-              error2
+              error
             );
-            sendResponse({ success: false, error: error2.message });
+            sendResponse({ success: false, error: error.message });
           });
         } else {
           sendResponse({ success: false, error: "Missing required parameters" });
         }
       })();
       return true;
-    } else if (message.action === "getDebugSummary") {
+    } else if (message.action === MessageAction.GET_DEBUG_SUMMARY) {
       (async () => {
         await stateMachineReady;
         const logData = debugLogger.exportLogs();
@@ -3488,29 +3522,29 @@
         sendResponse({ success: true, summary });
       })();
       return true;
-    } else if (message.action === "clearAllLogs") {
+    } else if (message.action === "clearAllLogs" /* CLEAR_ALL_LOGS */) {
       debugLogger.clearLogs().then(() => {
         sendResponse({ success: true });
       });
       return true;
-    } else if (message.action === "updateDebugConfig") {
+    } else if (message.action === "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */) {
       if (message.config) {
         debugConfigManager.updateConfig(message.config).then(() => {
           sendResponse({ success: true });
-        }).catch((error2) => {
+        }).catch((error) => {
           debugLogger.general(
             "ERROR",
             "Failed to update debug config",
             null,
-            error2
+            error
           );
-          sendResponse({ success: false, error: error2.message });
+          sendResponse({ success: false, error: error.message });
         });
       } else {
         sendResponse({ success: false, error: "No config provided" });
       }
       return true;
-    } else if (message.action === "exportDebugData") {
+    } else if (message.action === "exportDebugData" /* EXPORT_DEBUG_DATA */) {
       debugLogger.general("INFO", "Exporting full debug data");
       (async () => {
         await stateMachineReady;
@@ -3544,7 +3578,7 @@
         sendResponse({ success: true, data: dataToExport });
       })();
       return true;
-    } else if (message.action === "getNotificationData") {
+    } else if (message.action === "getNotificationData" /* GET_NOTIFICATION_DATA */) {
       const pushData = notificationDataStore.get(message.notificationId);
       if (pushData) {
         sendResponse({ success: true, push: pushData });
@@ -3552,7 +3586,7 @@
         sendResponse({ success: false, error: "Notification not found" });
       }
       return false;
-    } else if (message.action === "sendPush") {
+    } else if (message.action === "sendPush" /* SEND_PUSH */) {
       (async () => {
         try {
           await ensureConfigLoaded();
@@ -3591,14 +3625,14 @@
           }
           await refreshPushes(notificationDataStore);
           sendResponse({ success: true });
-        } catch (error2) {
+        } catch (error) {
           debugLogger.general(
             "ERROR",
             "Failed to send push",
             { pushType: message.pushData?.type },
-            error2
+            error
           );
-          sendResponse({ success: false, error: error2.message });
+          sendResponse({ success: false, error: error.message });
         }
       })();
       return true;

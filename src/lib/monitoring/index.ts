@@ -1,6 +1,8 @@
 /* Monitoring (TypeScript)
    Mirrors js/monitoring.js */
 
+import { debugLogger } from '../logging';
+
 export class InitializationTracker {
   private initializations: Array<{ source: string; timestamp: string }> = [];
   private stats: Record<string, number> = { onInstalled: 0, onStartup: 0, onAlarm: 0, onMessage: 0, manual: 0 };
@@ -37,7 +39,10 @@ export class WebSocketStateMonitor {
     this.monitoringInterval = setInterval(() => {
       this.lastStateCheck = Date.now();
       const state = (globalThis as any).websocket ? (globalThis as any).websocket.readyState : null;
-      try { (globalThis as any).debugLogger?.websocket('DEBUG', 'WebSocket state check', { state }); } catch { /* noop */ }
+      try { (globalThis as any).debugLogger?.websocket('DEBUG', 'WebSocket state check', { state }); } catch (error) {
+        // Log the error with context - this is a monitoring operation that shouldn't fail the main flow
+        debugLogger.general('WARN', 'Failed to log WebSocket state check', null, error as Error);
+      }
     }, 30000);
   }
   stopMonitoring() { if (this.monitoringInterval) { clearInterval(this.monitoringInterval); this.monitoringInterval = null; } }

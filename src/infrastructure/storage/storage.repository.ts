@@ -45,6 +45,10 @@ export interface StorageRepository {
   setScrollToRecentPushes(scroll: boolean): Promise<void>;
   removeScrollToRecentPushes(): Promise<void>;
 
+  // Device Registration
+  getDeviceRegistrationInProgress(): Promise<boolean>;
+  setDeviceRegistrationInProgress(inProgress: boolean): Promise<void>;
+
   // Bulk Operations
   clear(): Promise<void>;
   remove(keys: string[]): Promise<void>;
@@ -184,6 +188,21 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async removeScrollToRecentPushes(): Promise<void> {
     await chrome.storage.local.remove(['scrollToRecentPushes']);
+  }
+
+  /**
+   * Get Device Registration In Progress flag from local storage
+   */
+  async getDeviceRegistrationInProgress(): Promise<boolean> {
+    const result = await chrome.storage.local.get(['deviceRegistrationInProgress']);
+    return result.deviceRegistrationInProgress || false;
+  }
+
+  /**
+   * Set Device Registration In Progress flag in local storage
+   */
+  async setDeviceRegistrationInProgress(inProgress: boolean): Promise<void> {
+    await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
   }
 
   /**

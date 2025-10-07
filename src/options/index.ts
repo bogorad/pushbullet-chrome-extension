@@ -4,6 +4,7 @@
 
 import { getElementById, showStatus as showStatusUI } from '../lib/ui/dom';
 import { storageRepository } from '../infrastructure/storage/storage.repository';
+import { MessageAction } from '../types/domain';
 
 // DOM elements
 const deviceNicknameInput = getElementById<HTMLInputElement>('device-nickname');
@@ -87,7 +88,7 @@ async function updateNickname(): Promise<void> {
     // Notify background script
     // FIX: Changed action name to match what background script expects
     chrome.runtime.sendMessage({
-      action: 'updateDeviceNickname',
+      action: MessageAction.UPDATE_DEVICE_NICKNAME,
       nickname: nickname
     });
 
@@ -131,7 +132,7 @@ async function saveAutoOpenLinks(): Promise<void> {
 
     // Notify background script
     chrome.runtime.sendMessage({
-      action: 'autoOpenLinksChanged',
+      action: MessageAction.AUTO_OPEN_LINKS_CHANGED,
       autoOpenLinks: enabled
     });
 
@@ -153,7 +154,7 @@ async function saveEncryptionPassword(): Promise<void> {
 
     // Notify background script that encryption password changed
     chrome.runtime.sendMessage({
-      action: 'encryptionPasswordChanged',
+      action: MessageAction.ENCRYPTION_PASSWORD_CHANGED,
       hasPassword: password.length > 0
     });
 
@@ -185,7 +186,7 @@ async function saveDebugMode(): Promise<void> {
 
     // Notify background script
     chrome.runtime.sendMessage({
-      action: 'debugModeChanged',
+      action: MessageAction.DEBUG_MODE_CHANGED,
       enabled: enabled
     });
 
@@ -226,7 +227,7 @@ async function saveAllSettings(): Promise<void> {
 
     // Notify background script
     chrome.runtime.sendMessage({
-      action: 'settingsChanged',
+      action: MessageAction.SETTINGS_CHANGED,
       settings: {
         deviceNickname: nickname,
         notificationTimeout: seconds * 1000,

@@ -473,8 +473,9 @@ try {
       "GLOBAL",
     );
   });
-} catch {
-  /* noop */
+} catch (error) {
+  // Log global unhandled rejection handler setup failure - non-critical for main functionality
+  console.warn('Failed to set up global unhandled rejection handler:', error);
 }
 try {
   self.addEventListener(

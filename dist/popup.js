@@ -125,6 +125,19 @@
       await chrome.storage.local.remove(["scrollToRecentPushes"]);
     }
     /**
+     * Get Device Registration In Progress flag from local storage
+     */
+    async getDeviceRegistrationInProgress() {
+      const result = await chrome.storage.local.get(["deviceRegistrationInProgress"]);
+      return result.deviceRegistrationInProgress || false;
+    }
+    /**
+     * Set Device Registration In Progress flag in local storage
+     */
+    async setDeviceRegistrationInProgress(inProgress) {
+      await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
+    }
+    /**
      * Clear all storage (both sync and local)
      */
     async clear() {
@@ -209,7 +222,7 @@
     console.log("Requesting session data from background");
     showSection("loading");
     chrome.runtime.sendMessage(
-      { action: "getSessionData" },
+      { action: "getSessionData" /* GET_SESSION_DATA */ },
       async (response) => {
         if (chrome.runtime.lastError) {
           console.error("Error getting session data:", chrome.runtime.lastError);
@@ -279,7 +292,7 @@
       deviceNickname = newNickname;
       chrome.runtime.sendMessage(
         {
-          action: "apiKeyChanged",
+          action: "apiKeyChanged" /* API_KEY_CHANGED */,
           apiKey: newApiKey,
           deviceNickname: newNickname
         },
@@ -320,7 +333,7 @@
     await storageRepository.setDeviceIden(null);
     apiKey = null;
     hasInitialized = false;
-    chrome.runtime.sendMessage({ action: "logout" }).catch((error) => {
+    chrome.runtime.sendMessage({ action: "logout" /* LOGOUT */ }).catch((error) => {
       console.warn("Could not notify background of logout:", error.message);
     });
     showSection("login");
@@ -606,7 +619,7 @@
       );
       chrome.runtime.sendMessage(
         {
-          action: "sendPush",
+          action: "sendPush" /* SEND_PUSH */,
           pushData
         },
         (response) => {
@@ -628,7 +641,7 @@
             clearPushForm();
             showStatus("Push sent successfully!", "success");
             chrome.runtime.sendMessage(
-              { action: "getSessionData" },
+              { action: "getSessionData" /* GET_SESSION_DATA */ },
               (sessionResponse) => {
                 if (sessionResponse && sessionResponse.recentPushes) {
                   displayPushes(sessionResponse.recentPushes);
@@ -701,9 +714,9 @@
     }
   }
   chrome.runtime.onMessage.addListener((message, _, __) => {
-    if (message.action === "connectionStateChanged") {
+    if (message.action === "connectionStateChanged" /* CONNECTION_STATE_CHANGED */) {
       console.log("Connection state changed:", message.state);
-    } else if (message.action === "pushesUpdated") {
+    } else if (message.action === "pushesUpdated" /* PUSHES_UPDATED */) {
       if (message.pushes) {
         displayPushes(message.pushes);
       }

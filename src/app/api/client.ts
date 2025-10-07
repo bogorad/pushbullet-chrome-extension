@@ -1,5 +1,6 @@
 import type { User, Device, Push, DevicesResponse, PushesResponse } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
+import { storageRepository } from "../../infrastructure/storage/storage.repository";
 
 const API_BASE_URL = 'https://api.pushbullet.com/v2';
 const PUSHES_URL = `${API_BASE_URL}/pushes`;
@@ -156,11 +157,9 @@ export async function registerDevice(
   });
 
   // Check if registration is already in progress
-  const result = await new Promise<{ deviceRegistrationInProgress?: boolean }>(resolve => {
-    chrome.storage.local.get(['deviceRegistrationInProgress'], (items) => resolve(items as any));
-  });
+  const deviceRegistrationInProgress = await storageRepository.getDeviceRegistrationInProgress();
 
-  if (result.deviceRegistrationInProgress) {
+  if (deviceRegistrationInProgress) {
     debugLogger.general('INFO', 'Device registration already in progress - waiting for completion');
     return new Promise(resolve => {
       const listener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
@@ -175,27 +174,24 @@ export async function registerDevice(
   }
 
   try {
-    await chrome.storage.local.set({ deviceRegistrationInProgress: true });
+    await storageRepository.setDeviceRegistrationInProgress(true);
 
     // Check if device is already registered
-    const storageResult = await new Promise<{ deviceIden?: string }>(resolve => {
-      chrome.storage.local.get(['deviceIden'], (items) => resolve(items as any));
-    });
+    const existingDeviceIden = await storageRepository.getDeviceIden();
 
-    if (storageResult.deviceIden) {
-      const existingIden = storageResult.deviceIden;
-      debugLogger.general('INFO', 'Device already registered', { deviceIden: existingIden, deviceNickname });
+    if (existingDeviceIden) {
+      debugLogger.general('INFO', 'Device already registered', { deviceIden: existingDeviceIden, deviceNickname });
 
       try {
-        await updateDeviceNickname(apiKey, existingIden, deviceNickname);
-        await chrome.storage.local.set({ deviceRegistrationInProgress: false });
-        return { deviceIden: existingIden, needsUpdate: false };
+        await updateDeviceNickname(apiKey, existingDeviceIden, deviceNickname);
+        await storageRepository.setDeviceRegistrationInProgress(false);
+        return { deviceIden: existingDeviceIden, needsUpdate: false };
       } catch (error) {
         debugLogger.general('WARN', 'Failed to update existing device, will re-register', {
           error: (error as Error).message,
-          deviceIden: existingIden
+          deviceIden: existingDeviceIden
         });
-        await chrome.storage.local.remove(['deviceIden']);
+        await storageRepository.setDeviceIden(null);
       }
     }
 
@@ -241,7 +237,7 @@ export async function registerDevice(
         duration: `${duration}ms`,
         errorText
       }, error);
-      await chrome.storage.local.set({ deviceRegistrationInProgress: false });
+      await storageRepository.setDeviceRegistrationInProgress(false);
       throw error;
     }
 
@@ -257,8 +253,8 @@ export async function registerDevice(
     });
 
     // Save device iden to storage
-    await chrome.storage.local.set({ deviceIden: newDeviceIden } as any);
-    await chrome.storage.local.set({ deviceRegistrationInProgress: false } as any);
+    await storageRepository.setDeviceIden(newDeviceIden);
+    await storageRepository.setDeviceRegistrationInProgress(false);
 
     debugLogger.general('INFO', 'Device registration completed', {
       deviceIden: newDeviceIden,
@@ -267,7 +263,7 @@ export async function registerDevice(
 
     return { deviceIden: newDeviceIden, needsUpdate: false };
   } catch (error) {
-    await chrome.storage.local.set({ deviceRegistrationInProgress: false });
+    await storageRepository.setDeviceRegistrationInProgress(false);
     debugLogger.general('ERROR', 'Error in registerDevice function', {
       errorMessage: (error as Error).message,
       errorStack: (error as Error).stack

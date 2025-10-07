@@ -3,6 +3,7 @@
  */
 
 import { getElementById } from '../lib/ui/dom';
+import { MessageAction } from '../types/domain';
 
 // Type definitions
 interface DebugSummary {
@@ -186,7 +187,7 @@ function setupEventListeners(): void {
   // Clear logs button
   clearLogsBtn.addEventListener('click', () => {
     if (confirm('Are you sure you want to permanently delete all logs?')) {
-      chrome.runtime.sendMessage({ action: 'clearAllLogs' }, (response) => {
+      chrome.runtime.sendMessage({ action: MessageAction.CLEAR_ALL_LOGS }, (response) => {
         if (response && response.success) {
           // Refresh the dashboard to show the empty logs
           loadDashboardData();
@@ -204,7 +205,7 @@ function setupEventListeners(): void {
 
     // Send message to background to update debug config
     chrome.runtime.sendMessage({
-      action: 'updateDebugConfig',
+      action: MessageAction.UPDATE_DEBUG_CONFIG,
       config: { enabled }
     }, (response) => {
       if (response && response.success) {
@@ -287,7 +288,7 @@ async function loadDashboardData(): Promise<void> {
   try {
     // Get debug summary from background script
     const response = await chrome.runtime.sendMessage({
-      action: 'getDebugSummary'
+      action: MessageAction.GET_DEBUG_SUMMARY
     }) as DebugSummary;
 
     if (response && response.success) {
@@ -595,7 +596,7 @@ async function exportData(format: 'json' | 'text'): Promise<void> {
   try {
     // Get full debug data from background
     const response = await chrome.runtime.sendMessage({
-      action: 'exportDebugData'
+      action: MessageAction.EXPORT_DEBUG_DATA
     }) as { success: boolean; data?: unknown };
 
     if (!response || !response.success) {

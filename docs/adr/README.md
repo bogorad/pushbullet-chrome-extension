@@ -1,3 +1,5 @@
+---
+
 # Architectural Decision Records (ADRs)
 
 ## What is an ADR?
@@ -19,15 +21,19 @@ Each ADR follows this structure:
 # ADR XXXX: [Title]
 
 ## Status
+
 [Proposed | Accepted | Deprecated | Superseded]
 
 ## Context
+
 What is the issue that we're seeing that is motivating this decision or change?
 
 ## Decision
+
 What is the change that we're proposing and/or doing?
 
 ## Consequences
+
 What becomes easier or more difficult to do because of this change?
 ```
 
@@ -38,6 +44,7 @@ What becomes easier or more difficult to do because of this change?
 - [ADR 0003: Event Bus Pattern](./0003-event-bus-pattern.md) - Decoupling components
 - [ADR 0004: API Centralization](./0004-api-centralization.md) - Dumb Client Pattern
 - [ADR 0005: Service Worker State Machine](./0005-service-worker-state-machine.md) - Centralized Lifecycle Management
+- [ADR 0006: Centralizing Magic Strings](./0006-centralizing-magic-strings.md) - Using Enums and Constants
 
 ## Creating a New ADR
 
@@ -51,4 +58,3 @@ What becomes easier or more difficult to do because of this change?
 
 - [ADR GitHub Organization](https://adr.github.io/)
 - [Documenting Architecture Decisions](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions)
-

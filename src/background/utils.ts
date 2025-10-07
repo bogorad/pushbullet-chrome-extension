@@ -145,11 +145,11 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
       badgeText,
       badgeColor,
     });
-  } catch {
+  } catch (error) {
     debugLogger.general("ERROR", "Exception setting badge", {
       status,
       error: (error as Error).message,
-    });
+    }, error as Error);
   }
 }
 
@@ -309,11 +309,11 @@ export async function showPushNotification(
         "INFO",
         "Showing notification for undecrypted push",
       );
-    } else if (
-      (push as any).type === "sms_changed" &&
-      (push as any).notifications &&
-      (push as any).notifications.length > 0
-    ) {
+    } else if ((push as any).type === "sms_changed") {
+      // The condition is now much simpler because the guard clause at the top
+      // has already guaranteed that if we get here, the 'notifications' array
+      // exists and is not empty.
+
       debugLogger.notifications(
         "DEBUG",
         "Complete sms_changed push object received",
@@ -321,21 +321,15 @@ export async function showPushNotification(
       );
       const sms = (push as any).notifications[0];
 
-      // NEW: Add this validation block to ignore empty pushes
-      if (!sms.body) {
-        debugLogger.notifications("INFO", "Ignoring empty/deleted SMS push", {
-          pushIden: push.iden,
-        });
-        return; // Stop processing if there is no content
-      }
+      // This redundant check is now removed, as the guard clause handles all empty cases.
+      // if (!sms.body) { ... }
 
       const title = sms.title || "New SMS";
-      const message = sms.body || "";
+      const message = sms.body; // We can trust that 'body' exists.
       const imageUrl = sms.image_url;
 
-      // Check if this is an MMS with a valid, trusted image URL
       if (imageUrl && isTrustedImageUrl(imageUrl)) {
-        // It's an MMS, so create an 'image' notification
+        // It's an MMS with a valid image
         notificationOptions = {
           ...baseOptions,
           type: "image",
@@ -345,7 +339,7 @@ export async function showPushNotification(
         };
         debugLogger.notifications("INFO", "Showing image notification for MMS");
       } else {
-        // It's a regular SMS, so create a 'basic' notification
+        // It's a regular SMS
         notificationOptions = {
           ...baseOptions,
           type: "basic",

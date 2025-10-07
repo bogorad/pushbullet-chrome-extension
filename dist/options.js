@@ -139,6 +139,19 @@
       await chrome.storage.local.remove(["scrollToRecentPushes"]);
     }
     /**
+     * Get Device Registration In Progress flag from local storage
+     */
+    async getDeviceRegistrationInProgress() {
+      const result = await chrome.storage.local.get(["deviceRegistrationInProgress"]);
+      return result.deviceRegistrationInProgress || false;
+    }
+    /**
+     * Set Device Registration In Progress flag in local storage
+     */
+    async setDeviceRegistrationInProgress(inProgress) {
+      await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
+    }
+    /**
      * Clear all storage (both sync and local)
      */
     async clear() {
@@ -211,7 +224,7 @@
     try {
       await storageRepository.setDeviceNickname(nickname);
       chrome.runtime.sendMessage({
-        action: "updateDeviceNickname",
+        action: "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */,
         nickname
       });
       showStatus2("Device nickname updated successfully", "success");
@@ -240,7 +253,7 @@
     try {
       await storageRepository.setAutoOpenLinks(enabled);
       chrome.runtime.sendMessage({
-        action: "autoOpenLinksChanged",
+        action: "autoOpenLinksChanged" /* AUTO_OPEN_LINKS_CHANGED */,
         autoOpenLinks: enabled
       });
       showStatus2("Auto-open links setting updated", "success");
@@ -254,7 +267,7 @@
     try {
       await storageRepository.setEncryptionPassword(password);
       chrome.runtime.sendMessage({
-        action: "encryptionPasswordChanged",
+        action: "encryptionPasswordChanged" /* ENCRYPTION_PASSWORD_CHANGED */,
         hasPassword: password.length > 0
       });
       if (password.length > 0) {
@@ -275,7 +288,7 @@
       debugConfig.enabled = enabled;
       await chrome.storage.local.set({ debugConfig });
       chrome.runtime.sendMessage({
-        action: "debugModeChanged",
+        action: "debugModeChanged" /* DEBUG_MODE_CHANGED */,
         enabled
       });
       showStatus2("Debug mode updated", "success");
@@ -302,7 +315,7 @@
       await storageRepository.setNotificationTimeout(seconds * 1e3);
       await storageRepository.setAutoOpenLinks(autoOpen);
       chrome.runtime.sendMessage({
-        action: "settingsChanged",
+        action: "settingsChanged" /* SETTINGS_CHANGED */,
         settings: {
           deviceNickname: nickname,
           notificationTimeout: seconds * 1e3,

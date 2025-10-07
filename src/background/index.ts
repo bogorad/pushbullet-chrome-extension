@@ -21,6 +21,7 @@ import { fetchDevices, updateDeviceNickname } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
 import { PushbulletCrypto } from "../lib/crypto";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
+import { MessageAction } from "../types/domain";
 import { globalEventBus } from "../lib/events/event-bus";
 import { ServiceWorkerStateMachine, ServiceWorkerState } from "./state-machine";
 import {
@@ -315,7 +316,7 @@ function connectWebSocket(): void {
 
       chrome.runtime
         .sendMessage({
-          action: "sessionDataUpdated",
+          action: MessageAction.SESSION_DATA_UPDATED,
           devices: devices,
           userInfo: sessionCache.userInfo,
           recentPushes: sessionCache.recentPushes,
@@ -399,7 +400,7 @@ function connectWebSocket(): void {
 
       chrome.runtime
         .sendMessage({
-          action: "pushesUpdated",
+          action: MessageAction.PUSHES_UPDATED,
           pushes: sessionCache.recentPushes,
         })
         .catch(() => {});
@@ -719,7 +720,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
     sendResponse({ success: false, error: "Unauthorized" });
     return false;
-  } else if (message.action === "log") {
+  } else if (message.action === MessageAction.LOG) {
     // Handler for centralized logging from other scripts (e.g., popup)
     if (message.payload) {
       const { level, message: logMessage, data } = message.payload;
@@ -742,7 +743,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.action === "getSessionData") {
+  if (message.action === MessageAction.GET_SESSION_DATA) {
     // SERVICE WORKER AMNESIA FIX: Check storage directly, not the in-memory variable
     // After service worker restart, in-memory variables are null, but storage persists.
     // This ensures we detect wake-ups reliably by using storage as the source of truth.
@@ -798,7 +799,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
 
     return true; // Return true to indicate an asynchronous response.
-  } else if (message.action === "apiKeyChanged") {
+  } else if (message.action === MessageAction.API_KEY_CHANGED) {
     // Update API key
     setApiKey(message.apiKey);
 
@@ -846,7 +847,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
 
     return true; // Keep message channel open for async response
-  } else if (message.action === "logout") {
+  } else if (message.action === MessageAction.LOGOUT) {
     // ARCHITECTURAL CHANGE: Use state machine for logout
     // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
     stateMachineReady
@@ -869,7 +870,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
 
     return true; // Async response
-  } else if (message.action === "refreshSession") {
+  } else if (message.action === MessageAction.REFRESH_SESSION) {
     // RACE CONDITION FIX: Ensure configuration is loaded before processing
     (async () => {
       await ensureConfigLoaded();
@@ -902,7 +903,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
 
     return true; // Async response
-  } else if (message.action === "settingsChanged") {
+  } else if (message.action === MessageAction.SETTINGS_CHANGED) {
     const promises: Promise<void>[] = [];
 
     // BONUS FIX: Handle device nickname updates from "Save All Settings" button
@@ -952,7 +953,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
 
     return true; // Async response
-  } else if (message.action === "updateDeviceNickname") {
+  } else if (message.action === MessageAction.UPDATE_DEVICE_NICKNAME) {
     // RACE CONDITION FIX: Ensure configuration is loaded before processing
     (async () => {
       await ensureConfigLoaded();
@@ -984,7 +985,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
 
     return true; // Async response
-  } else if (message.action === "getDebugSummary") {
+  } else if (message.action === MessageAction.GET_DEBUG_SUMMARY) {
     // Return debug summary for debug dashboard
     (async () => {
       // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
@@ -1068,13 +1069,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
 
     return true; // Async response
-  } else if (message.action === "clearAllLogs") {
+  } else if (message.action === MessageAction.CLEAR_ALL_LOGS) {
     // Clear all logs from memory and persistent storage
     debugLogger.clearLogs().then(() => {
       sendResponse({ success: true });
     });
     return true; // Async response
-  } else if (message.action === "updateDebugConfig") {
+  } else if (message.action === MessageAction.UPDATE_DEBUG_CONFIG) {
     // Update debug configuration
     if (message.config) {
       debugConfigManager
@@ -1095,7 +1096,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "No config provided" });
     }
     return true; // Async response
-  } else if (message.action === "exportDebugData") {
+  } else if (message.action === MessageAction.EXPORT_DEBUG_DATA) {
     // This handler gathers all debug data for exporting
     debugLogger.general("INFO", "Exporting full debug data");
 
@@ -1140,7 +1141,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
 
     return true; // Async response
-  } else if (message.action === "getNotificationData") {
+  } else if (message.action === MessageAction.GET_NOTIFICATION_DATA) {
     // Return notification data for detail view
     const pushData = notificationDataStore.get(message.notificationId);
     if (pushData) {
@@ -1149,7 +1150,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "Notification not found" });
     }
     return false; // Synchronous response
-  } else if (message.action === "sendPush") {
+  } else if (message.action === MessageAction.SEND_PUSH) {
     // Handle push sending from popup
     // SERVICE WORKER AMNESIA FIX: Ensure configuration is loaded before attempting to send push
     (async () => {

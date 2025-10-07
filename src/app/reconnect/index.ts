@@ -51,8 +51,9 @@ export async function ensureConfigLoaded(
         if (apiKey) {
           stateSetters.setApiKey(apiKey);
         }
-      } catch {
-        // Swallow storage errors in ensureConfigLoaded
+      } catch (error) {
+        // Log storage errors in ensureConfigLoaded - these are non-critical for startup
+        debugLogger.general("WARN", "Failed to load API key from storage", null, error as Error);
       }
     }
 
@@ -63,8 +64,9 @@ export async function ensureConfigLoaded(
         if (deviceIden) {
           stateSetters.setDeviceIden(deviceIden);
         }
-      } catch {
-        // Swallow storage errors in ensureConfigLoaded
+      } catch (error) {
+        // Log storage errors in ensureConfigLoaded - these are non-critical for startup
+        debugLogger.general("WARN", "Failed to load device identifier from storage", null, error as Error);
       }
     }
 
@@ -75,8 +77,9 @@ export async function ensureConfigLoaded(
         if (deviceNickname !== null && deviceNickname !== undefined) {
           stateSetters.setDeviceNickname(deviceNickname);
         }
-      } catch {
-        // Swallow storage errors in ensureConfigLoaded
+      } catch (error) {
+        // Log storage errors in ensureConfigLoaded - these are non-critical for startup
+        debugLogger.general("WARN", "Failed to load device nickname from storage", null, error as Error);
       }
     }
 
@@ -87,8 +90,9 @@ export async function ensureConfigLoaded(
         if (autoOpenLinks !== null && autoOpenLinks !== undefined) {
           stateSetters.setAutoOpenLinks(autoOpenLinks);
         }
-      } catch {
-        // Swallow storage errors in ensureConfigLoaded
+      } catch (error) {
+        // Log storage errors in ensureConfigLoaded - these are non-critical for startup
+        debugLogger.general("WARN", "Failed to load auto-open links setting from storage", null, error as Error);
       }
     }
 
@@ -99,8 +103,9 @@ export async function ensureConfigLoaded(
         if (notificationTimeout !== null && notificationTimeout !== undefined) {
           stateSetters.setNotificationTimeout(notificationTimeout);
         }
-      } catch {
-        // Swallow storage errors in ensureConfigLoaded
+      } catch (error) {
+        // Log storage errors in ensureConfigLoaded - these are non-critical for startup
+        debugLogger.general("WARN", "Failed to load notification timeout from storage", null, error as Error);
       }
     }
 
@@ -113,16 +118,18 @@ export async function ensureConfigLoaded(
         notificationTimeout: stateGetters.getNotificationTimeout(),
         deviceNickname: stateGetters.getDeviceNickname()
       });
-    } catch {
-      // Swallow logging errors in ensureConfigLoaded
+    } catch (error) {
+      // Log logging errors in ensureConfigLoaded - these are non-critical
+      console.warn('Failed to log ensureConfigLoaded completion:', error);
     }
   } catch (e) {
     try {
       debugLogger.storage('WARN', 'ensureConfigLoaded encountered an error', {
         error: e && (e as Error).message
       });
-    } catch {
-      // Ignore
+    } catch (error) {
+      // Log logging errors in ensureConfigLoaded - these are non-critical
+      console.warn('Failed to log ensureConfigLoaded error:', error);
     }
   }
 }

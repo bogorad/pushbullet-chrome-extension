@@ -3,6 +3,7 @@
  */
 
 import type { Push, Device, UserInfo } from "../types/domain";
+import { MessageAction } from "../types/domain";
 import {
   getElementById,
 } from "../lib/ui/dom";
@@ -153,7 +154,7 @@ function checkStorageForApiKey(): void {
 
   // Request session data from background script (single source of truth)
   chrome.runtime.sendMessage(
-    { action: "getSessionData" },
+            { action: MessageAction.GET_SESSION_DATA },
     async (response: SessionData) => {
       if (chrome.runtime.lastError) {
         console.error("Error getting session data:", chrome.runtime.lastError);
@@ -265,7 +266,7 @@ async function saveApiKey(): Promise<void> {
     // Background will respond AFTER initialization is complete (no setTimeout needed!)
     chrome.runtime.sendMessage(
       {
-        action: "apiKeyChanged",
+        action: MessageAction.API_KEY_CHANGED,
         apiKey: newApiKey,
         deviceNickname: newNickname,
       },
@@ -316,7 +317,7 @@ async function logout(): Promise<void> {
   hasInitialized = false;
 
   // Notify background script to disconnect WebSocket
-  chrome.runtime.sendMessage({ action: "logout" }).catch((error) => {
+  chrome.runtime.sendMessage({ action: MessageAction.LOGOUT }).catch((error) => {
     console.warn("Could not notify background of logout:", error.message);
   });
 
@@ -757,7 +758,7 @@ async function sendPush(): Promise<void> {
     // Send push via background script
     chrome.runtime.sendMessage(
       {
-        action: "sendPush",
+        action: MessageAction.SEND_PUSH,
         pushData: pushData,
       },
       (response) => {
@@ -781,7 +782,7 @@ async function sendPush(): Promise<void> {
           clearPushForm();
           showStatus("Push sent successfully!", "success");
           chrome.runtime.sendMessage(
-            { action: "getSessionData" },
+    { action: MessageAction.GET_SESSION_DATA },
             (sessionResponse: SessionData) => {
               if (sessionResponse && sessionResponse.recentPushes) {
                 displayPushes(sessionResponse.recentPushes);
@@ -891,10 +892,10 @@ function scrollToRecentPushes(): void {
  * Listen for messages from background
  */
 chrome.runtime.onMessage.addListener((message, _, __) => {
-  if (message.action === "connectionStateChanged") {
+  if (message.action === MessageAction.CONNECTION_STATE_CHANGED) {
     // Connection state changes now shown via badge icon only
     console.log("Connection state changed:", message.state);
-  } else if (message.action === "pushesUpdated") {
+  } else if (message.action === MessageAction.PUSHES_UPDATED) {
     if (message.pushes) {
       displayPushes(message.pushes as Push[]);
     }
