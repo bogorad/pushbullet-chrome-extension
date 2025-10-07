@@ -15,7 +15,6 @@ import {
   sessionCache,
   initializeSessionCache,
   refreshSessionCache,
-  initializationState,
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
@@ -1273,14 +1272,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       pushCount: sessionCache.recentPushes?.length || 0,
     },
     websocketConnected: websocketClient ? websocketClient.isConnected() : false,
-    initializationState: {
-      inProgress: initializationState.inProgress,
-      completed: initializationState.completed,
-      timestamp: initializationState.timestamp
-        ? new Date(initializationState.timestamp).toISOString()
-        : null,
-      hasError: !!initializationState.error,
-    },
   };
 };
 

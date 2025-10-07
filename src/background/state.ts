@@ -2,7 +2,7 @@
  * Global state management for background service worker
  */
 
-import type { InitializationState } from '../types/domain';
+
 import { WebSocketClient } from '../app/ws/client';
 
 // API constants
@@ -26,13 +26,7 @@ let lastDisconnectionNotification = 0;
 export const DISCONNECTION_NOTIFICATION_COOLDOWN = 300000; // 5 minutes
 export const DISCONNECTION_NOTIFICATION_THRESHOLD = 300000; // 5 minutes
 
-// Initialization state
-export const initializationState: InitializationState = {
-  inProgress: false,
-  completed: false,
-  error: null,
-  timestamp: null
-};
+
 
 // NO ENCRYPTION/DECRYPTION - API key is stored in plain text in chrome.storage.local
 // Security: API keys are stored in local storage (not synced) to prevent exposure

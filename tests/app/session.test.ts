@@ -12,7 +12,6 @@ declare const chrome: any;
 // Note: We need to reset the module state between tests
 let initializeSessionCache: any;
 let sessionCache: any;
-let initializationState: any;
 
 // Mock the dependencies
 vi.mock('../../src/lib/logging', () => ({
@@ -56,13 +55,12 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     const module = await import('../../src/app/session/index');
     initializeSessionCache = module.initializeSessionCache;
     sessionCache = module.sessionCache;
-    initializationState = module.initializationState;
 
-    // Reset initialization state
-    initializationState.inProgress = false;
-    initializationState.completed = false;
-    initializationState.error = null;
-    initializationState.timestamp = null;
+    // Reset session cache
+    sessionCache.isAuthenticated = false;
+    sessionCache.userInfo = null;
+    sessionCache.devices = [];
+    sessionCache.recentPushes = [];
 
     // Reset storage repository mocks to default values
     const { storageRepository } = await import('../../src/infrastructure/storage/storage.repository');
@@ -75,11 +73,9 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
 
   it('should complete initialization successfully on first call', async () => {
     const result = await initializeSessionCache('test-source');
-    
+
     expect(result).toBe('test-api-key-123');
-    expect(initializationState.completed).toBe(true);
-    expect(initializationState.inProgress).toBe(false);
-    expect(initializationState.error).toBeNull();
+    expect(sessionCache.isAuthenticated).toBe(true);
   });
 
   it('should return same promise when called concurrently (race condition test)', async () => {
@@ -98,8 +94,7 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     expect(result3).toBe('test-api-key-123');
 
     // Initialization should be completed
-    expect(initializationState.completed).toBe(true);
-    expect(initializationState.inProgress).toBe(false);
+    expect(sessionCache.isAuthenticated).toBe(true);
 
     // Verify storage repository methods were only called once (proving promise reuse)
     const { storageRepository } = await import('../../src/infrastructure/storage/storage.repository');
@@ -107,18 +102,16 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
   });
 
   it('should return null on subsequent calls after completion', async () => {
-    // First call completes initialization
     const firstResult = await initializeSessionCache('first-call');
     expect(firstResult).toBe('test-api-key-123');
-    expect(initializationState.completed).toBe(true);
-    
+    expect(sessionCache.isAuthenticated).toBe(true);
+
     // Second call should return null (already initialized)
     const secondResult = await initializeSessionCache('second-call');
     expect(secondResult).toBeNull();
-    
-    // State should remain completed
-    expect(initializationState.completed).toBe(true);
-    expect(initializationState.inProgress).toBe(false);
+
+    // State should remain authenticated
+    expect(sessionCache.isAuthenticated).toBe(true);
   });
 
   it('should clear promise and allow retry after initialization failure', async () => {
@@ -139,15 +132,13 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     // First call should fail
     await expect(initializeSessionCache('first-attempt')).rejects.toThrow('Storage error');
 
-    // State should be reset (not in progress, not completed)
-    expect(initializationState.inProgress).toBe(false);
-    expect(initializationState.completed).toBe(false);
-    expect(initializationState.error).toBeTruthy();
+    // State should be reset (not authenticated)
+    expect(sessionCache.isAuthenticated).toBe(false);
 
     // Second call should succeed (promise was cleared)
     const retryResult = await initializeSessionCache('retry-attempt');
     expect(retryResult).toBe('test-api-key-retry');
-    expect(initializationState.completed).toBe(true);
+    expect(sessionCache.isAuthenticated).toBe(true);
   });
 
   it('should prevent "Initialization already in progress" errors via promise reuse', async () => {
@@ -167,8 +158,8 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     expect(results[0]).toBe('test-api-key-123');
     expect(results[1]).toBe('test-api-key-123');
     
-    // No errors should have been thrown
-    expect(initializationState.error).toBeNull();
+    // Session should be authenticated
+    expect(sessionCache.isAuthenticated).toBe(true);
   });
 
   it('should handle state setters correctly when provided', async () => {

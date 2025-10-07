@@ -1,4 +1,4 @@
-import type { SessionCache, InitializationState } from "../../types/domain";
+import type { SessionCache } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import {
   fetchUserInfo,
@@ -20,13 +20,7 @@ export const sessionCache: SessionCache = {
   deviceNickname: "Chrome",
 };
 
-// Initialization state tracking
-export const initializationState: InitializationState = {
-  inProgress: false,
-  completed: false,
-  error: null,
-  timestamp: null,
-};
+
 
 // Promise singleton for single-flight initialization
 // Prevents race conditions when multiple events trigger initialization concurrently
@@ -56,7 +50,7 @@ export async function initializeSessionCache(
 ): Promise<string | null> {
   // If initialization is already in progress, return the existing promise
   // This allows concurrent callers to await the same initialization
-  if (initializationState.inProgress && initPromise) {
+  if (initPromise) {
     debugLogger.general(
       "INFO",
       "Initialization already in progress, returning existing promise",
@@ -68,15 +62,6 @@ export async function initializeSessionCache(
     return initPromise;
   }
 
-  if (initializationState.completed) {
-    debugLogger.general("WARN", "Already initialized, skipping", {
-      source,
-      previousTimestamp: initializationState.timestamp,
-    });
-    return null;
-  }
-
-  // --- ADD THIS GUARD CLAUSE ---
   // If the session is already authenticated (e.g., loaded from IndexedDB),
   // then there is no work to do here.
   if (sessionCache.isAuthenticated) {
@@ -87,8 +72,6 @@ export async function initializeSessionCache(
     }
     return null;
   }
-
-  initializationState.inProgress = true;
 
   // Create and store the initialization promise
   initPromise = (async () => {
@@ -196,18 +179,15 @@ export async function initializeSessionCache(
         );
       }
 
-       initializationState.completed = true;
        // Save our freshly built session to the database for next time.
        saveSessionCache(sessionCache);
-       initializationState.timestamp = Date.now();
-      debugLogger.general("INFO", "Initialization completed successfully", {
-        source,
-        timestamp: new Date(initializationState.timestamp).toISOString(),
-      });
+       debugLogger.general("INFO", "Initialization completed successfully", {
+         source,
+         timestamp: new Date().toISOString(),
+       });
 
       return apiKeyValue;
     } catch (error) {
-      initializationState.error = error as Error;
       debugLogger.general(
         "ERROR",
         "Error initializing session cache",
@@ -222,7 +202,6 @@ export async function initializeSessionCache(
       sessionCache.isAuthenticated = false;
       throw error;
     } finally {
-      initializationState.inProgress = false;
       // Clear the promise reference to allow retry on failure
       initPromise = null;
     }
