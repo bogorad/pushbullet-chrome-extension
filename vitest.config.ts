@@ -7,7 +7,7 @@ export default defineConfig({
     setupFiles: ['./tests/setup.ts'],
     
     // Test environment
-    environment: 'node',
+    environment: 'jsdom',
     
     // Global test timeout
     testTimeout: 10000,

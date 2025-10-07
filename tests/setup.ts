@@ -3,7 +3,7 @@
  * This file runs before all tests to set up the global chrome object
  */
 
-import { vi } from 'vitest';
+import { vi, beforeEach } from 'vitest';
 
 // Create a comprehensive Chrome API mock
 const createChromeMock = () => {
@@ -15,6 +15,7 @@ const createChromeMock = () => {
 
   return {
     runtime: {
+      sendMessage: vi.fn(),
       onMessage: {
         addListener: vi.fn((callback: any) => listeners.onMessage.push(callback)),
         removeListener: vi.fn((callback: any) => {
@@ -48,7 +49,9 @@ const createChromeMock = () => {
         callListeners: (...args: any[]) => listeners.onStartup.forEach(cb => cb(...args)),
         clearListeners: () => { listeners.onStartup.length = 0; }
       },
-      lastError: undefined as { message: string } | undefined
+      lastError: undefined as { message: string } | undefined,
+      openOptionsPage: vi.fn(),
+      getURL: vi.fn()
     },
     storage: {
       sync: {
