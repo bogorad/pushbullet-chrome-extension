@@ -1,184 +1,192 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- SECURITY FIX (H-01): Content Security Policy -->
-  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'none';">
-  <title>Pushbullet Debug Dashboard</title>
-  <link rel="stylesheet" href="css/debug-dashboard.css">
-</head>
-<body>
-  <div class="dashboard-container">
-    <header class="dashboard-header">
-      <h1>🔧 Pushbullet Debug Dashboard</h1>
-      <div class="header-controls">
-        <button id="refresh-btn" class="btn btn-primary">🔄 Refresh</button>
-        <button id="export-json-btn" class="btn btn-secondary">📥 Export JSON</button>
-        <button id="export-text-btn" class="btn btn-secondary">📄 Export Text</button>
-        <button id="clear-logs-btn" class="btn btn-danger">🗑️ Clear All Logs</button>
-        <label style="margin-left: 8px; white-space: nowrap;">
-          <input type="checkbox" id="auto-refresh-toggle" checked>
-          Auto-refresh: Enabled (every 2s)
-        </label>
-        <button id="close-btn" class="btn btn-danger">✖ Close</button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- SECURITY FIX (H-01): Content Security Policy -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="script-src 'self'; object-src 'none'; base-uri 'none';"
+    />
+    <title>Pushbullet Debug Dashboard</title>
+    <link rel="stylesheet" href="css/debug-dashboard.css" />
+  </head>
+  <body>
+    <div class="dashboard-container">
+      <header class="dashboard-header">
+        <h1>🔧 Pushbullet Debug Dashboard</h1>
+        <div class="header-controls">
+          <button id="refresh-btn" class="btn btn-primary">🔄 Refresh</button>
+          <button id="export-json-btn" class="btn btn-secondary">
+            📥 Export JSON
+          </button>
+          <button id="export-text-btn" class="btn btn-secondary">
+            📄 Export Text
+          </button>
+          <button id="clear-logs-btn" class="btn btn-danger">
+            🗑️ Clear All Logs
+          </button>
+          <label style="margin-left: 8px; white-space: nowrap">
+            <input type="checkbox" id="auto-refresh-toggle" checked />
+            Auto-refresh: Enabled (every 2s)
+          </label>
+          <button id="close-btn" class="btn btn-danger">✖ Close</button>
+        </div>
+      </header>
+
+      <div class="dashboard-content">
+        <!-- Summary Cards -->
+        <section class="summary-section">
+          <div class="summary-card">
+            <h3>Debug Status</h3>
+            <div id="debug-status" class="status-indicator">
+              <label class="debug-toggle-switch">
+                <input type="checkbox" id="debug-toggle" />
+                <span class="debug-toggle-slider"></span>
+              </label>
+              <span class="status-text" id="debug-status-text">Disabled</span>
+            </div>
+          </div>
+          <div class="summary-card">
+            <h3>Total Log Messages</h3>
+            <div id="total-logs" class="metric-value">-</div>
+          </div>
+          <div class="summary-card">
+            <h3>Errors (24h)</h3>
+            <div id="error-count" class="metric-value error">-</div>
+          </div>
+          <div class="summary-card">
+            <h3>State Machine</h3>
+            <div id="websocket-status" class="metric-value">-</div>
+          </div>
+        </section>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="logs">📋 Logs</button>
+          <button class="tab-btn" data-tab="performance">⚡ Performance</button>
+          <button class="tab-btn" data-tab="errors">❌ Errors</button>
+          <button class="tab-btn" data-tab="config">⚙️ Configuration</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+          <!-- Logs Tab -->
+          <div id="logs-tab" class="tab-pane active">
+            <div class="controls">
+              <label>
+                Filter by category:
+                <select id="log-category-filter">
+                  <option value="">All Categories</option>
+                  <option value="WEBSOCKET">WebSocket</option>
+                  <option value="NOTIFICATIONS">Notifications</option>
+                  <option value="API">API</option>
+                  <option value="STORAGE">Storage</option>
+                  <option value="GENERAL">General</option>
+                  <option value="PERFORMANCE">Performance</option>
+                  <option value="ERROR">Error</option>
+                </select>
+              </label>
+              <label>
+                Filter by level:
+                <select id="log-level-filter">
+                  <option value="">All Levels</option>
+                  <option value="DEBUG">Debug</option>
+                  <option value="INFO">Info</option>
+                  <option value="WARN">Warn</option>
+                  <option value="ERROR">Error</option>
+                </select>
+              </label>
+              <label>
+                Show last:
+                <select id="log-count-select">
+                  <option value="50">50 logs</option>
+                  <option value="100" selected>100 logs</option>
+                  <option value="200">200 logs</option>
+                  <option value="500">500 logs</option>
+                </select>
+              </label>
+            </div>
+            <div id="logs-container" class="logs-container">
+              <p class="loading">Loading logs...</p>
+            </div>
+          </div>
+
+          <!-- Performance Tab -->
+          <div id="performance-tab" class="tab-pane">
+            <div class="metrics-grid">
+              <div class="metric-card">
+                <h4>WebSocket Metrics</h4>
+                <div id="websocket-metrics" class="metric-details">
+                  <p class="loading">Loading...</p>
+                </div>
+              </div>
+              <div class="metric-card">
+                <h4>Connection Quality</h4>
+                <div id="quality-metrics" class="metric-details">
+                  <p class="loading">Loading...</p>
+                </div>
+              </div>
+              <div class="metric-card">
+                <h4>Notification Metrics</h4>
+                <div id="notification-metrics" class="metric-details">
+                  <p class="loading">Loading...</p>
+                </div>
+              </div>
+              <div class="metric-card">
+                <h4>Initialization Stats</h4>
+                <div id="initialization-stats" class="metric-details">
+                  <p class="loading">Loading...</p>
+                </div>
+              </div>
+              <div class="metric-card">
+                <h4>🤬 Fuck Google (MV3 Lifecycle)</h4>
+                <div id="mv3-lifecycle-metrics" class="metric-details">
+                  <p class="loading">Loading...</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Errors Tab -->
+          <div id="errors-tab" class="tab-pane">
+            <div class="error-summary">
+              <h4>Error Summary</h4>
+              <div id="error-summary" class="metric-details">
+                <p class="loading">Loading...</p>
+              </div>
+            </div>
+            <div class="error-list">
+              <h4>Recent Critical Errors</h4>
+              <div id="critical-errors" class="error-container">
+                <p class="loading">Loading...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Configuration Tab -->
+          <div id="config-tab" class="tab-pane">
+            <div class="config-section">
+              <h4>Debug Configuration</h4>
+              <div id="debug-config" class="config-details">
+                <p class="loading">Loading...</p>
+              </div>
+            </div>
+            <div class="config-section">
+              <h4>System Information</h4>
+              <div id="system-info" class="config-details">
+                <p class="loading">Loading...</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </header>
 
-    <div class="dashboard-content">
-      <!-- Summary Cards -->
-      <section class="summary-section">
-        <div class="summary-card">
-          <h3>Debug Status</h3>
-          <div id="debug-status" class="status-indicator">
-            <label class="debug-toggle-switch">
-              <input type="checkbox" id="debug-toggle">
-              <span class="debug-toggle-slider"></span>
-            </label>
-            <span class="status-text" id="debug-status-text">Disabled</span>
-          </div>
-        </div>
-        <div class="summary-card">
-          <h3>Total Logs</h3>
-          <div id="total-logs" class="metric-value">-</div>
-        </div>
-        <div class="summary-card">
-          <h3>Errors (24h)</h3>
-          <div id="error-count" class="metric-value error">-</div>
-        </div>
-        <div class="summary-card">
-          <h3>Connection Status</h3>
-          <div id="websocket-status" class="metric-value">-</div>
-        </div>
-      </section>
-
-      <!-- Tabs -->
-      <div class="tabs">
-        <button class="tab-btn active" data-tab="logs">📋 Logs</button>
-        <button class="tab-btn" data-tab="performance">⚡ Performance</button>
-        <button class="tab-btn" data-tab="errors">❌ Errors</button>
-        <button class="tab-btn" data-tab="config">⚙️ Configuration</button>
-      </div>
-
-      <!-- Tab Content -->
-      <div class="tab-content">
-        <!-- Logs Tab -->
-        <div id="logs-tab" class="tab-pane active">
-          <div class="controls">
-            <label>
-              Filter by category:
-              <select id="log-category-filter">
-                <option value="">All Categories</option>
-                <option value="WEBSOCKET">WebSocket</option>
-                <option value="NOTIFICATIONS">Notifications</option>
-                <option value="API">API</option>
-                <option value="STORAGE">Storage</option>
-                <option value="GENERAL">General</option>
-                <option value="PERFORMANCE">Performance</option>
-                <option value="ERROR">Error</option>
-              </select>
-            </label>
-            <label>
-              Filter by level:
-              <select id="log-level-filter">
-                <option value="">All Levels</option>
-                <option value="DEBUG">Debug</option>
-                <option value="INFO">Info</option>
-                <option value="WARN">Warn</option>
-                <option value="ERROR">Error</option>
-              </select>
-            </label>
-            <label>
-              Show last:
-              <select id="log-count-select">
-                <option value="50">50 logs</option>
-                <option value="100" selected>100 logs</option>
-                <option value="200">200 logs</option>
-                <option value="500">500 logs</option>
-              </select>
-            </label>
-          </div>
-          <div id="logs-container" class="logs-container">
-            <p class="loading">Loading logs...</p>
-          </div>
-        </div>
-
-        <!-- Performance Tab -->
-        <div id="performance-tab" class="tab-pane">
-          <div class="metrics-grid">
-            <div class="metric-card">
-              <h4>WebSocket Metrics</h4>
-              <div id="websocket-metrics" class="metric-details">
-                <p class="loading">Loading...</p>
-              </div>
-            </div>
-            <div class="metric-card">
-              <h4>Connection Quality</h4>
-              <div id="quality-metrics" class="metric-details">
-                <p class="loading">Loading...</p>
-              </div>
-            </div>
-            <div class="metric-card">
-              <h4>Notification Metrics</h4>
-              <div id="notification-metrics" class="metric-details">
-                <p class="loading">Loading...</p>
-              </div>
-            </div>
-            <div class="metric-card">
-              <h4>Initialization Stats</h4>
-              <div id="initialization-stats" class="metric-details">
-                <p class="loading">Loading...</p>
-              </div>
-            </div>
-            <div class="metric-card">
-              <h4>🤬 Fuck Google (MV3 Lifecycle)</h4>
-              <div id="mv3-lifecycle-metrics" class="metric-details">
-                <p class="loading">Loading...</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Errors Tab -->
-        <div id="errors-tab" class="tab-pane">
-          <div class="error-summary">
-            <h4>Error Summary</h4>
-            <div id="error-summary" class="metric-details">
-              <p class="loading">Loading...</p>
-            </div>
-          </div>
-          <div class="error-list">
-            <h4>Recent Critical Errors</h4>
-            <div id="critical-errors" class="error-container">
-              <p class="loading">Loading...</p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Configuration Tab -->
-        <div id="config-tab" class="tab-pane">
-          <div class="config-section">
-            <h4>Debug Configuration</h4>
-            <div id="debug-config" class="config-details">
-              <p class="loading">Loading...</p>
-            </div>
-          </div>
-          <div class="config-section">
-            <h4>System Information</h4>
-            <div id="system-info" class="config-details">
-              <p class="loading">Loading...</p>
-            </div>
-          </div>
-        </div>
-      </div>
+      <footer class="dashboard-footer">
+        <p>Last updated: <span id="last-updated">Never</span></p>
+      </footer>
     </div>
 
-    <footer class="dashboard-footer">
-      <p>Last updated: <span id="last-updated">Never</span></p>
-    </footer>
-  </div>
-
-  <script src="dist/debug-dashboard.js"></script>
-</body>
+    <script src="dist/debug-dashboard.js"></script>
+  </body>
 </html>
-
