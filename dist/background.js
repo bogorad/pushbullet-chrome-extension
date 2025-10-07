@@ -1231,6 +1231,7 @@
   var PUSHES_URL = `${API_BASE_URL}/pushes`;
   var DEVICES_URL = `${API_BASE_URL}/devices`;
   var USER_INFO_URL = `${API_BASE_URL}/users/me`;
+  var registrationPromise = null;
   function authHeaders(apiKey2) {
     return { "Access-Token": apiKey2 };
   }
@@ -1349,106 +1350,99 @@
     }
   }
   async function registerDevice(apiKey2, deviceIden2, deviceNickname2) {
-    debugLogger.general("INFO", "Starting device registration process", {
-      hasApiKey: !!apiKey2,
-      currentDeviceIden: deviceIden2,
-      deviceNickname: deviceNickname2,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    const deviceRegistrationInProgress = await storageRepository.getDeviceRegistrationInProgress();
-    if (deviceRegistrationInProgress) {
-      debugLogger.general("INFO", "Device registration already in progress - waiting for completion");
-      return new Promise((resolve) => {
-        const listener = (changes) => {
-          if (changes.deviceRegistrationInProgress && !changes.deviceRegistrationInProgress.newValue) {
-            chrome.storage.onChanged.removeListener(listener);
-            debugLogger.general("INFO", "Device registration completed by another process");
-            resolve({ deviceIden: deviceIden2 || "", needsUpdate: false });
-          }
-        };
-        chrome.storage.onChanged.addListener(listener);
+    if (registrationPromise) {
+      debugLogger.general("INFO", "Device registration already in progress, reusing promise", {
+        source: "registerDevice",
+        existingRegistration: true
       });
+      return registrationPromise;
     }
-    try {
-      await storageRepository.setDeviceRegistrationInProgress(true);
-      const existingDeviceIden = await storageRepository.getDeviceIden();
-      if (existingDeviceIden) {
-        debugLogger.general("INFO", "Device already registered", { deviceIden: existingDeviceIden, deviceNickname: deviceNickname2 });
-        try {
-          await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
-          await storageRepository.setDeviceRegistrationInProgress(false);
-          return { deviceIden: existingDeviceIden, needsUpdate: false };
-        } catch (error) {
-          debugLogger.general("WARN", "Failed to update existing device, will re-register", {
-            error: error.message,
-            deviceIden: existingDeviceIden
-          });
-          await storageRepository.setDeviceIden(null);
+    registrationPromise = (async () => {
+      try {
+        debugLogger.general("INFO", "Starting device registration process", {
+          hasApiKey: !!apiKey2,
+          currentDeviceIden: deviceIden2,
+          deviceNickname: deviceNickname2,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        const existingDeviceIden = await storageRepository.getDeviceIden();
+        if (existingDeviceIden) {
+          debugLogger.general("INFO", "Device already registered", { deviceIden: existingDeviceIden, deviceNickname: deviceNickname2 });
+          try {
+            await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
+            return { deviceIden: existingDeviceIden, needsUpdate: false };
+          } catch (error) {
+            debugLogger.general("WARN", "Failed to update existing device, will re-register", {
+              error: error.message,
+              deviceIden: existingDeviceIden
+            });
+            await storageRepository.setDeviceIden(null);
+          }
         }
-      }
-      debugLogger.general("INFO", "Registering new device with Pushbullet API", { deviceNickname: deviceNickname2, url: DEVICES_URL });
-      const registrationData = {
-        nickname: deviceNickname2,
-        model: "Chrome",
-        manufacturer: "Google",
-        push_token: "",
-        app_version: 8623,
-        icon: "browser",
-        has_sms: false,
-        type: "chrome"
-      };
-      debugLogger.api("INFO", "Sending device registration request", {
-        url: DEVICES_URL,
-        method: "POST",
-        deviceData: registrationData
-      });
-      const startTime = Date.now();
-      const response = await fetch(DEVICES_URL, {
-        method: "POST",
-        headers: {
-          ...authHeaders(apiKey2),
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(registrationData)
-      });
-      const duration = Date.now() - startTime;
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unknown error");
-        const error = new Error(`Failed to register device: ${response.status} ${response.statusText} - ${errorText}`);
-        debugLogger.api("ERROR", "Device registration failed", {
+        debugLogger.general("INFO", "Registering new device with Pushbullet API", { deviceNickname: deviceNickname2, url: DEVICES_URL });
+        const registrationData = {
+          nickname: deviceNickname2,
+          model: "Chrome",
+          manufacturer: "Google",
+          push_token: "",
+          app_version: 8623,
+          icon: "browser",
+          has_sms: false,
+          type: "chrome"
+        };
+        debugLogger.api("INFO", "Sending device registration request", {
+          url: DEVICES_URL,
+          method: "POST",
+          deviceData: registrationData
+        });
+        const startTime = Date.now();
+        const response = await fetch(DEVICES_URL, {
+          method: "POST",
+          headers: {
+            ...authHeaders(apiKey2),
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(registrationData)
+        });
+        const duration = Date.now() - startTime;
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "Unknown error");
+          const error = new Error(`Failed to register device: ${response.status} ${response.statusText} - ${errorText}`);
+          debugLogger.api("ERROR", "Device registration failed", {
+            url: DEVICES_URL,
+            status: response.status,
+            statusText: response.statusText,
+            duration: `${duration}ms`,
+            errorText
+          }, error);
+          throw error;
+        }
+        const device = await response.json();
+        const newDeviceIden = device.iden;
+        debugLogger.api("INFO", "Device registered successfully", {
           url: DEVICES_URL,
           status: response.status,
-          statusText: response.statusText,
           duration: `${duration}ms`,
-          errorText
-        }, error);
-        await storageRepository.setDeviceRegistrationInProgress(false);
+          deviceIden: newDeviceIden,
+          deviceNickname: device.nickname
+        });
+        await storageRepository.setDeviceIden(newDeviceIden);
+        debugLogger.general("INFO", "Device registration completed", {
+          deviceIden: newDeviceIden,
+          deviceNickname: device.nickname
+        });
+        return { deviceIden: newDeviceIden, needsUpdate: false };
+      } catch (error) {
+        debugLogger.general("ERROR", "Error in registerDevice function", {
+          errorMessage: error.message,
+          errorStack: error.stack
+        });
         throw error;
+      } finally {
+        registrationPromise = null;
       }
-      const device = await response.json();
-      const newDeviceIden = device.iden;
-      debugLogger.api("INFO", "Device registered successfully", {
-        url: DEVICES_URL,
-        status: response.status,
-        duration: `${duration}ms`,
-        deviceIden: newDeviceIden,
-        deviceNickname: device.nickname
-      });
-      await storageRepository.setDeviceIden(newDeviceIden);
-      await storageRepository.setDeviceRegistrationInProgress(false);
-      debugLogger.general("INFO", "Device registration completed", {
-        deviceIden: newDeviceIden,
-        deviceNickname: device.nickname
-      });
-      return { deviceIden: newDeviceIden, needsUpdate: false };
-    } catch (error) {
-      await storageRepository.setDeviceRegistrationInProgress(false);
-      debugLogger.general("ERROR", "Error in registerDevice function", {
-        errorMessage: error.message,
-        errorStack: error.stack
-      });
-      throw error;
-    }
+    })();
+    return registrationPromise;
   }
   async function updateDeviceNickname(apiKey2, deviceIden2, newNickname) {
     debugLogger.general("INFO", "Updating device nickname", {
