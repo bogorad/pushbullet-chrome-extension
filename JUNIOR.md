@@ -15,10 +15,10 @@ A "redundant catch block" is a `try-catch` statement where the `catch` block eit
 
 When errors are silently swallowed, it can lead to:
 
-*   **Hidden Failures:** You won't know when something goes wrong, making debugging very difficult.
-*   **Incorrect Application State:** The application might behave unexpectedly because an error prevented a part of the code from executing correctly.
-*   **Poor User Experience:** Users might encounter issues without any feedback or explanation.
-*   **Future Bugs:** A small, ignored error today could become a major problem as the codebase evolves.
+- **Hidden Failures:** You won't know when something goes wrong, making debugging very difficult.
+- **Incorrect Application State:** The application might behave unexpectedly because an error prevented a part of the code from executing correctly.
+- **Poor User Experience:** Users might encounter issues without any feedback or explanation.
+- **Future Bugs:** A small, ignored error today could become a major problem as the codebase evolves.
 
 ## Your Task: Improve Error Handling
 
@@ -47,29 +47,34 @@ try {
   doSomething();
 } catch (error) {
   // Log the error with relevant context
-  debugLogger.general('WARN', 'Failed to do something important', {
-    contextData: 'some value related to the operation',
-    errorMessage: (error as Error).message // Cast to Error to access message property
-  }, error as Error); // Pass the original error object for stack trace
+  debugLogger.general(
+    "WARN",
+    "Failed to do something important",
+    {
+      contextData: "some value related to the operation",
+      errorMessage: (error as Error).message, // Cast to Error to access message property
+    },
+    error as Error,
+  ); // Pass the original error object for stack trace
 }
 ```
 
 **Key Points:**
 
-*   Always include the `error` object in the `catch` block so you can access its `message` and `stack` properties.
-*   Use `debugLogger.general` (or a more specific category like `debugLogger.api`, `debugLogger.storage`, etc.) with an appropriate log level (`WARN` or `ERROR`).
-*   Provide a clear, descriptive message about what failed.
-*   Include relevant `data` in the log object that helps pinpoint the issue (e.g., IDs, input values, current state).
-*   Pass the original `error` object as the last argument to `debugLogger` to ensure the stack trace is captured.
+- Always include the `error` object in the `catch` block so you can access its `message` and `stack` properties.
+- Use `debugLogger.general` (or a more specific category like `debugLogger.api`, `debugLogger.storage`, etc.) with an appropriate log level (`WARN` or `ERROR`).
+- Provide a clear, descriptive message about what failed.
+- Include relevant `data` in the log object that helps pinpoint the issue (e.g., IDs, input values, current state).
+- Pass the original `error` object as the last argument to `debugLogger` to ensure the stack trace is captured.
 
 ### Strategy 2: Re-evaluate Criticality
 
 For each `catch` block you encounter, ask yourself:
 
-*   **Is this error truly ignorable?** What are the consequences if this error occurs?
-*   **Does it affect core functionality or user experience?**
-*   **Could it indicate a deeper problem that *should* be addressed?**
-*   **Is there any way to recover or provide user feedback?**
+- **Is this error truly ignorable?** What are the consequences if this error occurs?
+- **Does it affect core functionality or user experience?**
+- **Could it indicate a deeper problem that _should_ be addressed?**
+- **Is there any way to recover or provide user feedback?**
 
 If an error is truly non-critical and has no impact on functionality, then logging it as a `WARN` might be sufficient. However, if it affects the user or the application's state, more action is needed.
 
@@ -82,10 +87,14 @@ try {
 } catch (error) {
   // Re-evaluation: If the UI element is truly optional and its absence is expected sometimes,
   // then a WARN is appropriate. If its absence indicates a bug, it should be an ERROR.
-  debugLogger.general('WARN', 'Optional UI element not found, skipping update', {
-    elementId: 'my-optional-element',
-    errorMessage: (error as Error).message
-  });
+  debugLogger.general(
+    "WARN",
+    "Optional UI element not found, skipping update",
+    {
+      elementId: "my-optional-element",
+      errorMessage: (error as Error).message,
+    },
+  );
 }
 ```
 
@@ -103,12 +112,19 @@ try {
 } catch (error) {
   if (error instanceof SyntaxError) {
     // Specific handling for invalid JSON input
-    debugLogger.general('INFO', 'Invalid JSON input from user', { input: userInput });
-    showUserMessage('Please enter valid JSON.', 'error');
+    debugLogger.general("INFO", "Invalid JSON input from user", {
+      input: userInput,
+    });
+    showUserMessage("Please enter valid JSON.", "error");
   } else {
     // General handling for other unexpected errors
-    debugLogger.general('ERROR', 'Unexpected error during data processing', null, error as Error);
-    showUserMessage('An unexpected error occurred.', 'error');
+    debugLogger.general(
+      "ERROR",
+      "Unexpected error during data processing",
+      null,
+      error as Error,
+    );
+    showUserMessage("An unexpected error occurred.", "error");
   }
 }
 ```
@@ -130,7 +146,12 @@ async function fetchData(url: string): Promise<Data> {
     return await response.json();
   } catch (error) {
     // Log the error, but re-throw it because this function cannot fully recover
-    debugLogger.api('ERROR', 'Failed to fetch data from API', { url }, error as Error);
+    debugLogger.api(
+      "ERROR",
+      "Failed to fetch data from API",
+      { url },
+      error as Error,
+    );
     throw error; // Re-throw the error for the caller to handle
   }
 }
@@ -138,89 +159,29 @@ async function fetchData(url: string): Promise<Data> {
 // In a higher-level function:
 async function loadApplicationData(): Promise<void> {
   try {
-    const data = await fetchData('https://api.example.com/data');
+    const data = await fetchData("https://api.example.com/data");
     // Process data
   } catch (error) {
     // Here, we can decide to show a user-facing error or retry
-    debugLogger.general('CRITICAL', 'Application failed to load essential data', null, error as Error);
-    showUserMessage('Could not load application data. Please try again later.', 'error');
+    debugLogger.general(
+      "CRITICAL",
+      "Application failed to load essential data",
+      null,
+      error as Error,
+    );
+    showUserMessage(
+      "Could not load application data. Please try again later.",
+      "error",
+    );
   }
 }
 ```
 
 **Key Points:**
 
-*   `throw error;` will re-throw the original error, preserving its stack trace.
-*   This allows higher-level functions to decide how to handle critical errors (e.g., display a user-friendly message, trigger a retry mechanism, or transition to an error state).
+- `throw error;` will re-throw the original error, preserving its stack trace.
+- This allows higher-level functions to decide how to handle critical errors (e.g., display a user-friendly message, trigger a retry mechanism, or transition to an error state).
 
 ## Conclusion
 
 By applying these strategies, you will help make our codebase more robust, easier to debug, and more user-friendly. Always think critically about the impact of an error and choose the most appropriate handling strategy. If you are unsure, it's always better to log more information and propagate the error than to silently swallow it.
-
----
-
-## New Task: Refactor Badge Visuals
-
-### Objective
-Enhance the clarity and consistency of the extension's status indicators by removing symbolic icons from the badge text and introducing a distinct color for the `DEGRADED` state.
-
-### Rationale
-*   **Removing icons (`●`, `◐`, `○`)** from the badge text simplifies the visual feedback, relying solely on color and potentially a more descriptive text if needed.
-*   **Introducing a `cyan` color** for the `DEGRADED` state provides a clearer distinction between a temporary degraded service (polling mode) and a complete error/idle state (red). This helps users quickly understand the severity of the connection issue.
-
-### Instructions
-
-1.  **Locate `updateConnectionIcon` function:** This function is in `src/background/utils.ts`.
-
-2.  **Update `ConnectionStatus` Type:**
-    *   First, you will need to update the `ConnectionStatus` type definition to include `'degraded'`. This type is likely defined near the `updateConnectionIcon` function or in a `types` file.
-    *   *Pseudocode (Before):*
-        ```typescript
-        export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected';
-        ```
-    *   *Pseudocode (After):*
-        ```typescript
-        export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'degraded';
-        ```
-
-3.  **Remove Badge Icons:**
-    *   Modify the `badgeText` assignment within `updateConnectionIcon` to always set an empty string (`''`). If an empty string is not allowed by the Chrome API or causes issues, use a very minimal, non-iconic character (e.g., a single space `' '`).
-    *   *Pseudocode (Before):*
-        ```typescript
-        const badgeText = status === 'connected' ? '●' :
-                          status === 'connecting' ? '◐' :
-                            '○'; // or ''
-        ```
-    *   *Pseudocode (After):*
-        ```typescript
-        const badgeText = ''; // Or ' ' if an empty string causes issues
-        ```
-
-4.  **Introduce Cyan for `DEGRADED` State:**
-    *   Modify the `badgeColor` assignment within `updateConnectionIcon` to include a new condition for the `DEGRADED` state.
-    *   The `DEGRADED` state should map to a `cyan` color (e.g., `#00BCD4`).
-    *   The `ERROR` and `IDLE` states should remain `red`.
-    *   *Pseudocode (Before - simplified):*
-        ```typescript
-        const badgeColor = status === 'connected' ? '#4CAF50' :  // Green
-                          status === 'connecting' ? '#FFC107' :  // Yellow
-                            '#F44336';  // Red (for disconnected, idle, error)
-        ```
-    *   *Pseudocode (After):*
-        ```typescript
-        const badgeColor = status === 'connected' ? '#4CAF50' :  // Green
-                          status === 'connecting' ? '#FFC107' :  // Yellow
-                          status === 'degraded' ? '#00BCD4' :   // Cyan
-                            '#F44336';  // Red (for disconnected, idle, error)
-        ```
-
-5.  **Update `updateConnectionIcon` Call Sites:**
-    *   Review all places where `updateConnectionIcon` is called (e.g., in `src/background/index.ts`).
-    *   Ensure that when the state machine transitions to `DEGRADED`, `updateConnectionIcon('degraded')` is called.
-    *   *Pseudocode Example (in `src/background/index.ts` or `state-machine.ts`):*
-        ```typescript
-        // When state machine transitions to DEGRADED
-        updateConnectionIcon('degraded');
-        ```
-
-This task will help make the visual feedback more informative and consistent. Remember to test your changes thoroughly!

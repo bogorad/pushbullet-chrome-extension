@@ -24,7 +24,7 @@ let isSettingUpContextMenu = false;
 /**
  * Connection status for icon updates
  */
-export type ConnectionStatus = "connected" | "connecting" | "disconnected";
+export type ConnectionStatus = "connected" | "connecting" | "disconnected" | "degraded";
 
 /**
  * Sanitize text to prevent XSS attacks
@@ -125,8 +125,7 @@ export function updateExtensionTooltip(stateDescription: string): void {
 export function updateConnectionIcon(status: ConnectionStatus): void {
   try {
     // Set badge text
-    const badgeText =
-      status === "connected" ? "●" : status === "connecting" ? "◐" : "○";
+    const badgeText = " ";
 
     // Set badge color
     const badgeColor =
@@ -134,7 +133,9 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
         ? "#4CAF50" // Green
         : status === "connecting"
           ? "#FFC107" // Yellow
-          : "#F44336"; // Red
+          : status === "degraded"
+            ? "#00BCD4" // Cyan
+            : "#F44336"; // Red
 
     chrome.action.setBadgeText({ text: badgeText });
     chrome.action.setBadgeBackgroundColor({ color: badgeColor });
@@ -562,6 +563,8 @@ export function checkPollingMode(): void {
     // Start polling alarm
     chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
 
+    updateConnectionIcon("degraded");
+
     debugLogger.general("INFO", "Polling mode activated", {
       interval: "1 minute",
     });
@@ -579,6 +582,7 @@ export function stopPollingMode(): void {
     );
     setPollingMode(false);
     chrome.alarms.clear("pollingFallback");
+    updateConnectionIcon("connected");
   }
 }
 

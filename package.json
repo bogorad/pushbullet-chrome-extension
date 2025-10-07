@@ -1,6 +1,6 @@
 {
   "name": "pushbullet-chrome-extension",
-  "version": "1.0.8",
+  "version": "1.0.10",
   "description": "Unofficial Manifest V3 compatible Pushbullet client for Chrome",
   "type": "module",
   "private": true,

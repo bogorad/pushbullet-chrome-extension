@@ -1936,8 +1936,8 @@
   }
   function updateConnectionIcon(status) {
     try {
-      const badgeText = status === "connected" ? "\u25CF" : status === "connecting" ? "\u25D0" : "\u25CB";
-      const badgeColor = status === "connected" ? "#4CAF50" : status === "connecting" ? "#FFC107" : "#F44336";
+      const badgeText = " ";
+      const badgeColor = status === "connected" ? "#4CAF50" : status === "connecting" ? "#FFC107" : status === "degraded" ? "#00BCD4" : "#F44336";
       chrome.action.setBadgeText({ text: badgeText });
       chrome.action.setBadgeBackgroundColor({ color: badgeColor });
       debugLogger.general("DEBUG", "Updated connection status badge", {
@@ -2252,6 +2252,7 @@
       );
       setPollingMode(true);
       chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
+      updateConnectionIcon("degraded");
       debugLogger.general("INFO", "Polling mode activated", {
         interval: "1 minute"
       });
@@ -2265,6 +2266,7 @@
       );
       setPollingMode(false);
       chrome.alarms.clear("pollingFallback");
+      updateConnectionIcon("connected");
     }
   }
   async function performPollingFetch() {
