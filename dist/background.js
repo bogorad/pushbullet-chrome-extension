@@ -756,11 +756,12 @@
   var globalEventBus = new EventBus();
 
   // src/app/ws/client.ts
-  var WebSocketClient = class {
+  var WebSocketClient = class _WebSocketClient {
     constructor(websocketUrl, getApiKey2) {
       this.websocketUrl = websocketUrl;
       this.getApiKey = getApiKey2;
     }
+    static PING_TIMEOUT = 1e4;
     socket = null;
     reconnectAttempts = 0;
     reconnectTimeout = null;
@@ -1048,13 +1049,22 @@
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
         this.pongTimeout = setTimeout(() => {
-          debugLogger.websocket("WARN", "Pong not received in 30 seconds. Assuming connection is dead.");
+          debugLogger.websocket(
+            "WARN",
+            "Pong not received in 30 seconds. Assuming connection is dead."
+          );
+          globalEventBus.emit("websocket:disconnected");
           this.socket?.close();
-        }, 3e4);
+        }, _WebSocketClient.PING_TIMEOUT);
       } catch (error) {
-        debugLogger.websocket("ERROR", "Failed to send ping", {
-          timestamp: (/* @__PURE__ */ new Date()).toISOString()
-        }, error);
+        debugLogger.websocket(
+          "ERROR",
+          "Failed to send ping",
+          {
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          },
+          error
+        );
       }
     }
   };
@@ -1518,36 +1528,6 @@
         null,
         error
       );
-    }
-  }
-  async function loadSessionCache() {
-    try {
-      const db = await openDb();
-      const transaction = db.transaction(STORE_NAME, "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(CACHE_KEY);
-      return new Promise((resolve) => {
-        request.onsuccess = () => {
-          debugLogger.storage("DEBUG", "Session cache loaded from IndexedDB", {
-            found: !!request.result
-          });
-          resolve(request.result || null);
-        };
-        request.onerror = () => {
-          debugLogger.storage("ERROR", "Failed to load session from IndexedDB", {
-            error: request.error
-          });
-          resolve(null);
-        };
-      });
-    } catch (error) {
-      debugLogger.storage(
-        "ERROR",
-        "Failed to open IndexedDB for loading",
-        null,
-        error
-      );
-      return null;
     }
   }
   async function clearSessionCache() {
@@ -2383,6 +2363,7 @@
     });
     try {
       const pushes = await fetchRecentPushes(apiKey2);
+      performanceMonitor.recordHealthCheckSuccess();
       const latestPush = pushes[0];
       if (latestPush && sessionCache.recentPushes[0]?.iden !== latestPush.iden) {
         debugLogger.general("INFO", "New push detected via polling", {
@@ -2398,6 +2379,7 @@
       }
     } catch (error) {
       debugLogger.general("ERROR", "Polling fetch failed", null, error);
+      performanceMonitor.recordHealthCheckFailure();
     }
   }
   function performWebSocketHealthCheck(wsClient, connectFn) {
@@ -2595,6 +2577,7 @@
     ServiceWorkerState2["INITIALIZING"] = "initializing";
     ServiceWorkerState2["READY"] = "ready";
     ServiceWorkerState2["DEGRADED"] = "degraded";
+    ServiceWorkerState2["RECONNECTING"] = "reconnecting";
     ServiceWorkerState2["ERROR"] = "error";
     return ServiceWorkerState2;
   })(ServiceWorkerState || {});
@@ -2632,6 +2615,23 @@
       } catch (error) {
         debugLogger.storage("ERROR", "[StateMachine] Failed to hydrate state, defaulting to IDLE", null, error);
         instance.currentState = "idle" /* IDLE */;
+      }
+      updateExtensionTooltip(instance.getStateDescription());
+      switch (instance.currentState) {
+        case "ready" /* READY */:
+          updateConnectionIcon("connected");
+          break;
+        case "initializing" /* INITIALIZING */:
+        case "reconnecting" /* RECONNECTING */:
+          updateConnectionIcon("connecting");
+          break;
+        case "degraded" /* DEGRADED */:
+          updateConnectionIcon("degraded");
+          break;
+        case "error" /* ERROR */:
+        case "idle" /* IDLE */:
+          updateConnectionIcon("disconnected");
+          break;
       }
       return instance;
     }
@@ -2729,6 +2729,20 @@
           if (event === "WS_PERMANENT_ERROR") {
             return "error" /* ERROR */;
           }
+          if (event === "ATTEMPT_RECONNECT") {
+            return "reconnecting" /* RECONNECTING */;
+          }
+          break;
+        case "reconnecting" /* RECONNECTING */:
+          if (event === "WS_CONNECTED") {
+            return "ready" /* READY */;
+          }
+          if (event === "WS_DISCONNECTED") {
+            return "degraded" /* DEGRADED */;
+          }
+          if (event === "WS_PERMANENT_ERROR") {
+            return "error" /* ERROR */;
+          }
           break;
         case "error" /* ERROR */:
           if (event === "API_KEY_SET") {
@@ -2778,12 +2792,18 @@
         case "degraded" /* DEGRADED */:
           debugLogger.general("WARN", "Entering DEGRADED state. Starting polling fallback.");
           updateConnectionIcon("degraded");
-          chrome.alarms.create("pollingFallback", { periodInMinutes: 1 });
           if (this.callbacks.onStartPolling) {
             this.callbacks.onStartPolling();
           }
           break;
+        case "reconnecting" /* RECONNECTING */:
+          updateConnectionIcon("connecting");
+          if (this.callbacks.onConnectWebSocket) {
+            this.callbacks.onConnectWebSocket();
+          }
+          break;
         case "error" /* ERROR */:
+          updateConnectionIcon("disconnected");
           if (this.callbacks.onShowError) {
             this.callbacks.onShowError("Service worker encountered an error");
           }
@@ -2799,7 +2819,6 @@
       debugLogger.general("DEBUG", `[StateMachine] Exiting state`, { state, nextState });
       if (state === "degraded" /* DEGRADED */) {
         debugLogger.general("INFO", "Exiting DEGRADED state. Stopping polling fallback.");
-        chrome.alarms.clear("pollingFallback");
         if (this.callbacks.onStopPolling) {
           this.callbacks.onStopPolling();
         }
@@ -2818,6 +2837,8 @@
           return "Ready - Connected via WebSocket";
         case "degraded" /* DEGRADED */:
           return "Degraded - Using polling fallback";
+        case "reconnecting" /* RECONNECTING */:
+          return "Reconnecting - Attempting to restore real-time connection";
         case "error" /* ERROR */:
           return "Error - Unrecoverable error occurred";
         default:
@@ -2975,44 +2996,6 @@
       }
     );
   });
-  async function restoreVisualState() {
-    try {
-      const { lastKnownState, lastKnownStateDescription } = await chrome.storage.local.get([
-        "lastKnownState",
-        "lastKnownStateDescription"
-      ]);
-      if (lastKnownState) {
-        debugLogger.general("INFO", "Restoring visual state from storage", {
-          state: lastKnownState
-        });
-        if (lastKnownStateDescription) {
-          updateExtensionTooltip(lastKnownStateDescription);
-        }
-        switch (lastKnownState) {
-          case "ready" /* READY */:
-            updateConnectionIcon("connected");
-            break;
-          case "initializing" /* INITIALIZING */:
-            updateConnectionIcon("connecting");
-            break;
-          case "error" /* ERROR */:
-          case "degraded" /* DEGRADED */:
-          case "idle" /* IDLE */:
-            updateConnectionIcon("disconnected");
-            break;
-          default:
-            updateConnectionIcon("disconnected");
-        }
-      }
-    } catch (error) {
-      debugLogger.general(
-        "ERROR",
-        "Failed to restore visual state",
-        null,
-        error
-      );
-    }
-  }
   function connectWebSocket() {
     recoveryTimerStart = Date.now();
     if (websocketClient2) {
@@ -3184,7 +3167,6 @@
   chrome.runtime.onInstalled.addListener(async () => {
     const { restarts = 0 } = await chrome.storage.local.get("restarts");
     await chrome.storage.local.set({ restarts: restarts + 1 });
-    await restoreVisualState();
     debugLogger.general("INFO", "Pushbullet extension installed/updated", {
       reason: "onInstalled",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -3194,33 +3176,12 @@
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
     await stateMachineReady;
-    const cachedSession = await loadSessionCache();
-    if (cachedSession && cachedSession.isAuthenticated) {
-      debugLogger.general("INFO", "Restoring session from IndexedDB");
-      Object.assign(sessionCache, cachedSession);
-      const apiKey2 = await storageRepository.getApiKey();
-      if (apiKey2) {
-        setApiKey(apiKey2);
-      }
-      await stateMachine.transition("STARTUP", { hasApiKey: true });
-    } else {
-      debugLogger.general("INFO", "No valid session in IndexedDB, performing full initialization");
-      try {
-        const apiKey2 = await getApiKeyWithRetries();
-        if (apiKey2) {
-          setApiKey(apiKey2);
-        }
-        await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-      } catch (error) {
-        debugLogger.storage("ERROR", "Failed to read API key on initial startup", null, error);
-        await stateMachine.transition("STARTUP", { hasApiKey: false });
-      }
-    }
+    const apiKey2 = await getApiKeyWithRetries();
+    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
   });
   chrome.runtime.onStartup.addListener(async () => {
     const { restarts = 0 } = await chrome.storage.local.get("restarts");
     await chrome.storage.local.set({ restarts: restarts + 1 });
-    await restoreVisualState();
     debugLogger.general(
       "INFO",
       "Browser started - reinitializing Pushbullet extension",
@@ -3234,54 +3195,31 @@
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
     await stateMachineReady;
-    const cachedSession = await loadSessionCache();
-    if (cachedSession && cachedSession.isAuthenticated) {
-      debugLogger.general("INFO", "Restoring session from IndexedDB");
-      Object.assign(sessionCache, cachedSession);
-      const apiKey2 = await storageRepository.getApiKey();
-      if (apiKey2) {
-        setApiKey(apiKey2);
-      }
-      await stateMachine.transition("STARTUP", { hasApiKey: true });
-    } else {
-      debugLogger.general("INFO", "No valid session in IndexedDB, performing full initialization");
-      try {
-        const apiKey2 = await getApiKeyWithRetries();
-        if (apiKey2) {
-          setApiKey(apiKey2);
-        }
-        await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-      } catch (error) {
-        debugLogger.storage("ERROR", "Failed to read API key on initial startup", null, error);
-        await stateMachine.transition("STARTUP", { hasApiKey: false });
-      }
-    }
-  });
-  chrome.notifications.onClicked.addListener((notificationId) => {
-    debugLogger.notifications("INFO", "Notification clicked", { notificationId });
-    const pushData = notificationDataStore.get(notificationId);
-    if (pushData) {
-      chrome.windows.create({
-        url: `notification-detail.html?id=${encodeURIComponent(notificationId)}`,
-        type: "popup",
-        width: 600,
-        height: 500,
-        focused: true
-      });
-    }
-    chrome.notifications.clear(notificationId);
+    const apiKey2 = await getApiKeyWithRetries();
+    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
   });
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === "logFlush") {
-      debugLogger.flush().then(() => {
-        console.log("[Logger] Log buffer flushed to persistent storage.");
-      });
-    } else if (alarm.name === "websocketHealthCheck") {
+      await debugLogger.flush();
+      return;
+    }
+    await stateMachineReady;
+    if (alarm.name === "websocketHealthCheck") {
       await ensureConfigLoaded();
-      performWebSocketHealthCheck(websocketClient2, connectWebSocket);
-      chrome.storage.local.set({ lastSeenAlive: Date.now() });
-    } else if (alarm.name === "pollingFallback") {
-      performPollingFetch();
+      if (stateMachine.isInState("degraded" /* DEGRADED */)) {
+        await performPollingFetch();
+        const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
+        const FAILURE_THRESHOLD = 5;
+        if (failures >= FAILURE_THRESHOLD) {
+          debugLogger.general("ERROR", `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`);
+          await stateMachine.transition("WS_PERMANENT_ERROR");
+        } else {
+          debugLogger.general("INFO", "Health check found us in DEGRADED state. Attempting to reconnect.");
+          await stateMachine.transition("ATTEMPT_RECONNECT");
+        }
+      } else {
+        performWebSocketHealthCheck(websocketClient2, connectWebSocket);
+      }
     }
   });
   chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -3398,7 +3336,9 @@
         savePromise = savePromise.then(() => {
           setDeviceNickname(message.deviceNickname);
           sessionCache.deviceNickname = message.deviceNickname;
-          return storageRepository.setDeviceNickname(message.deviceNickname);
+          return storageRepository.setDeviceNickname(
+            message.deviceNickname
+          );
         });
       }
       savePromise.then(() => stateMachineReady).then(() => {

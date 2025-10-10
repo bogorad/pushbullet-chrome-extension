@@ -49,12 +49,14 @@ import {
   pushLink,
   pushNote,
   updateConnectionIcon,
-  updateExtensionTooltip,
 } from "./utils";
 import { validatePrivilegedMessage } from "../lib/security/message-validation";
 import type { Push } from "../types/domain";
 import { isLinkPush } from "../types/domain";
-import { saveSessionCache, loadSessionCache, clearSessionCache } from "../infrastructure/storage/indexed-db";
+import {
+  saveSessionCache,
+  clearSessionCache,
+} from "../infrastructure/storage/indexed-db";
 
 // Load debug configuration
 debugConfigManager.loadConfig();
@@ -201,8 +203,6 @@ const stateMachineReady = ServiceWorkerStateMachine.create(
     },
   );
 });
-
-
 
 /**
  * Connect to WebSocket
@@ -446,11 +446,11 @@ function disconnectWebSocket(): void {
  * Extension installed/updated
  */
 chrome.runtime.onInstalled.addListener(async () => {
-   // MV3 LIFECYCLE TRACKING: Increment restart counter
-   const { restarts = 0 } = await chrome.storage.local.get("restarts");
-   await chrome.storage.local.set({ restarts: restarts + 1 });
+  // MV3 LIFECYCLE TRACKING: Increment restart counter
+  const { restarts = 0 } = await chrome.storage.local.get("restarts");
+  await chrome.storage.local.set({ restarts: restarts + 1 });
 
-   debugLogger.general("INFO", "Pushbullet extension installed/updated", {
+  debugLogger.general("INFO", "Pushbullet extension installed/updated", {
     reason: "onInstalled",
     timestamp: new Date().toISOString(),
   });
@@ -458,33 +458,33 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
   setTimeout(() => updateConnectionIcon("disconnected"), 100);
 
-   initTracker.recordInitialization("onInstalled");
-   setupContextMenu();
+  initTracker.recordInitialization("onInstalled");
+  setupContextMenu();
 
-   // Create periodic log flush alarm
-   chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+  // Create periodic log flush alarm
+  chrome.alarms.create("logFlush", { periodInMinutes: 1 });
 
-   // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
-   // This ensures the state machine has loaded its persisted state from storage
-   await stateMachineReady;
+  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
+  // This ensures the state machine has loaded its persisted state from storage
+  await stateMachineReady;
 
-   // Now that the machine is ready and has its state, just tell it
-   // that a startup event happened. It will decide what to do.
-   const apiKey = await getApiKeyWithRetries();
-   await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
- });
+  // Now that the machine is ready and has its state, just tell it
+  // that a startup event happened. It will decide what to do.
+  const apiKey = await getApiKeyWithRetries();
+  await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
+});
 
 /**
  * Browser startup
  */
 chrome.runtime.onStartup.addListener(async () => {
-   // MV3 LIFECYCLE TRACKING: Increment restart counter
-   const { restarts = 0 } = await chrome.storage.local.get("restarts");
-   await chrome.storage.local.set({ restarts: restarts + 1 });
+  // MV3 LIFECYCLE TRACKING: Increment restart counter
+  const { restarts = 0 } = await chrome.storage.local.get("restarts");
+  await chrome.storage.local.set({ restarts: restarts + 1 });
 
-   debugLogger.general(
-     "INFO",
-     "Browser started - reinitializing Pushbullet extension",
+  debugLogger.general(
+    "INFO",
+    "Browser started - reinitializing Pushbullet extension",
     {
       reason: "onStartup",
       timestamp: new Date().toISOString(),
@@ -494,21 +494,21 @@ chrome.runtime.onStartup.addListener(async () => {
   // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
   setTimeout(() => updateConnectionIcon("disconnected"), 100);
 
-   initTracker.recordInitialization("onStartup");
-   setupContextMenu();
+  initTracker.recordInitialization("onStartup");
+  setupContextMenu();
 
-   // Create periodic log flush alarm
-   chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+  // Create periodic log flush alarm
+  chrome.alarms.create("logFlush", { periodInMinutes: 1 });
 
-   // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
-   // This ensures the state machine has loaded its persisted state from storage
-   await stateMachineReady;
+  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
+  // This ensures the state machine has loaded its persisted state from storage
+  await stateMachineReady;
 
-   // Now that the machine is ready and has its state, just tell it
-   // that a startup event happened. It will decide what to do.
-   const apiKey = await getApiKeyWithRetries();
-   await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
- });
+  // Now that the machine is ready and has its state, just tell it
+  // that a startup event happened. It will decide what to do.
+  const apiKey = await getApiKeyWithRetries();
+  await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
+});
 
 /**
  * Alarm listener
@@ -519,26 +519,38 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
 
+  // Ensure state machine is ready
+  await stateMachineReady;
+
   // Handle our two main periodic alarms.
   if (alarm.name === "websocketHealthCheck") {
     await ensureConfigLoaded();
-    performWebSocketHealthCheck(websocketClient, connectWebSocket);
-  }
+    // Check the current state first.
+    if (stateMachine.isInState(ServiceWorkerState.DEGRADED)) {
+      // Perform polling as fallback
+      await performPollingFetch();
 
-  if (alarm.name === "pollingFallback") {
-    performPollingFetch();
-  }
+      // Check for escalation to ERROR state
+      const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
+      const FAILURE_THRESHOLD = 5; // Escalate after 5 consecutive failures (approx. 5 minutes)
 
-  // After any check, evaluate if we need to escalate to an ERROR state.
-  if (stateMachine.isInState(ServiceWorkerState.DEGRADED)) {
-    const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
-    const FAILURE_THRESHOLD = 5; // Escalate after 5 consecutive failures (approx. 5 minutes)
-
-    if (failures >= FAILURE_THRESHOLD) {
-      debugLogger.general("ERROR", `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`);
-      await stateMachine.transition('WS_PERMANENT_ERROR');
+      if (failures >= FAILURE_THRESHOLD) {
+        // If we've failed too many times, escalate to ERROR and STOP.
+        debugLogger.general("ERROR", `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`);
+        await stateMachine.transition("WS_PERMANENT_ERROR");
+      } else {
+        // Only if we are NOT escalating to error, do we try to reconnect.
+        debugLogger.general("INFO", "Health check found us in DEGRADED state. Attempting to reconnect.");
+        // Tell the state machine to start the reconnect process.
+        await stateMachine.transition("ATTEMPT_RECONNECT");
+      }
+    } else {
+      // If we are not in DEGRADED, do the normal health check.
+      performWebSocketHealthCheck(websocketClient, connectWebSocket);
     }
   }
+
+
 });
 
 /**
@@ -691,7 +703,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       savePromise = savePromise.then(() => {
         setDeviceNickname(message.deviceNickname);
         sessionCache.deviceNickname = message.deviceNickname as string;
-        return storageRepository.setDeviceNickname(message.deviceNickname as string);
+        return storageRepository.setDeviceNickname(
+          message.deviceNickname as string,
+        );
       });
     }
 

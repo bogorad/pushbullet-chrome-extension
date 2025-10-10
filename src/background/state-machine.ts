@@ -28,6 +28,7 @@ export enum ServiceWorkerState {
   INITIALIZING = 'initializing', // API key present, fetching session data
   READY = 'ready',               // Authenticated, WebSocket connected
   DEGRADED = 'degraded',         // Authenticated, using polling fallback
+  RECONNECTING = 'reconnecting', // Attempting to restore real-time connection
   ERROR = 'error',               // Permanent, unrecoverable error
 }
 
@@ -44,6 +45,7 @@ export type ServiceWorkerEvent =
   | 'WS_CONNECTED'       // WebSocket connected successfully
   | 'WS_DISCONNECTED'    // WebSocket disconnected (transient error)
   | 'WS_PERMANENT_ERROR' // WebSocket disconnected (permanent error)
+  | 'ATTEMPT_RECONNECT'  // Health check triggered reconnect attempt
   | 'LOGOUT';            // User logged out
 
 /**
@@ -120,6 +122,7 @@ export class ServiceWorkerStateMachine {
       updateConnectionIcon("connected");
       break;
     case ServiceWorkerState.INITIALIZING:
+    case ServiceWorkerState.RECONNECTING:
       updateConnectionIcon("connecting");
       break;
     case ServiceWorkerState.DEGRADED:
@@ -255,6 +258,24 @@ export class ServiceWorkerStateMachine {
       if (event === 'WS_PERMANENT_ERROR') {
         return ServiceWorkerState.ERROR;
       }
+      if (event === 'ATTEMPT_RECONNECT') {
+        return ServiceWorkerState.RECONNECTING;
+      }
+      break;
+
+    case ServiceWorkerState.RECONNECTING:
+      // Rule 1: If connection succeeds, go to READY (green).
+      if (event === 'WS_CONNECTED') {
+        return ServiceWorkerState.READY;
+      }
+      // Rule 2: If connection fails, go back to DEGRADED (cyan) to wait for the next attempt.
+      if (event === 'WS_DISCONNECTED') {
+        return ServiceWorkerState.DEGRADED;
+      }
+      // Rule 3: If it's a permanent error, go to ERROR (red).
+      if (event === 'WS_PERMANENT_ERROR') {
+        return ServiceWorkerState.ERROR;
+      }
       break;
 
     case ServiceWorkerState.ERROR:
@@ -327,14 +348,24 @@ export class ServiceWorkerStateMachine {
       debugLogger.general('WARN', 'Entering DEGRADED state. Starting polling fallback.');
       // Directly update the icon to reflect the new state
       updateConnectionIcon('degraded');
-      chrome.alarms.create('pollingFallback', { periodInMinutes: 1 });
       // Call the callback for consistency
       if (this.callbacks.onStartPolling) {
         this.callbacks.onStartPolling();
       }
       break;
 
+    case ServiceWorkerState.RECONNECTING:
+      // Update icon to yellow (connecting)
+      updateConnectionIcon('connecting');
+      // Now, actually start the connection attempt
+      if (this.callbacks.onConnectWebSocket) {
+        this.callbacks.onConnectWebSocket();
+      }
+      break;
+
     case ServiceWorkerState.ERROR:
+      // Update icon to red (disconnected)
+      updateConnectionIcon('disconnected');
       // Show error notification
       if (this.callbacks.onShowError) {
         this.callbacks.onShowError('Service worker encountered an error');
@@ -357,7 +388,6 @@ export class ServiceWorkerStateMachine {
     // When we EXIT the DEGRADED state, we must stop polling
     if (state === ServiceWorkerState.DEGRADED) {
       debugLogger.general('INFO', 'Exiting DEGRADED state. Stopping polling fallback.');
-      chrome.alarms.clear('pollingFallback');
       if (this.callbacks.onStopPolling) {
         this.callbacks.onStopPolling();
       }
@@ -377,6 +407,8 @@ export class ServiceWorkerStateMachine {
       return 'Ready - Connected via WebSocket';
     case ServiceWorkerState.DEGRADED:
       return 'Degraded - Using polling fallback';
+    case ServiceWorkerState.RECONNECTING:
+      return 'Reconnecting - Attempting to restore real-time connection';
     case ServiceWorkerState.ERROR:
       return 'Error - Unrecoverable error occurred';
     default:
