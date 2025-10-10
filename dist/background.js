@@ -854,8 +854,6 @@
             clearErrorBadge();
           } catch {
           }
-          chrome.alarms.clear("websocketReconnect", () => {
-          });
           if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = null;
@@ -987,19 +985,6 @@
             }
             return;
           }
-          this.reconnectAttempts++;
-          performanceMonitor.recordWebSocketReconnection();
-          debugLogger.websocket(
-            "INFO",
-            "Scheduling WebSocket reconnection (30s one-shot)",
-            {
-              attempt: this.reconnectAttempts,
-              nextAttemptAt: new Date(Date.now() + 3e4).toISOString()
-            }
-          );
-          chrome.alarms.create("websocketReconnect", {
-            when: Date.now() + 3e4
-          });
         };
       } catch (error) {
         debugLogger.websocket(
@@ -1063,9 +1048,9 @@
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         });
         this.pongTimeout = setTimeout(() => {
-          debugLogger.websocket("WARN", "Pong not received in 10 seconds. Assuming connection is dead.");
+          debugLogger.websocket("WARN", "Pong not received in 30 seconds. Assuming connection is dead.");
           this.socket?.close();
-        }, 1e4);
+        }, 3e4);
       } catch (error) {
         debugLogger.websocket("ERROR", "Failed to send ping", {
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -2415,13 +2400,15 @@
       debugLogger.general("ERROR", "Polling fetch failed", null, error);
     }
   }
-  function performWebSocketHealthCheck(wsClient) {
-    if (wsClient && wsClient.isConnected()) {
+  function performWebSocketHealthCheck(wsClient, connectFn) {
+    const apiKey2 = getApiKey();
+    if (apiKey2 && (!wsClient || !wsClient.isConnected())) {
+      debugLogger.websocket("WARN", "Health check failed - WebSocket is disconnected. Triggering reconnect.");
+      performanceMonitor.recordHealthCheckFailure();
+      connectFn();
+    } else if (wsClient && wsClient.isConnected()) {
       debugLogger.websocket("DEBUG", "Performing active health check (ping).");
       wsClient.ping();
-    } else if (getApiKey()) {
-      debugLogger.websocket("WARN", "Health check found client is disconnected.");
-      performanceMonitor.recordHealthCheckFailure();
     }
   }
   function updatePopupConnectionState(state) {
@@ -3289,21 +3276,9 @@
       debugLogger.flush().then(() => {
         console.log("[Logger] Log buffer flushed to persistent storage.");
       });
-    } else if (alarm.name === "websocketReconnect" && getApiKey()) {
-      debugLogger.websocket("INFO", "Reconnection alarm triggered", {
-        alarmName: alarm.name,
-        hasApiKey: !!getApiKey(),
-        scheduledTime: alarm.scheduledTime ? new Date(alarm.scheduledTime).toISOString() : "unknown"
-      });
-      connectWebSocket();
-    } else if (alarm.name === "websocketReconnect") {
-      debugLogger.websocket(
-        "WARN",
-        "Reconnection alarm triggered but no API key available"
-      );
     } else if (alarm.name === "websocketHealthCheck") {
       await ensureConfigLoaded();
-      performWebSocketHealthCheck(websocketClient2);
+      performWebSocketHealthCheck(websocketClient2, connectWebSocket);
       chrome.storage.local.set({ lastSeenAlive: Date.now() });
     } else if (alarm.name === "pollingFallback") {
       performPollingFetch();

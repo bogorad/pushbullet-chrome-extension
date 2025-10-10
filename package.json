@@ -1,6 +1,6 @@
 {
   "name": "pushbullet-chrome-extension",
-  "version": "1.2.11",
+  "version": "1.2.20",
   "description": "Unofficial Manifest V3 compatible Pushbullet client for Chrome",
   "type": "module",
   "private": true,
@@ -17,7 +17,8 @@
     "build:options": "esbuild src/options/index.ts --bundle --format=iife --platform=browser --outfile=dist/options.js --sourcemap --target=es2022",
     "build:debug": "esbuild src/debug-dashboard/index.ts --bundle --format=iife --platform=browser --outfile=dist/debug-dashboard.js --sourcemap --target=es2022",
     "build:notification": "esbuild src/notification-detail/index.ts --bundle --format=iife --platform=browser --outfile=dist/notification-detail.js --sourcemap --target=es2022",
-    "build": "npm run build:background && npm run build:popup && npm run build:options && npm run build:debug && npm run build:notification"
+    "build": "npm run build:background && npm run build:popup && npm run build:options && npm run build:debug && npm run build:notification",
+    "bump-patch": "node scripts/bump-patch.cjs"
   },
   "keywords": [
     "pushbullet",

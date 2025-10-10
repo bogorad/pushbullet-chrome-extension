@@ -12,6 +12,8 @@ declare const chrome: any;
 let setupContextMenu: any;
 
 // Mock the dependencies
+const mockGetApiKey = vi.fn();
+
 vi.mock('../../src/lib/logging', () => ({
   debugLogger: {
     general: vi.fn(),
@@ -47,7 +49,7 @@ vi.mock('../../src/app/reconnect', () => ({
 }));
 
 vi.mock('../../src/background/state', () => ({
-  getApiKey: vi.fn(),
+  getApiKey: mockGetApiKey,
   getAutoOpenLinks: vi.fn(() => false),
   getDeviceIden: vi.fn(),
   getDeviceNickname: vi.fn(),
@@ -460,4 +462,116 @@ describe('showPushNotification - Notification Creation', () => {
     expect(notificationId1).not.toBe(notificationId2);
   });
 });
+
+/**
+ * Unit tests for performWebSocketHealthCheck function
+ * Tests the new reconnection logic that uses periodic health checks instead of one-shot alarms
+ */
+describe('performWebSocketHealthCheck - Reconnection Logic', () => {
+  let performWebSocketHealthCheck: any;
+  let mockWsClient: any;
+  let mockConnectFn: any;
+
+  beforeEach(async () => {
+    // Reset module state by re-importing
+    vi.resetModules();
+
+    // Re-import the module to get fresh state
+    const module = await import('../../src/background/utils');
+    performWebSocketHealthCheck = module.performWebSocketHealthCheck;
+
+    // Create fresh mocks for each test
+    mockWsClient = {
+      isConnected: vi.fn(),
+      ping: vi.fn()
+    };
+    mockConnectFn = vi.fn();
+
+    // Reset getApiKey mock to default (null)
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue(null);
+  });
+
+  it('should ping when WebSocket is connected', () => {
+    // Arrange
+    mockWsClient.isConnected.mockReturnValue(true);
+
+    // Act
+    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
+
+    // Assert
+    expect(mockWsClient.ping).toHaveBeenCalledTimes(1);
+    expect(mockConnectFn).not.toHaveBeenCalled();
+  });
+
+  it('should do nothing when WebSocket is disconnected and no API key', () => {
+    // Arrange
+    mockWsClient.isConnected.mockReturnValue(false);
+    // getApiKey is already mocked to return null
+
+    // Act
+    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
+
+    // Assert
+    expect(mockWsClient.ping).not.toHaveBeenCalled();
+    expect(mockConnectFn).not.toHaveBeenCalled();
+  });
+
+  it('should call connectFn when WebSocket is disconnected but has API key', async () => {
+    // Arrange
+    mockWsClient.isConnected.mockReturnValue(false);
+    // Mock getApiKey to return a key
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
+
+    // Act
+    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
+
+    // Assert
+    expect(mockWsClient.ping).not.toHaveBeenCalled();
+    expect(mockConnectFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call connectFn when WebSocket client is null but has API key', async () => {
+    // Arrange
+    // Mock getApiKey to return a key
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
+
+    // Act
+    performWebSocketHealthCheck(null, mockConnectFn);
+
+    // Assert
+    expect(mockConnectFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should call connectFn when WebSocket client is undefined but has API key', async () => {
+    // Arrange
+    // Mock getApiKey to return a key
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
+
+    // Act
+    performWebSocketHealthCheck(undefined, mockConnectFn);
+
+    // Assert
+    expect(mockConnectFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not call connectFn when WebSocket is connected, even with API key', async () => {
+    // Arrange
+    mockWsClient.isConnected.mockReturnValue(true);
+    // Mock getApiKey to return a key
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
+
+    // Act
+    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
+
+    // Assert
+    expect(mockWsClient.ping).toHaveBeenCalledTimes(1);
+    expect(mockConnectFn).not.toHaveBeenCalled();
+  });
+});
+
 

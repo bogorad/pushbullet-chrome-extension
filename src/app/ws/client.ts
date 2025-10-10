@@ -32,6 +32,8 @@ export interface CloseInfo {
  * - websocket:state - When connection state changes (for popup)
  */
 export class WebSocketClient {
+  private static readonly PING_TIMEOUT = 10000;
+
   private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -158,8 +160,6 @@ export class WebSocketClient {
           // noop
         }
 
-        chrome.alarms.clear("websocketReconnect", () => {});
-
         if (this.reconnectTimeout) {
           clearTimeout(this.reconnectTimeout);
           this.reconnectTimeout = null;
@@ -182,52 +182,52 @@ export class WebSocketClient {
           });
 
           switch (data.type) {
-          case "tickle":
-            if (data.subtype === "push") {
-              // Emit tickle:push event
-              globalEventBus.emit("websocket:tickle:push");
-            } else if (data.subtype === "device") {
-              // Emit tickle:device event
-              globalEventBus.emit("websocket:tickle:device");
-            }
-            break;
+            case "tickle":
+              if (data.subtype === "push") {
+                // Emit tickle:push event
+                globalEventBus.emit("websocket:tickle:push");
+              } else if (data.subtype === "device") {
+                // Emit tickle:device event
+                globalEventBus.emit("websocket:tickle:device");
+              }
+              break;
 
-          case "push":
-            if ("push" in data && data.push) {
-              // Emit push event with push data
-              globalEventBus.emit("websocket:push", data.push);
-            } else {
-              debugLogger.websocket(
-                "WARN",
-                "Push message received without push payload",
-              );
-            }
-            break;
+            case "push":
+              if ("push" in data && data.push) {
+                // Emit push event with push data
+                globalEventBus.emit("websocket:push", data.push);
+              } else {
+                debugLogger.websocket(
+                  "WARN",
+                  "Push message received without push payload",
+                );
+              }
+              break;
 
-           case "nop":
-             // This is a "pong" from the server. It proves the connection is alive.
-             // Clear the timeout we are about to set in the ping() method.
-             if (this.pongTimeout !== null) {
-               clearTimeout(this.pongTimeout);
-               this.pongTimeout = null;
-             }
-             debugLogger.websocket("DEBUG", "Pong received (via nop)", {
-               timestamp: new Date().toISOString(),
-             });
-             break;
+            case "nop":
+              // This is a "pong" from the server. It proves the connection is alive.
+              // Clear the timeout we are about to set in the ping() method.
+              if (this.pongTimeout !== null) {
+                clearTimeout(this.pongTimeout);
+                this.pongTimeout = null;
+              }
+              debugLogger.websocket("DEBUG", "Pong received (via nop)", {
+                timestamp: new Date().toISOString(),
+              });
+              break;
 
             // Note: 'ping' and 'pong' are WebSocket frame types, not message types
             // They should not appear in the message data, but we handle them defensively
 
-          default:
-            debugLogger.websocket(
-              "WARN",
-              "Unknown WebSocket message type received",
-              {
-                type: (data as any).type,
-              },
-            );
-            break;
+            default:
+              debugLogger.websocket(
+                "WARN",
+                "Unknown WebSocket message type received",
+                {
+                  type: (data as any).type,
+                },
+              );
+              break;
           }
         } catch (error) {
           debugLogger.websocket(
@@ -336,23 +336,6 @@ export class WebSocketClient {
           }
           return;
         }
-
-        // Transient: schedule next reconnect in ~30s (one-shot)
-        this.reconnectAttempts++;
-        performanceMonitor.recordWebSocketReconnection();
-
-        debugLogger.websocket(
-          "INFO",
-          "Scheduling WebSocket reconnection (30s one-shot)",
-          {
-            attempt: this.reconnectAttempts,
-            nextAttemptAt: new Date(Date.now() + 30000).toISOString(),
-          },
-        );
-
-        chrome.alarms.create("websocketReconnect", {
-          when: Date.now() + 30000,
-        });
       };
     } catch (error) {
       debugLogger.websocket(
@@ -416,7 +399,10 @@ export class WebSocketClient {
     }
 
     // If the socket isn't open, we can't send anything.
-    if (this.socket === null || this.socket.readyState !== WS_READY_STATE.OPEN) {
+    if (
+      this.socket === null ||
+      this.socket.readyState !== WS_READY_STATE.OPEN
+    ) {
       return;
     }
 
@@ -427,22 +413,29 @@ export class WebSocketClient {
         timestamp: new Date().toISOString(),
       });
 
-      // 2. Set a timeout. If we don't get a pong back in 10 seconds,
+      // 2. Set a timeout. If we don't get a pong back in 30 seconds,
       //    we will assume the connection is dead.
       this.pongTimeout = setTimeout(() => {
-        debugLogger.websocket("WARN", "Pong not received in 10 seconds. Assuming connection is dead.");
+        debugLogger.websocket(
+          "WARN",
+          "Pong not received in 30 seconds. Assuming connection is dead.",
+        );
 
-        // 3. Forcefully close the connection from our side.
-        //    This is the key step! By closing it ourselves, we guarantee
-        //    that the onclose event will fire, which will trigger our
-        //    state machine to transition to DEGRADED.
+        // Directly emit the disconnected event. This immediately informs the state machine.
+        globalEventBus.emit("websocket:disconnected");
+
+        // Forcefully close the socket for cleanup.
         this.socket?.close();
-      }, 10000); // 10-second timeout
-
+      }, WebSocketClient.PING_TIMEOUT); // 30-second timeout
     } catch (error) {
-      debugLogger.websocket("ERROR", "Failed to send ping", {
-        timestamp: new Date().toISOString(),
-      }, error as Error);
+      debugLogger.websocket(
+        "ERROR",
+        "Failed to send ping",
+        {
+          timestamp: new Date().toISOString(),
+        },
+        error as Error,
+      );
     }
   }
 }

@@ -202,60 +202,7 @@ const stateMachineReady = ServiceWorkerStateMachine.create(
   );
 });
 
-/**
- * ICON PERSISTENCE FIX: Restore visual state from storage
- *
- * Reads the last known state from storage and updates the icon badge
- * and tooltip to match. This ensures UI state persists across restarts.
- *
- * This function should be called at the very beginning of onInstalled
- * and onStartup listeners to restore the visual state before any other
- * initialization occurs.
- */
-async function restoreVisualState(): Promise<void> {
-  try {
-    const { lastKnownState, lastKnownStateDescription } =
-      await chrome.storage.local.get([
-        "lastKnownState",
-        "lastKnownStateDescription",
-      ]);
 
-    if (lastKnownState) {
-      debugLogger.general("INFO", "Restoring visual state from storage", {
-        state: lastKnownState,
-      });
-
-      // Restore tooltip
-      if (lastKnownStateDescription) {
-        updateExtensionTooltip(lastKnownStateDescription);
-      }
-
-      // Restore icon badge color based on state
-      switch (lastKnownState as ServiceWorkerState) {
-      case ServiceWorkerState.READY:
-        updateConnectionIcon("connected");
-        break;
-      case ServiceWorkerState.INITIALIZING:
-        updateConnectionIcon("connecting");
-        break;
-      case ServiceWorkerState.ERROR:
-      case ServiceWorkerState.DEGRADED:
-      case ServiceWorkerState.IDLE:
-        updateConnectionIcon("disconnected"); // This will set the badge to red
-        break;
-      default:
-        updateConnectionIcon("disconnected");
-      }
-    }
-  } catch (error) {
-    debugLogger.general(
-      "ERROR",
-      "Failed to restore visual state",
-      null,
-      error as Error,
-    );
-  }
-}
 
 /**
  * Connect to WebSocket
@@ -499,14 +446,11 @@ function disconnectWebSocket(): void {
  * Extension installed/updated
  */
 chrome.runtime.onInstalled.addListener(async () => {
-  // MV3 LIFECYCLE TRACKING: Increment restart counter
-  const { restarts = 0 } = await chrome.storage.local.get("restarts");
-  await chrome.storage.local.set({ restarts: restarts + 1 });
+   // MV3 LIFECYCLE TRACKING: Increment restart counter
+   const { restarts = 0 } = await chrome.storage.local.get("restarts");
+   await chrome.storage.local.set({ restarts: restarts + 1 });
 
-  // ICON PERSISTENCE FIX: Restore visual state FIRST before any other initialization
-  await restoreVisualState();
-
-  debugLogger.general("INFO", "Pushbullet extension installed/updated", {
+   debugLogger.general("INFO", "Pushbullet extension installed/updated", {
     reason: "onInstalled",
     timestamp: new Date().toISOString(),
   });
@@ -514,65 +458,33 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
   setTimeout(() => updateConnectionIcon("disconnected"), 100);
 
-  initTracker.recordInitialization("onInstalled");
-  setupContextMenu();
+   initTracker.recordInitialization("onInstalled");
+   setupContextMenu();
 
-  // Create periodic log flush alarm
-  chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+   // Create periodic log flush alarm
+   chrome.alarms.create("logFlush", { periodInMinutes: 1 });
 
-  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
-  // This ensures the state machine has loaded its persisted state from storage
-  await stateMachineReady;
+   // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
+   // This ensures the state machine has loaded its persisted state from storage
+   await stateMachineReady;
 
-  const cachedSession = await loadSessionCache();
-
-  if (cachedSession && cachedSession.isAuthenticated) {
-    // --- FAST PATH: We found a saved session! ---
-    debugLogger.general('INFO', 'Restoring session from IndexedDB');
-
-    // Restore the entire session cache into memory
-    Object.assign(sessionCache, cachedSession);
-
-    // Also restore the API key to the in-memory state variable
-    const apiKey = await storageRepository.getApiKey();
-    if (apiKey) {
-      setApiKey(apiKey);
-    }
-
-    // Tell the state machine we are starting up with a valid session
-    await stateMachine.transition('STARTUP', { hasApiKey: true });
-
-  } else {
-    // --- SLOW PATH: No saved session (first run or after logout) ---
-    debugLogger.general('INFO', 'No valid session in IndexedDB, performing full initialization');
-    try {
-      const apiKey = await getApiKeyWithRetries();
-      if (apiKey) {
-        setApiKey(apiKey);
-      }
-      // This will trigger the expensive network initialization
-      await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
-    } catch (error) {
-      debugLogger.storage('ERROR', 'Failed to read API key on initial startup', null, error as Error);
-      await stateMachine.transition('STARTUP', { hasApiKey: false });
-    }
-  }
-});
+   // Now that the machine is ready and has its state, just tell it
+   // that a startup event happened. It will decide what to do.
+   const apiKey = await getApiKeyWithRetries();
+   await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+ });
 
 /**
  * Browser startup
  */
 chrome.runtime.onStartup.addListener(async () => {
-  // MV3 LIFECYCLE TRACKING: Increment restart counter
-  const { restarts = 0 } = await chrome.storage.local.get("restarts");
-  await chrome.storage.local.set({ restarts: restarts + 1 });
+   // MV3 LIFECYCLE TRACKING: Increment restart counter
+   const { restarts = 0 } = await chrome.storage.local.get("restarts");
+   await chrome.storage.local.set({ restarts: restarts + 1 });
 
-  // ICON PERSISTENCE FIX: Restore visual state FIRST before any other initialization
-  await restoreVisualState();
-
-  debugLogger.general(
-    "INFO",
-    "Browser started - reinitializing Pushbullet extension",
+   debugLogger.general(
+     "INFO",
+     "Browser started - reinitializing Pushbullet extension",
     {
       reason: "onStartup",
       timestamp: new Date().toISOString(),
@@ -582,106 +494,50 @@ chrome.runtime.onStartup.addListener(async () => {
   // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
   setTimeout(() => updateConnectionIcon("disconnected"), 100);
 
-  initTracker.recordInitialization("onStartup");
-  setupContextMenu();
+   initTracker.recordInitialization("onStartup");
+   setupContextMenu();
 
-  // Create periodic log flush alarm
-  chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+   // Create periodic log flush alarm
+   chrome.alarms.create("logFlush", { periodInMinutes: 1 });
 
-  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
-  // This ensures the state machine has loaded its persisted state from storage
-  await stateMachineReady;
+   // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
+   // This ensures the state machine has loaded its persisted state from storage
+   await stateMachineReady;
 
-  const cachedSession = await loadSessionCache();
-
-  if (cachedSession && cachedSession.isAuthenticated) {
-    // --- FAST PATH: We found a saved session! ---
-    debugLogger.general('INFO', 'Restoring session from IndexedDB');
-
-    // Restore the entire session cache into memory
-    Object.assign(sessionCache, cachedSession);
-
-    // Also restore the API key to the in-memory state variable
-    const apiKey = await storageRepository.getApiKey();
-    if (apiKey) {
-      setApiKey(apiKey);
-    }
-
-    // Tell the state machine we are starting up with a valid session
-    await stateMachine.transition('STARTUP', { hasApiKey: true });
-
-  } else {
-    // --- SLOW PATH: No saved session (first run or after logout) ---
-    debugLogger.general('INFO', 'No valid session in IndexedDB, performing full initialization');
-    try {
-      const apiKey = await getApiKeyWithRetries();
-      if (apiKey) {
-        setApiKey(apiKey);
-      }
-      // This will trigger the expensive network initialization
-      await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
-    } catch (error) {
-      debugLogger.storage('ERROR', 'Failed to read API key on initial startup', null, error as Error);
-      await stateMachine.transition('STARTUP', { hasApiKey: false });
-    }
-  }
-});
-
-/**
- * Notification click listener
- */
-chrome.notifications.onClicked.addListener((notificationId) => {
-  debugLogger.notifications("INFO", "Notification clicked", { notificationId });
-
-  // Get push data from store
-  const pushData = notificationDataStore.get(notificationId);
-
-  if (pushData) {
-    // Open notification detail page in a new window
-    chrome.windows.create({
-      url: `notification-detail.html?id=${encodeURIComponent(notificationId)}`,
-      type: "popup",
-      width: 600,
-      height: 500,
-      focused: true,
-    });
-  }
-
-  // Clear the notification
-  chrome.notifications.clear(notificationId);
-});
+   // Now that the machine is ready and has its state, just tell it
+   // that a startup event happened. It will decide what to do.
+   const apiKey = await getApiKeyWithRetries();
+   await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+ });
 
 /**
  * Alarm listener
  */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "logFlush") {
-    // Flush logs to persistent storage
-    debugLogger.flush().then(() => {
-      console.log("[Logger] Log buffer flushed to persistent storage.");
-    });
-  } else if (alarm.name === "websocketReconnect" && getApiKey()) {
-    debugLogger.websocket("INFO", "Reconnection alarm triggered", {
-      alarmName: alarm.name,
-      hasApiKey: !!getApiKey(),
-      scheduledTime: alarm.scheduledTime
-        ? new Date(alarm.scheduledTime).toISOString()
-        : "unknown",
-    });
-    connectWebSocket();
-  } else if (alarm.name === "websocketReconnect") {
-    debugLogger.websocket(
-      "WARN",
-      "Reconnection alarm triggered but no API key available",
-    );
-  } else if (alarm.name === "websocketHealthCheck") {
-    // SERVICE WORKER AMNESIA FIX: Ensure config is loaded before performing health check
+    await debugLogger.flush();
+    return;
+  }
+
+  // Handle our two main periodic alarms.
+  if (alarm.name === "websocketHealthCheck") {
     await ensureConfigLoaded();
-    performWebSocketHealthCheck(websocketClient);
-    // MV3 LIFECYCLE TRACKING: Record last seen alive timestamp
-    chrome.storage.local.set({ lastSeenAlive: Date.now() });
-  } else if (alarm.name === "pollingFallback") {
+    performWebSocketHealthCheck(websocketClient, connectWebSocket);
+  }
+
+  if (alarm.name === "pollingFallback") {
     performPollingFetch();
+  }
+
+  // After any check, evaluate if we need to escalate to an ERROR state.
+  if (stateMachine.isInState(ServiceWorkerState.DEGRADED)) {
+    const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
+    const FAILURE_THRESHOLD = 5; // Escalate after 5 consecutive failures (approx. 5 minutes)
+
+    if (failures >= FAILURE_THRESHOLD) {
+      debugLogger.general("ERROR", `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`);
+      await stateMachine.transition('WS_PERMANENT_ERROR');
+    }
   }
 });
 

@@ -108,6 +108,29 @@ export class ServiceWorkerStateMachine {
       instance.currentState = ServiceWorkerState.IDLE;
     }
 
+    // After hydrating its state, the state machine is now the source of truth.
+    // It is now its responsibility to set the initial UI to match its state.
+
+    // 1. Update the tooltip.
+    updateExtensionTooltip(instance.getStateDescription());
+
+    // 2. Update the icon badge color.
+    switch (instance.currentState) {
+    case ServiceWorkerState.READY:
+      updateConnectionIcon("connected");
+      break;
+    case ServiceWorkerState.INITIALIZING:
+      updateConnectionIcon("connecting");
+      break;
+    case ServiceWorkerState.DEGRADED:
+      updateConnectionIcon("degraded");
+      break;
+    case ServiceWorkerState.ERROR:
+    case ServiceWorkerState.IDLE:
+      updateConnectionIcon("disconnected"); // Red
+      break;
+    }
+
     return instance;
   }
 

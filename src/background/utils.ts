@@ -596,6 +596,9 @@ export async function performPollingFetch(): Promise<void> {
     // Fetch recent pushes
     const pushes = await fetchRecentPushes(apiKey);
 
+    // If fetch is successful, reset the failure counter.
+    performanceMonitor.recordHealthCheckSuccess();
+
     // Check for new pushes
     const latestPush = pushes[0];
     if (latestPush && sessionCache.recentPushes[0]?.iden !== latestPush.iden) {
@@ -617,22 +620,30 @@ export async function performPollingFetch(): Promise<void> {
     }
   } catch (error) {
     debugLogger.general("ERROR", "Polling fetch failed", null, error as Error);
+    // Record the failure.
+    performanceMonitor.recordHealthCheckFailure();
   }
 }
 
 /**
  * Perform WebSocket health check
  */
-export function performWebSocketHealthCheck(wsClient: any): void {
-  // If we have a client and it thinks it's connected, send a ping to be sure.
-  if (wsClient && wsClient.isConnected()) {
+export function performWebSocketHealthCheck(wsClient: any, connectFn: () => void): void {
+  const apiKey = getApiKey();
+
+  // This is the key condition:
+  // If we SHOULD be connected (we have an API key) but we ARE NOT...
+  if (apiKey && (!wsClient || !wsClient.isConnected())) {
+    debugLogger.websocket("WARN", "Health check failed - WebSocket is disconnected. Triggering reconnect.");
+    performanceMonitor.recordHealthCheckFailure();
+
+    // ...then it's the health check's job to initiate the connection.
+    connectFn(); // This calls connectWebSocket in the background script.
+  }
+  // The ping logic for active connections remains the same.
+  else if (wsClient && wsClient.isConnected()) {
     debugLogger.websocket("DEBUG", "Performing active health check (ping).");
     wsClient.ping();
-  } else if (getApiKey()) {
-    // If we're not connected but should be, log it. The reconnect alarm
-    // will handle the actual reconnection attempt.
-    debugLogger.websocket("WARN", "Health check found client is disconnected.");
-    performanceMonitor.recordHealthCheckFailure();
   }
 }
 
