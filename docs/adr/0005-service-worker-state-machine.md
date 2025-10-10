@@ -1,7 +1,3 @@
-Of course. Here is the updated, highly verbose version of `0005-service-worker-state-machine.md` that reflects the final, correct implementation, including the new `RECONNECTING` state and the refined logic for transitions.
-
----
-
 # ADR 0005: Service Worker State Machine for Robust Lifecycle Management
 
 ## Status
