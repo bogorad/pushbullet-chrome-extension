@@ -406,7 +406,6 @@ function connectWebSocket(): void {
 
     // Trigger state machine transition
     stateMachine.transition("WS_CONNECTED");
-    updateConnectionIcon("connected");
   });
 
   globalEventBus.on("websocket:disconnected", () => {
@@ -524,6 +523,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   // Handle our two main periodic alarms.
   if (alarm.name === "websocketHealthCheck") {
+    // ADD THIS CHECK AT THE TOP
+    if (stateMachine.isInState(ServiceWorkerState.ERROR)) {
+      debugLogger.general("INFO", "In ERROR state, ignoring health check.");
+      return;
+    }
+
     await ensureConfigLoaded();
     // Check the current state first.
     if (stateMachine.isInState(ServiceWorkerState.DEGRADED)) {
