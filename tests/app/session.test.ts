@@ -26,6 +26,7 @@ vi.mock('../../src/app/api/client', () => ({
   fetchUserInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@example.com' }),
   fetchDevices: vi.fn().mockResolvedValue([]),
   fetchRecentPushes: vi.fn().mockResolvedValue([]),
+  fetchIncrementalPushes: vi.fn().mockResolvedValue([]),
   registerDevice: vi.fn().mockResolvedValue({ iden: 'device123' })
 }));
 
@@ -37,11 +38,13 @@ vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
     getDeviceNickname: vi.fn().mockResolvedValue('Test Chrome'),
     getAutoOpenLinks: vi.fn().mockResolvedValue(true),
     getNotificationTimeout: vi.fn().mockResolvedValue(5000),
+    getLastModifiedCutoff: vi.fn().mockResolvedValue(null),
     setApiKey: vi.fn().mockResolvedValue(undefined),
     setDeviceIden: vi.fn().mockResolvedValue(undefined),
     setDeviceNickname: vi.fn().mockResolvedValue(undefined),
     setAutoOpenLinks: vi.fn().mockResolvedValue(undefined),
-    setNotificationTimeout: vi.fn().mockResolvedValue(undefined)
+    setNotificationTimeout: vi.fn().mockResolvedValue(undefined),
+    setLastModifiedCutoff: vi.fn().mockResolvedValue(undefined)
   }
 }));
 
@@ -69,6 +72,7 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     vi.spyOn(storageRepository, 'getDeviceNickname').mockResolvedValue('Test Chrome');
     vi.spyOn(storageRepository, 'getAutoOpenLinks').mockResolvedValue(true);
     vi.spyOn(storageRepository, 'getNotificationTimeout').mockResolvedValue(5000);
+    vi.spyOn(storageRepository, 'getLastModifiedCutoff').mockResolvedValue(null);
   });
 
   it('should complete initialization successfully on first call', async () => {

@@ -774,290 +774,6 @@
   };
   var globalEventBus = new EventBus();
 
-  // src/app/ws/client.ts
-  var WebSocketClient = class _WebSocketClient {
-    constructor(websocketUrl, getApiKey2) {
-      this.websocketUrl = websocketUrl;
-      this.getApiKey = getApiKey2;
-    }
-    static NOP_TIMEOUT = 6e4;
-    // 60 seconds
-    socket = null;
-    reconnectAttempts = 0;
-    reconnectTimeout = null;
-    lastNopReceived = 0;
-    /**
-     * Get current WebSocket instance
-     */
-    getSocket() {
-      return this.socket;
-    }
-    /**
-     * Get current ready state
-     */
-    getReadyState() {
-      return this.socket ? this.socket.readyState : null;
-    }
-    /**
-     * Check if WebSocket is connected
-     */
-    isConnected() {
-      return this.socket !== null && this.socket.readyState === 1 /* OPEN */;
-    }
-    /**
-     * Connect to WebSocket
-     */
-    connect() {
-      try {
-        const apiKey2 = this.getApiKey();
-        if (!apiKey2) {
-          debugLogger.websocket("WARN", "connectWebSocket called without apiKey");
-          return;
-        }
-        if (this.socket && this.socket.readyState === 1 /* OPEN */) {
-          debugLogger.websocket("DEBUG", "WebSocket already open");
-          return;
-        }
-        const url = this.websocketUrl + apiKey2;
-        debugLogger.websocket("INFO", "WebSocket URL construction debug", {
-          baseUrl: this.websocketUrl,
-          apiKeyLength: apiKey2.length,
-          apiKeyPrefix: apiKey2.substring(0, 8) + "...",
-          finalUrlLength: url.length,
-          urlPattern: this.websocketUrl + "***"
-        });
-        debugLogger.websocket("INFO", "Connecting to WebSocket", {
-          url: this.websocketUrl + "***",
-          reconnectAttempts: this.reconnectAttempts,
-          currentSocketState: this.socket ? this.socket.readyState : "no_existing_socket",
-          apiKeyPresent: !!apiKey2
-        });
-        this.reconnectAttempts = 0;
-        debugLogger.websocket("DEBUG", "About to create WebSocket object", {
-          url: this.websocketUrl + "***",
-          currentSocketExists: !!this.socket,
-          currentSocketState: this.socket ? this.socket.readyState : "null"
-        });
-        try {
-          this.socket = new WebSocket(url);
-          debugLogger.websocket(
-            "DEBUG",
-            "WebSocket object created successfully",
-            {
-              url: this.websocketUrl + "***",
-              readyState: this.socket.readyState,
-              urlLength: url.length
-            }
-          );
-        } catch (createError) {
-          debugLogger.websocket("ERROR", "Failed to create WebSocket object", {
-            url: this.websocketUrl + "***",
-            error: createError instanceof Error ? createError.message : String(createError),
-            errorType: createError?.constructor?.name,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          this.socket = null;
-          throw createError;
-        }
-        debugLogger.websocket("DEBUG", "Setting up WebSocket event handlers", {
-          url: this.websocketUrl + "***",
-          readyState: this.socket.readyState,
-          socketExists: !!this.socket
-        });
-        this.socket.onopen = () => {
-          debugLogger.websocket("INFO", "WebSocket connection established", {
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          this.lastNopReceived = Date.now();
-          performanceMonitor.recordWebSocketConnection(true);
-          wsStateMonitor.startMonitoring();
-          globalEventBus.emit("websocket:polling:stop");
-          try {
-            clearErrorBadge();
-          } catch {
-          }
-          if (this.reconnectTimeout) {
-            clearTimeout(this.reconnectTimeout);
-            this.reconnectTimeout = null;
-          }
-          globalEventBus.emit("websocket:connected");
-          globalEventBus.emit("websocket:state", "connected");
-        };
-        this.socket.onmessage = async (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            debugLogger.websocket("DEBUG", "WebSocket message received", {
-              type: data.type,
-              subtype: "subtype" in data ? data.subtype : void 0,
-              hasPush: "push" in data ? !!data.push : false
-            });
-            switch (data.type) {
-              case "tickle":
-                if (data.subtype === "push") {
-                  globalEventBus.emit("websocket:tickle:push");
-                } else if (data.subtype === "device") {
-                  globalEventBus.emit("websocket:tickle:device");
-                }
-                break;
-              case "push":
-                if ("push" in data && data.push) {
-                  globalEventBus.emit("websocket:push", data.push);
-                } else {
-                  debugLogger.websocket(
-                    "WARN",
-                    "Push message received without push payload"
-                  );
-                }
-                break;
-              case "nop":
-                this.lastNopReceived = Date.now();
-                debugLogger.websocket("DEBUG", "Server nop received", {
-                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
-                });
-                break;
-              // Note: 'ping' and 'pong' are WebSocket frame types, not message types
-              // They should not appear in the message data, but we handle them defensively
-              default:
-                debugLogger.websocket(
-                  "WARN",
-                  "Unknown WebSocket message type received",
-                  {
-                    type: data.type
-                  }
-                );
-                break;
-            }
-          } catch (error) {
-            debugLogger.websocket(
-              "ERROR",
-              "Failed to process WebSocket message",
-              null,
-              error
-            );
-          }
-        };
-        this.socket.onerror = (error) => {
-          const currentSocket = this.socket;
-          const socketExists = !!currentSocket;
-          const socketState = socketExists ? currentSocket.readyState : "no_socket";
-          const isConnecting = socketExists ? currentSocket.readyState === 0 /* CONNECTING */ : false;
-          const isConnected = socketExists ? currentSocket.readyState === 1 /* OPEN */ : false;
-          const errorInfo = {
-            type: error.type || "unknown",
-            target: error.target ? "WebSocket" : "unknown",
-            readyState: socketState,
-            socketExists,
-            url: this.websocketUrl,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            reconnectAttempts: this.reconnectAttempts,
-            // Additional debugging info
-            isConnecting,
-            isConnected,
-            errorEventDetails: {
-              timeStamp: error.timeStamp,
-              bubbles: error.bubbles,
-              cancelable: error.cancelable,
-              currentTarget: error.currentTarget ? "WebSocket" : "unknown"
-            }
-          };
-          debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
-          const websocketError = new Error(
-            `WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`
-          );
-          websocketError.name = "WebSocketError";
-          globalErrorTracker.trackError(
-            websocketError,
-            {
-              category: "WEBSOCKET",
-              message: "WebSocket error occurred",
-              data: errorInfo
-            },
-            "WEBSOCKET"
-          );
-        };
-        this.socket.onclose = (event) => {
-          const closeInfo = {
-            code: event.code,
-            reason: event.reason || "No reason provided",
-            wasClean: event.wasClean
-          };
-          debugLogger.websocket("WARN", "WebSocket connection closed", {
-            ...closeInfo,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            reconnectAttempts: this.reconnectAttempts
-          });
-          globalEventBus.emit("websocket:disconnected", {
-            code: event.code,
-            reason: event.reason,
-            wasClean: event.wasClean
-          });
-          globalEventBus.emit("websocket:state", "disconnected");
-          if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
-            debugLogger.websocket(
-              "ERROR",
-              "Permanent WebSocket error - stopping reconnection attempts",
-              closeInfo
-            );
-            try {
-              showPermanentWebSocketError(closeInfo);
-            } catch {
-            }
-            return;
-          }
-        };
-      } catch (error) {
-        debugLogger.websocket(
-          "ERROR",
-          "Failed to create WebSocket connection",
-          {
-            url: this.websocketUrl + "***",
-            hasApiKey: !!this.getApiKey()
-          },
-          error
-        );
-      }
-    }
-    /**
-     * Disconnect WebSocket
-     */
-    disconnect() {
-      if (this.socket) {
-        try {
-          debugLogger.websocket("INFO", "Disconnecting WebSocket", {
-            readyState: this.socket.readyState
-          });
-          this.socket.close();
-          this.socket = null;
-          wsStateMonitor.stopMonitoring();
-        } catch (error) {
-          debugLogger.websocket(
-            "ERROR",
-            "Error disconnecting WebSocket",
-            null,
-            error
-          );
-        }
-      }
-    }
-    /**
-     * Get reconnect attempts count
-     */
-    getReconnectAttempts() {
-      return this.reconnectAttempts;
-    }
-    /**
-     * Reset reconnect attempts
-     */
-    resetReconnectAttempts() {
-      this.reconnectAttempts = 0;
-    }
-    isConnectionHealthy() {
-      if (!this.isConnected()) return false;
-      const timeSinceLastNop = Date.now() - this.lastNopReceived;
-      return timeSinceLastNop < _WebSocketClient.NOP_TIMEOUT;
-    }
-  };
-
   // src/infrastructure/storage/storage.repository.ts
   var ChromeStorageRepository = class {
     /**
@@ -1187,6 +903,75 @@
       await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
     }
     /**
+     * Get Last Modified Cutoff from local storage
+     */
+    async getLastModifiedCutoff() {
+      const result = await chrome.storage.local.get(["lastModifiedCutoff"]);
+      const cutoff = result.lastModifiedCutoff;
+      return typeof cutoff === "number" ? cutoff : null;
+    }
+    /**
+     * Set Last Modified Cutoff in local storage
+     */
+    async setLastModifiedCutoff(value) {
+      await chrome.storage.local.set({ lastModifiedCutoff: value });
+    }
+    /**
+     * Get Last Auto Open Cutoff from local storage
+     */
+    async getLastAutoOpenCutoff() {
+      const result = await chrome.storage.local.get(["lastAutoOpenCutoff"]);
+      const v = result.lastAutoOpenCutoff;
+      return typeof v === "number" ? v : null;
+    }
+    /**
+     * Set Last Auto Open Cutoff in local storage
+     */
+    async setLastAutoOpenCutoff(value) {
+      await chrome.storage.local.set({ lastAutoOpenCutoff: value });
+    }
+    /**
+     * Get Auto Open Links on Reconnect setting from local storage
+     */
+    async getAutoOpenLinksOnReconnect() {
+      const result = await chrome.storage.local.get(["autoOpenLinksOnReconnect"]);
+      const v = result.autoOpenLinksOnReconnect;
+      return typeof v === "boolean" ? v : false;
+    }
+    /**
+     * Set Auto Open Links on Reconnect setting in local storage
+     */
+    async setAutoOpenLinksOnReconnect(value) {
+      await chrome.storage.local.set({ autoOpenLinksOnReconnect: value });
+    }
+    /**
+     * Get Max Auto Open Per Reconnect from local storage
+     */
+    async getMaxAutoOpenPerReconnect() {
+      const result = await chrome.storage.local.get(["maxAutoOpenPerReconnect"]);
+      const v = result.maxAutoOpenPerReconnect;
+      return typeof v === "number" && v > 0 ? v : 5;
+    }
+    /**
+     * Set Max Auto Open Per Reconnect in local storage
+     */
+    async setMaxAutoOpenPerReconnect(value) {
+      await chrome.storage.local.set({ maxAutoOpenPerReconnect: value });
+    }
+    /**
+     * Get User Info Cache from local storage
+     */
+    async getUserInfoCache() {
+      const result = await chrome.storage.local.get(["userInfoCache"]);
+      return result.userInfoCache || null;
+    }
+    /**
+     * Set User Info Cache in local storage
+     */
+    async setUserInfoCache(value) {
+      await chrome.storage.local.set({ userInfoCache: value });
+    }
+    /**
      * Clear all storage (both sync and local)
      */
     async clear() {
@@ -1207,6 +992,29 @@
     }
   };
   var storageRepository = new ChromeStorageRepository();
+
+  // src/app/api/http.ts
+  async function fetchWithTimeout(input, init = {}, timeoutMs = 5e3) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(id);
+    }
+  }
+  async function retry(fn, retries = 1, backoffMs = 300) {
+    let lastErr;
+    for (let i = 0; i <= retries; i++) {
+      try {
+        return await fn();
+      } catch (e) {
+        lastErr = e;
+        if (i < retries) await new Promise((r) => setTimeout(r, backoffMs * (i + 1)));
+      }
+    }
+    throw lastErr;
+  }
 
   // src/app/api/client.ts
   var API_BASE_URL = "https://api.pushbullet.com/v2";
@@ -1253,6 +1061,17 @@
       }, error);
       throw error;
     }
+  }
+  async function fetchUserInfoWithTimeout(apiKey2) {
+    const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey2) }, 5e3);
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+    return response.json();
+  }
+  async function getUserInfoWithTimeoutRetry(apiKey2) {
+    return retry(() => fetchUserInfoWithTimeout(apiKey2), 1, 500);
   }
   async function fetchDevices(apiKey2) {
     const startTime = Date.now();
@@ -1331,6 +1150,50 @@
       throw error;
     }
   }
+  async function fetchIncrementalPushes(apiKey2, modifiedAfter, pageLimit = 100) {
+    const all = [];
+    let cursor = void 0;
+    let page = 0;
+    do {
+      const params = new URLSearchParams();
+      params.set("active", "true");
+      params.set("limit", String(pageLimit));
+      if (modifiedAfter && modifiedAfter > 0) {
+        params.set("modified_after", String(modifiedAfter));
+      }
+      if (cursor) params.set("cursor", cursor);
+      const url = `${PUSHES_URL}?${params.toString()}`;
+      const startTime = Date.now();
+      const response = await fetch(url, { headers: authHeaders(apiKey2) });
+      const duration = Date.now() - startTime;
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "Unknown error");
+        const error = new Error(
+          `Failed to fetch pushes ${response.status} ${response.statusText} - ${errorText}`
+        );
+        debugLogger.api("ERROR", "Incremental pushes fetch failed", { url, status: response.status, duration: `${duration}ms`, errorText });
+        throw error;
+      }
+      const data = await response.json();
+      const pagePushes = Array.isArray(data.pushes) ? data.pushes : [];
+      all.push(...pagePushes);
+      cursor = data.cursor;
+      debugLogger.api("INFO", "Incremental pushes page fetched", {
+        url,
+        status: response.status,
+        duration: `${duration}ms`,
+        page,
+        pageCount: pagePushes.length,
+        totalSoFar: all.length,
+        hasMore: !!cursor
+      });
+      page += 1;
+      if (page > 10) break;
+    } while (cursor);
+    const displayableTypes = /* @__PURE__ */ new Set(["mirror", "note", "link", "sms_changed", "file"]);
+    const filtered = all.filter((p) => displayableTypes.has(p.type) && !p.dismissed);
+    return filtered;
+  }
   async function ensureDeviceExists(apiKey2, deviceIden2) {
     const response = await fetch(
       `https://api.pushbullet.com/v2/devices/${deviceIden2}`,
@@ -1358,7 +1221,15 @@
         if (existingDeviceIden) {
           debugLogger.general("INFO", "Device already registered", { deviceIden: existingDeviceIden, deviceNickname: deviceNickname2 });
           try {
-            await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
+            const devices = await fetchDevices(apiKey2);
+            const currentDevice = devices.find((d) => d.iden === existingDeviceIden);
+            const currentNickname = currentDevice?.nickname;
+            if (currentNickname !== deviceNickname2) {
+              await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
+              debugLogger.general("INFO", "Device nickname updated", { old: currentNickname, new: deviceNickname2 });
+            } else {
+              debugLogger.general("DEBUG", "Device nickname unchanged, skipping update");
+            }
             return { deviceIden: existingDeviceIden, needsUpdate: false };
           } catch (error) {
             debugLogger.general("WARN", "Failed to update existing device, will re-register", {
@@ -1578,6 +1449,48 @@
     }
   }
 
+  // src/background/keepalive.ts
+  var KEEPALIVE_ALARM = "criticalKeepalive";
+  var KEEPALIVE_INTERVAL_SECONDS = 20;
+  var activeCount = 0;
+  function startCriticalKeepalive() {
+    activeCount++;
+    if (activeCount === 1) {
+      chrome.alarms.create(KEEPALIVE_ALARM, {
+        delayInMinutes: KEEPALIVE_INTERVAL_SECONDS / 60,
+        periodInMinutes: KEEPALIVE_INTERVAL_SECONDS / 60
+      });
+      debugLogger.general("INFO", "Critical keepalive started", {
+        interval: `${KEEPALIVE_INTERVAL_SECONDS}s`,
+        activeCount
+      });
+    } else {
+      debugLogger.general("DEBUG", "Critical keepalive already active", { activeCount });
+    }
+  }
+  function stopCriticalKeepalive() {
+    if (activeCount > 0) {
+      activeCount--;
+    }
+    if (activeCount === 0) {
+      chrome.alarms.clear(KEEPALIVE_ALARM, (wasCleared) => {
+        debugLogger.general("INFO", "Critical keepalive stopped", { wasCleared });
+      });
+    } else {
+      debugLogger.general("DEBUG", "Critical keepalive still needed", { activeCount });
+    }
+  }
+  function handleKeepaliveAlarm(alarm) {
+    if (alarm.name === KEEPALIVE_ALARM) {
+      debugLogger.general("DEBUG", "Critical keepalive heartbeat", {
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        activeCount
+      });
+      return true;
+    }
+    return false;
+  }
+
   // src/app/session/index.ts
   var sessionCache = {
     userInfo: null,
@@ -1621,6 +1534,7 @@
       return null;
     }
     initPromise = (async () => {
+      startCriticalKeepalive();
       try {
         debugLogger.general("INFO", "Initializing session cache", {
           source,
@@ -1670,8 +1584,17 @@
           sessionCache.userInfo = userInfo;
           const devices = await fetchDevices(apiKeyValue);
           sessionCache.devices = devices;
-          const pushes = await fetchRecentPushes(apiKeyValue);
-          sessionCache.recentPushes = pushes;
+          const storedCutoff = await storageRepository.getLastModifiedCutoff();
+          let recentPushes = [];
+          if (storedCutoff && storedCutoff > 0) {
+            recentPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
+          } else {
+            recentPushes = await fetchRecentPushes(apiKeyValue);
+            const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+            if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+          }
+          sessionCache.recentPushes = recentPushes;
+          sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
           try {
             const chats = await fetchChats(apiKeyValue);
             sessionCache.chats = chats;
@@ -1725,6 +1648,7 @@
         sessionCache.isAuthenticated = false;
         throw error;
       } finally {
+        stopCriticalKeepalive();
         initPromise = null;
       }
     })();
@@ -1748,8 +1672,17 @@
         const devices = await fetchDevices(apiKeyParam);
         sessionCache.devices = devices;
         debugLogger.general("DEBUG", "Refreshing recent pushes");
-        const pushes = await fetchRecentPushes(apiKeyParam);
-        sessionCache.recentPushes = pushes;
+        const storedCutoff = await storageRepository.getLastModifiedCutoff();
+        let recentPushes = [];
+        if (storedCutoff && storedCutoff > 0) {
+          recentPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
+        } else {
+          recentPushes = await fetchRecentPushes(apiKeyParam);
+          const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+          if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+        }
+        sessionCache.recentPushes = recentPushes;
+        sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
         try {
           const chats = await fetchChats(apiKeyParam);
           sessionCache.chats = chats;
@@ -1784,6 +1717,56 @@
       );
       throw error;
     }
+  }
+
+  // src/background/state.ts
+  var API_BASE_URL2 = "https://api.pushbullet.com/v2";
+  var PUSHES_URL2 = `${API_BASE_URL2}/pushes`;
+  var DEVICES_URL2 = `${API_BASE_URL2}/devices`;
+  var USER_INFO_URL2 = `${API_BASE_URL2}/users/me`;
+  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
+  var apiKey = null;
+  var deviceIden = null;
+  var deviceNickname = "Chrome";
+  var autoOpenLinks = true;
+  var notificationTimeout = 1e4;
+  var websocketClient = null;
+  var pollingMode = false;
+  function getApiKey() {
+    return apiKey;
+  }
+  function setApiKey(key) {
+    apiKey = key;
+  }
+  function getDeviceIden() {
+    return deviceIden;
+  }
+  function setDeviceIden(iden) {
+    deviceIden = iden;
+  }
+  function getDeviceNickname() {
+    return deviceNickname;
+  }
+  function setDeviceNickname(nickname) {
+    deviceNickname = nickname;
+  }
+  function getAutoOpenLinks() {
+    return autoOpenLinks;
+  }
+  function setAutoOpenLinks(value) {
+    autoOpenLinks = value;
+  }
+  function setNotificationTimeout(timeout) {
+    notificationTimeout = timeout;
+  }
+  function setWebSocketClient(client) {
+    websocketClient = client;
+  }
+  function isPollingMode() {
+    return pollingMode;
+  }
+  function setPollingMode(mode) {
+    pollingMode = mode;
   }
 
   // src/app/reconnect/index.ts
@@ -1869,166 +1852,7 @@
     }
   }
 
-  // src/lib/crypto/index.ts
-  var PushbulletCrypto = class {
-    /**
-     * Generate encryption/decryption key from password
-     * @param password - User's encryption password
-     * @param userIden - User's iden (used as salt)
-     * @returns Derived key for AES-GCM
-     */
-    static async deriveKey(password, userIden) {
-      if (!globalThis.crypto || !crypto.subtle) {
-        throw new Error("Web Crypto API unavailable - requires HTTPS or localhost");
-      }
-      const encoder = new TextEncoder();
-      const passwordBytes = encoder.encode(password);
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw",
-        passwordBytes,
-        { name: "PBKDF2" },
-        false,
-        ["deriveBits", "deriveKey"]
-      );
-      const salt = encoder.encode(userIden);
-      const key = await crypto.subtle.deriveKey(
-        {
-          name: "PBKDF2",
-          salt,
-          iterations: 3e4,
-          hash: "SHA-256"
-        },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["decrypt"]
-      );
-      return key;
-    }
-    /**
-     * Decrypt an encrypted message
-     * @param encodedMessage - Base64 encoded encrypted message
-     * @param key - Decryption key
-     * @returns Decrypted message object
-     */
-    static async decryptMessage(encodedMessage, key) {
-      try {
-        const encryptedData = this.base64ToBytes(encodedMessage);
-        const version = encryptedData[0];
-        if (version !== 49) {
-          throw new Error(`Unsupported encryption version: ${version}`);
-        }
-        const tag = encryptedData.slice(1, 17);
-        const iv = encryptedData.slice(17, 29);
-        const ciphertext = encryptedData.slice(29);
-        const combined = new Uint8Array(ciphertext.length + tag.length);
-        combined.set(ciphertext);
-        combined.set(tag, ciphertext.length);
-        const decrypted = await crypto.subtle.decrypt(
-          {
-            name: "AES-GCM",
-            iv,
-            tagLength: 128
-            // 16 bytes = 128 bits
-          },
-          key,
-          combined
-        );
-        const decoder = new TextDecoder();
-        const decryptedText = decoder.decode(decrypted);
-        return JSON.parse(decryptedText);
-      } catch {
-        console.error("Decryption error - check encryption password");
-        throw new Error("Failed to decrypt message. Check your encryption password.");
-      }
-    }
-    /**
-     * Convert base64 string to Uint8Array
-     * @param base64 - Base64 encoded string
-     * @returns Decoded bytes
-     */
-    static base64ToBytes(base64) {
-      const binaryString = atob(base64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
-    }
-    /**
-     * Decrypt a Pushbullet encrypted push
-     * @param encryptedPush - Push object with 'encrypted' and 'ciphertext' fields
-     * @param password - User's encryption password
-     * @param userIden - User's iden
-     * @returns Decrypted push data
-     */
-    static async decryptPush(encryptedPush, password, userIden) {
-      if (!encryptedPush.encrypted || !encryptedPush.ciphertext) {
-        throw new Error("Push is not encrypted");
-      }
-      const key = await this.deriveKey(password, userIden);
-      const decryptedData = await this.decryptMessage(encryptedPush.ciphertext, key);
-      return {
-        ...encryptedPush,
-        ...decryptedData,
-        encrypted: false
-        // Mark as decrypted
-      };
-    }
-  };
-
-  // src/background/state.ts
-  var API_BASE_URL2 = "https://api.pushbullet.com/v2";
-  var PUSHES_URL2 = `${API_BASE_URL2}/pushes`;
-  var DEVICES_URL2 = `${API_BASE_URL2}/devices`;
-  var USER_INFO_URL2 = `${API_BASE_URL2}/users/me`;
-  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
-  var apiKey = null;
-  var deviceIden = null;
-  var deviceNickname = "Chrome";
-  var autoOpenLinks = true;
-  var notificationTimeout = 1e4;
-  var websocketClient = null;
-  var pollingMode = false;
-  function getApiKey() {
-    return apiKey;
-  }
-  function setApiKey(key) {
-    apiKey = key;
-  }
-  function getDeviceIden() {
-    return deviceIden;
-  }
-  function setDeviceIden(iden) {
-    deviceIden = iden;
-  }
-  function getDeviceNickname() {
-    return deviceNickname;
-  }
-  function setDeviceNickname(nickname) {
-    deviceNickname = nickname;
-  }
-  function getAutoOpenLinks() {
-    return autoOpenLinks;
-  }
-  function setAutoOpenLinks(value) {
-    autoOpenLinks = value;
-  }
-  function setNotificationTimeout(timeout) {
-    notificationTimeout = timeout;
-  }
-  function setWebSocketClient(client) {
-    websocketClient = client;
-  }
-  function isPollingMode() {
-    return pollingMode;
-  }
-  function setPollingMode(mode) {
-    pollingMode = mode;
-  }
-
   // src/background/utils.ts
-  var isSettingUpContextMenu = false;
   function sanitizeText(text) {
     if (!text) return "";
     let sanitized = text.replace(/<[^>]*>/g, "");
@@ -2100,6 +1924,20 @@
       );
     }
   }
+  function upsertPushes(existing, incoming) {
+    const map = new Map(existing.map((p) => [p.iden, p]));
+    const newOnes = [];
+    for (const p of incoming) {
+      if (map.has(p.iden)) {
+        map.set(p.iden, { ...map.get(p.iden), ...p });
+      } else {
+        newOnes.push(p);
+        map.set(p.iden, p);
+      }
+    }
+    const updated = Array.from(map.values()).sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 200);
+    return { updated, newOnes };
+  }
   async function refreshPushes(notificationDataStore2) {
     await ensureConfigLoaded();
     const apiKey2 = getApiKey();
@@ -2108,26 +1946,27 @@
       return;
     }
     try {
-      debugLogger.general("DEBUG", "Refreshing pushes from API");
-      const oldPushIdens = new Set(sessionCache.recentPushes.map((p) => p.iden));
-      const pushes = await fetchRecentPushes(apiKey2);
-      const newPushes = pushes.filter((p) => !oldPushIdens.has(p.iden));
-      debugLogger.general("INFO", "Pushes refreshed successfully", {
-        totalPushes: pushes.length,
-        newPushes: newPushes.length
-      });
-      sessionCache.recentPushes = pushes;
+      debugLogger.general("DEBUG", "Refreshing pushes (incremental)");
+      const cutoff = sessionCache.lastModifiedCutoff || await storageRepository.getLastModifiedCutoff() || 0;
+      const changes = await fetchIncrementalPushes(apiKey2, cutoff, 100);
+      if (changes.length === 0) {
+        debugLogger.general("INFO", "No incremental push changes");
+        return;
+      }
+      const { updated, newOnes } = upsertPushes(sessionCache.recentPushes || [], changes);
+      sessionCache.recentPushes = updated;
       sessionCache.lastUpdated = Date.now();
-      for (const push of newPushes) {
-        debugLogger.general(
-          "INFO",
-          "Showing notification for new push from tickle",
-          {
-            pushIden: push.iden,
-            pushType: push.type
-          }
-        );
-        showPushNotification(push, notificationDataStore2).catch((error) => {
+      const maxModified = Math.max(
+        cutoff,
+        ...changes.map((p) => typeof p.modified === "number" ? p.modified : 0)
+      );
+      if (maxModified > cutoff) {
+        sessionCache.lastModifiedCutoff = maxModified;
+        await storageRepository.setLastModifiedCutoff(maxModified);
+      }
+      for (const push of newOnes) {
+        debugLogger.general("INFO", "Showing notification for new push", { pushIden: push.iden, pushType: push.type });
+        void showPushNotification(push, notificationDataStore2).catch((error) => {
           debugLogger.general(
             "ERROR",
             "Failed to show notification",
@@ -2137,7 +1976,7 @@
         });
         const autoOpenLinks2 = getAutoOpenLinks();
         if (autoOpenLinks2 && isLinkPush(push)) {
-          debugLogger.general("INFO", "Auto-opening link push from tickle", {
+          debugLogger.general("INFO", "Auto-opening link push", {
             pushIden: push.iden,
             url: push.url
           });
@@ -2148,7 +1987,7 @@
           }).catch((error) => {
             debugLogger.general(
               "ERROR",
-              "Failed to auto-open link from tickle",
+              "Failed to auto-open link",
               {
                 url: push.url
               },
@@ -2157,18 +1996,10 @@
           });
         }
       }
-      chrome.runtime.sendMessage({
-        action: "pushesUpdated",
-        pushes
-      }).catch(() => {
-      });
+      chrome.runtime.sendMessage({ action: "pushesUpdated", pushes: sessionCache.recentPushes }).catch(() => void 0);
     } catch (error) {
-      debugLogger.general(
-        "ERROR",
-        "Failed to refresh pushes",
-        null,
-        error
-      );
+      debugLogger.general("ERROR", "Incremental refresh failed", { error });
+      performanceMonitor.recordHealthCheckFailure();
     }
   }
   var counter = 0;
@@ -2486,29 +2317,8 @@
       debugLogger.general("WARN", "Cannot perform polling fetch - no API key");
       return;
     }
-    debugLogger.general("DEBUG", "Performing polling fetch", {
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    try {
-      const pushes = await fetchRecentPushes(apiKey2);
-      performanceMonitor.recordHealthCheckSuccess();
-      const latestPush = pushes[0];
-      if (latestPush && sessionCache.recentPushes[0]?.iden !== latestPush.iden) {
-        debugLogger.general("INFO", "New push detected via polling", {
-          pushId: latestPush.iden,
-          pushType: latestPush.type
-        });
-        sessionCache.recentPushes = pushes;
-        chrome.runtime.sendMessage({
-          action: "pushesUpdated",
-          pushes
-        }).catch(() => {
-        });
-      }
-    } catch (error) {
-      debugLogger.general("ERROR", "Polling fetch failed", null, error);
-      performanceMonitor.recordHealthCheckFailure();
-    }
+    debugLogger.general("DEBUG", "Performing polling fetch (incremental)");
+    await refreshPushes();
   }
   function performWebSocketHealthCheck(wsClient, connectFn) {
     const apiKey2 = getApiKey();
@@ -2539,92 +2349,6 @@
       state
     }).catch(() => {
     });
-  }
-  function setupContextMenu() {
-    if (isSettingUpContextMenu) {
-      debugLogger.general(
-        "INFO",
-        "Context menu setup already in progress, skipping"
-      );
-      return;
-    }
-    isSettingUpContextMenu = true;
-    try {
-      chrome.contextMenus.removeAll(() => {
-        if (chrome.runtime.lastError) {
-          debugLogger.general(
-            "ERROR",
-            "Failed to remove existing context menus",
-            {
-              error: chrome.runtime.lastError.message
-            }
-          );
-          isSettingUpContextMenu = false;
-          return;
-        }
-        try {
-          chrome.contextMenus.create({
-            id: "push-link",
-            title: "Push this link",
-            contexts: ["link"]
-          });
-          if (chrome.runtime.lastError) {
-            const lastError = chrome.runtime.lastError;
-            const errorMessage = lastError.message || "Unknown error";
-            debugLogger.general("ERROR", "Failed to create push-link menu", {
-              error: errorMessage
-            });
-          }
-          chrome.contextMenus.create({
-            id: "push-page",
-            title: "Push this page",
-            contexts: ["page"]
-          });
-          if (chrome.runtime.lastError) {
-            const lastError = chrome.runtime.lastError;
-            const errorMessage = lastError.message || "Unknown error";
-            debugLogger.general("ERROR", "Failed to create push-page menu", {
-              error: errorMessage
-            });
-          }
-          chrome.contextMenus.create({
-            id: "push-selection",
-            title: "Push selected text",
-            contexts: ["selection"]
-          });
-          if (chrome.runtime.lastError) {
-            const lastError = chrome.runtime.lastError;
-            const errorMessage = lastError.message || "Unknown error";
-            debugLogger.general("ERROR", "Failed to create push-selection menu", {
-              error: errorMessage
-            });
-          }
-          chrome.contextMenus.create({
-            id: "push-image",
-            title: "Push this image",
-            contexts: ["image"]
-          });
-          if (chrome.runtime.lastError) {
-            const lastError = chrome.runtime.lastError;
-            const errorMessage = lastError.message || "Unknown error";
-            debugLogger.general("ERROR", "Failed to create push-image menu", {
-              error: errorMessage
-            });
-          }
-          debugLogger.general("INFO", "Context menu created successfully");
-        } finally {
-          isSettingUpContextMenu = false;
-        }
-      });
-    } catch (error) {
-      debugLogger.general(
-        "ERROR",
-        "Failed to create context menu",
-        null,
-        error
-      );
-      isSettingUpContextMenu = false;
-    }
   }
   async function pushLink(url, title) {
     const apiKey2 = getApiKey();
@@ -2710,6 +2434,399 @@
       );
     }
   }
+
+  // src/app/ws/client.ts
+  var WebSocketClient = class _WebSocketClient {
+    constructor(websocketUrl, getApiKey2) {
+      this.websocketUrl = websocketUrl;
+      this.getApiKey = getApiKey2;
+    }
+    static NOP_TIMEOUT = 6e4;
+    // 60 seconds
+    socket = null;
+    reconnectAttempts = 0;
+    reconnectTimeout = null;
+    lastNopReceived = 0;
+    /**
+     * Get current WebSocket instance
+     */
+    getSocket() {
+      return this.socket;
+    }
+    /**
+     * Get current ready state
+     */
+    getReadyState() {
+      return this.socket?.readyState ?? WebSocket.CLOSED;
+    }
+    /**
+     * Check if WebSocket is connected
+     */
+    isConnected() {
+      return this.socket !== null && this.socket.readyState === 1 /* OPEN */;
+    }
+    /**
+     * Connect to WebSocket
+     */
+    connect() {
+      try {
+        const apiKey2 = this.getApiKey();
+        if (!apiKey2) {
+          debugLogger.websocket("WARN", "connectWebSocket called without apiKey");
+          return;
+        }
+        if (this.socket && this.socket.readyState === 1 /* OPEN */) {
+          debugLogger.websocket("DEBUG", "WebSocket already open");
+          return;
+        }
+        const url = this.websocketUrl + apiKey2;
+        debugLogger.websocket("INFO", "WebSocket URL construction debug", {
+          baseUrl: this.websocketUrl,
+          apiKeyLength: apiKey2.length,
+          apiKeyPrefix: apiKey2.substring(0, 8) + "...",
+          finalUrlLength: url.length,
+          urlPattern: this.websocketUrl + "***"
+        });
+        debugLogger.websocket("INFO", "Connecting to WebSocket", {
+          url: this.websocketUrl + "***",
+          reconnectAttempts: this.reconnectAttempts,
+          currentSocketState: this.socket ? this.socket.readyState : "no_existing_socket",
+          apiKeyPresent: !!apiKey2
+        });
+        this.reconnectAttempts = 0;
+        debugLogger.websocket("DEBUG", "About to create WebSocket object", {
+          url: this.websocketUrl + "***",
+          currentSocketExists: !!this.socket,
+          currentSocketState: this.socket ? this.socket.readyState : "null"
+        });
+        try {
+          this.socket = new WebSocket(url);
+          debugLogger.websocket(
+            "DEBUG",
+            "WebSocket object created successfully",
+            {
+              url: this.websocketUrl + "***",
+              readyState: this.socket.readyState,
+              urlLength: url.length
+            }
+          );
+        } catch (createError) {
+          debugLogger.websocket("ERROR", "Failed to create WebSocket object", {
+            url: this.websocketUrl + "***",
+            error: createError instanceof Error ? createError.message : String(createError),
+            errorType: createError?.constructor?.name,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          this.socket = null;
+          throw createError;
+        }
+        debugLogger.websocket("DEBUG", "Setting up WebSocket event handlers", {
+          url: this.websocketUrl + "***",
+          readyState: this.socket.readyState,
+          socketExists: !!this.socket
+        });
+        this.socket.onopen = () => {
+          debugLogger.websocket("INFO", "WebSocket connection established", {
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          updateConnectionIcon("connected");
+          this.lastNopReceived = Date.now();
+          performanceMonitor.recordWebSocketConnection(true);
+          wsStateMonitor.startMonitoring();
+          globalEventBus.emit("websocket:polling:stop");
+          try {
+            clearErrorBadge();
+          } catch {
+          }
+          if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+          }
+          globalEventBus.emit("websocket:connected");
+          globalEventBus.emit("websocket:state", "connected");
+        };
+        this.socket.onmessage = async (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            debugLogger.websocket("DEBUG", "WebSocket message received", {
+              type: data.type,
+              subtype: "subtype" in data ? data.subtype : void 0,
+              hasPush: "push" in data ? !!data.push : false
+            });
+            switch (data.type) {
+              case "tickle":
+                if (data.subtype === "push") {
+                  globalEventBus.emit("websocket:tickle:push");
+                } else if (data.subtype === "device") {
+                  globalEventBus.emit("websocket:tickle:device");
+                }
+                break;
+              case "push":
+                if ("push" in data && data.push) {
+                  globalEventBus.emit("websocket:push", data.push);
+                } else {
+                  debugLogger.websocket(
+                    "WARN",
+                    "Push message received without push payload"
+                  );
+                }
+                break;
+              case "nop":
+                this.lastNopReceived = Date.now();
+                debugLogger.websocket("DEBUG", "Server nop received", {
+                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
+                });
+                break;
+              // Note: 'ping' and 'pong' are WebSocket frame types, not message types
+              // They should not appear in the message data, but we handle them defensively
+              default:
+                debugLogger.websocket(
+                  "WARN",
+                  "Unknown WebSocket message type received",
+                  {
+                    type: data.type
+                  }
+                );
+                break;
+            }
+          } catch (error) {
+            debugLogger.websocket(
+              "ERROR",
+              "Failed to process WebSocket message",
+              null,
+              error
+            );
+          }
+        };
+        this.socket.onerror = (error) => {
+          const currentSocket = this.socket;
+          const socketExists = !!currentSocket;
+          const socketState = socketExists ? currentSocket.readyState : "no_socket";
+          const isConnecting = socketExists ? currentSocket.readyState === 0 /* CONNECTING */ : false;
+          const isConnected = socketExists ? currentSocket.readyState === 1 /* OPEN */ : false;
+          const errorInfo = {
+            type: error.type || "unknown",
+            target: error.target ? "WebSocket" : "unknown",
+            readyState: socketState,
+            socketExists,
+            url: this.websocketUrl,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            reconnectAttempts: this.reconnectAttempts,
+            // Additional debugging info
+            isConnecting,
+            isConnected,
+            errorEventDetails: {
+              timeStamp: error.timeStamp,
+              bubbles: error.bubbles,
+              cancelable: error.cancelable,
+              currentTarget: error.currentTarget ? "WebSocket" : "unknown"
+            }
+          };
+          debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
+          const websocketError = new Error(
+            `WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`
+          );
+          websocketError.name = "WebSocketError";
+          globalErrorTracker.trackError(
+            websocketError,
+            {
+              category: "WEBSOCKET",
+              message: "WebSocket error occurred",
+              data: errorInfo
+            },
+            "WEBSOCKET"
+          );
+        };
+        this.socket.onclose = (event) => {
+          const closeInfo = {
+            code: event.code,
+            reason: event.reason || "No reason provided",
+            wasClean: event.wasClean
+          };
+          debugLogger.websocket("WARN", "WebSocket connection closed", {
+            ...closeInfo,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            reconnectAttempts: this.reconnectAttempts
+          });
+          globalEventBus.emit("websocket:disconnected", {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean
+          });
+          globalEventBus.emit("websocket:state", "disconnected");
+          if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
+            debugLogger.websocket(
+              "ERROR",
+              "Permanent WebSocket error - stopping reconnection attempts",
+              closeInfo
+            );
+            try {
+              showPermanentWebSocketError(closeInfo);
+            } catch {
+            }
+            return;
+          }
+        };
+      } catch (error) {
+        debugLogger.websocket(
+          "ERROR",
+          "Failed to create WebSocket connection",
+          {
+            url: this.websocketUrl + "***",
+            hasApiKey: !!this.getApiKey()
+          },
+          error
+        );
+      }
+    }
+    /**
+     * Disconnect WebSocket
+     */
+    disconnect() {
+      if (this.socket) {
+        try {
+          debugLogger.websocket("INFO", "Disconnecting WebSocket", {
+            readyState: this.socket.readyState
+          });
+          this.socket.close();
+          this.socket = null;
+          wsStateMonitor.stopMonitoring();
+        } catch (error) {
+          debugLogger.websocket(
+            "ERROR",
+            "Error disconnecting WebSocket",
+            null,
+            error
+          );
+        }
+      }
+    }
+    /**
+     * Get reconnect attempts count
+     */
+    getReconnectAttempts() {
+      return this.reconnectAttempts;
+    }
+    /**
+     * Reset reconnect attempts
+     */
+    resetReconnectAttempts() {
+      this.reconnectAttempts = 0;
+    }
+    isConnectionHealthy() {
+      if (!this.isConnected()) return false;
+      const timeSinceLastNop = Date.now() - this.lastNopReceived;
+      return timeSinceLastNop < _WebSocketClient.NOP_TIMEOUT;
+    }
+  };
+
+  // src/lib/crypto/index.ts
+  var PushbulletCrypto = class {
+    /**
+     * Generate encryption/decryption key from password
+     * @param password - User's encryption password
+     * @param userIden - User's iden (used as salt)
+     * @returns Derived key for AES-GCM
+     */
+    static async deriveKey(password, userIden) {
+      if (!globalThis.crypto || !crypto.subtle) {
+        throw new Error("Web Crypto API unavailable - requires HTTPS or localhost");
+      }
+      const encoder = new TextEncoder();
+      const passwordBytes = encoder.encode(password);
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        passwordBytes,
+        { name: "PBKDF2" },
+        false,
+        ["deriveBits", "deriveKey"]
+      );
+      const salt = encoder.encode(userIden);
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt,
+          iterations: 3e4,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
+      return key;
+    }
+    /**
+     * Decrypt an encrypted message
+     * @param encodedMessage - Base64 encoded encrypted message
+     * @param key - Decryption key
+     * @returns Decrypted message object
+     */
+    static async decryptMessage(encodedMessage, key) {
+      try {
+        const encryptedData = this.base64ToBytes(encodedMessage);
+        const version = encryptedData[0];
+        if (version !== 49) {
+          throw new Error(`Unsupported encryption version: ${version}`);
+        }
+        const tag = encryptedData.slice(1, 17);
+        const iv = encryptedData.slice(17, 29);
+        const ciphertext = encryptedData.slice(29);
+        const combined = new Uint8Array(ciphertext.length + tag.length);
+        combined.set(ciphertext);
+        combined.set(tag, ciphertext.length);
+        const decrypted = await crypto.subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv,
+            tagLength: 128
+            // 16 bytes = 128 bits
+          },
+          key,
+          combined
+        );
+        const decoder = new TextDecoder();
+        const decryptedText = decoder.decode(decrypted);
+        return JSON.parse(decryptedText);
+      } catch {
+        console.error("Decryption error - check encryption password");
+        throw new Error("Failed to decrypt message. Check your encryption password.");
+      }
+    }
+    /**
+     * Convert base64 string to Uint8Array
+     * @param base64 - Base64 encoded string
+     * @returns Decoded bytes
+     */
+    static base64ToBytes(base64) {
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+    /**
+     * Decrypt a Pushbullet encrypted push
+     * @param encryptedPush - Push object with 'encrypted' and 'ciphertext' fields
+     * @param password - User's encryption password
+     * @param userIden - User's iden
+     * @returns Decrypted push data
+     */
+    static async decryptPush(encryptedPush, password, userIden) {
+      if (!encryptedPush.encrypted || !encryptedPush.ciphertext) {
+        throw new Error("Push is not encrypted");
+      }
+      const key = await this.deriveKey(password, userIden);
+      const decryptedData = await this.decryptMessage(encryptedPush.ciphertext, key);
+      return {
+        ...encryptedPush,
+        ...decryptedData,
+        encrypted: false
+        // Mark as decrypted
+      };
+    }
+  };
 
   // src/background/state-machine.ts
   var ServiceWorkerState = /* @__PURE__ */ ((ServiceWorkerState2) => {
@@ -2989,6 +3106,122 @@
     }
   };
 
+  // src/background/links.ts
+  function isLinkPush2(p) {
+    return p.type === "link" && typeof p.url === "string" && p.url.length > 0;
+  }
+  async function openTab(url) {
+    try {
+      await chrome.tabs.create({ url, active: false });
+    } catch (e) {
+      try {
+        await chrome.windows.create({ url, focused: false });
+      } catch {
+      }
+    }
+  }
+  async function autoOpenOfflineLinks(apiKey2, sessionCutoff) {
+    const enabled = await storageRepository.getAutoOpenLinksOnReconnect();
+    if (!enabled) {
+      debugLogger.websocket("DEBUG", "Auto-open offline links disabled");
+      return;
+    }
+    const safetyCap = await storageRepository.getMaxAutoOpenPerReconnect();
+    const lastAuto = await storageRepository.getLastAutoOpenCutoff() || 0;
+    const modifiedAfter = Math.max(lastAuto, sessionCutoff || 0);
+    debugLogger.websocket("INFO", "Auto-open links: fetching incremental changes", { modifiedAfter });
+    const changes = await fetchIncrementalPushes(apiKey2, modifiedAfter, 100);
+    const candidates = changes.filter(isLinkPush2).filter((p) => (typeof p.created === "number" ? p.created : 0) > lastAuto).sort((a, b) => (a.created || 0) - (b.created || 0));
+    if (candidates.length === 0) {
+      debugLogger.websocket("INFO", "Auto-open links: no new link pushes to open");
+      return;
+    }
+    const toOpen = candidates.slice(0, safetyCap);
+    debugLogger.websocket("INFO", "Auto-opening link pushes", { count: toOpen.length, total: candidates.length });
+    for (const p of toOpen) {
+      await openTab(p.url);
+    }
+    const maxCreated = Math.max(lastAuto, ...toOpen.map((p) => p.created || 0));
+    if (maxCreated > lastAuto) {
+      await storageRepository.setLastAutoOpenCutoff(maxCreated);
+      debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", { old: lastAuto, new: maxCreated });
+    }
+    if (candidates.length > safetyCap) {
+      debugLogger.websocket("WARN", "Auto-open links capped", { total: candidates.length, opened: toOpen.length });
+    }
+  }
+
+  // src/realtime/postConnectQueue.ts
+  var queue = [];
+  function enqueuePostConnect(task) {
+    queue.push(task);
+  }
+  async function runPostConnect() {
+    while (queue.length) {
+      const t = queue.shift();
+      try {
+        await t();
+      } catch {
+      }
+    }
+  }
+
+  // src/background/startup.ts
+  async function orchestrateInitialization({
+    trigger,
+    connectWs
+  }) {
+    startCriticalKeepalive();
+    try {
+      const apiKey2 = await storageRepository.getApiKey();
+      if (!apiKey2) {
+        debugLogger.general("WARN", "No API key available, skipping initialization");
+        return;
+      }
+      debugLogger.general("INFO", "Starting orchestrated initialization", { trigger });
+      const cachedUser = await storageRepository.getUserInfoCache();
+      if (cachedUser) {
+        sessionCache.userInfo = cachedUser;
+        debugLogger.general("INFO", "Loaded user info from cache");
+      }
+      const userP = getUserInfoWithTimeoutRetry(apiKey2).then(async (u) => {
+        sessionCache.userInfo = u;
+        await storageRepository.setUserInfoCache(u);
+        debugLogger.general("INFO", "User info fetched and cached");
+      }).catch((e) => {
+        debugLogger.api("WARN", "users/me timed out or failed; using cache if present", { error: String(e) });
+      });
+      const devicesP = fetchDevices(apiKey2).then((d) => {
+        sessionCache.devices = d;
+        debugLogger.general("INFO", "Devices fetched", { count: d.length });
+      });
+      const pushesP = fetchRecentPushes(apiKey2).then((p) => {
+        sessionCache.recentPushes = p;
+        debugLogger.general("INFO", "Recent pushes fetched", { count: p.length });
+      });
+      const wsP = Promise.resolve().then(() => connectWs());
+      const results = await Promise.allSettled([devicesP, pushesP, wsP]);
+      debugLogger.general("INFO", "Functional ready: devices, pushes, ws initialized", {
+        trigger,
+        results: results.map((r, i) => ({ index: i, status: r.status }))
+      });
+      await userP.catch(() => {
+      });
+      enqueuePostConnect(async () => {
+        debugLogger.general("INFO", "Running post-connect task: device registration and chats");
+      });
+      debugLogger.general("INFO", "Orchestrated initialization complete", { trigger });
+    } catch (error) {
+      debugLogger.general("ERROR", "Orchestrated initialization failed", {
+        trigger,
+        error: error.message
+      });
+      throw error;
+    } finally {
+      stopCriticalKeepalive();
+    }
+  }
+
   // src/lib/security/message-validation.ts
   function isValidSender(sender) {
     if (!sender) {
@@ -3060,40 +3293,164 @@
   function getNotificationStore() {
     return notificationDataStore;
   }
-  async function getApiKeyWithRetries(attempts = 3, delay = 100) {
-    for (let i = 0; i < attempts; i++) {
+  var websocketClient2 = null;
+  globalEventBus.on("websocket:tickle:push", async () => {
+    await refreshPushes(notificationDataStore);
+  });
+  globalEventBus.on("websocket:tickle:device", async () => {
+    const apiKey2 = getApiKey();
+    if (apiKey2) {
+      const devices = await fetchDevices(apiKey2);
+      sessionCache.devices = devices;
+      sessionCache.lastUpdated = Date.now();
+      chrome.runtime.sendMessage({
+        action: "sessionDataUpdated" /* SESSION_DATA_UPDATED */,
+        devices,
+        userInfo: sessionCache.userInfo,
+        recentPushes: sessionCache.recentPushes,
+        autoOpenLinks: sessionCache.autoOpenLinks,
+        deviceNickname: sessionCache.deviceNickname
+      }).catch(() => {
+      });
+    }
+  });
+  globalEventBus.on("websocket:push", async (push) => {
+    await ensureConfigLoaded();
+    performanceMonitor.recordPushReceived();
+    let decryptedPush = push;
+    if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
       try {
-        const apiKey2 = await storageRepository.getApiKey();
-        if (apiKey2) {
-          debugLogger.storage(
-            "INFO",
-            `API key found on attempt ${i + 1}/${attempts}`
+        const password = await storageRepository.getEncryptionPassword();
+        if (password && sessionCache.userInfo) {
+          debugLogger.general("INFO", "Decrypting encrypted push", {
+            pushIden: push.iden
+          });
+          const decrypted = await PushbulletCrypto.decryptPush(
+            push,
+            password,
+            sessionCache.userInfo.iden
           );
-          return apiKey2;
+          decryptedPush = decrypted;
+          debugLogger.general("INFO", "Push decrypted successfully", {
+            pushType: decryptedPush.type
+          });
+          debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
+            completeData: decryptedPush
+          });
+        } else {
+          debugLogger.general(
+            "WARN",
+            "Cannot decrypt push - no encryption password set"
+          );
         }
-        debugLogger.storage(
-          "DEBUG",
-          `API key not found on attempt ${i + 1}/${attempts}, will retry`
-        );
       } catch (error) {
-        debugLogger.storage(
-          "WARN",
-          `Error getting API key on attempt ${i + 1}/${attempts}`,
-          null,
+        debugLogger.general(
+          "ERROR",
+          "Failed to decrypt push",
+          {
+            error: error.message
+          },
           error
         );
       }
-      if (i < attempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
     }
-    debugLogger.storage(
-      "WARN",
-      `API key not found after ${attempts} retry attempts - assuming no key configured`
+    const displayableTypes = ["mirror", "note", "link", "sms_changed"];
+    if (!displayableTypes.includes(decryptedPush.type)) {
+      debugLogger.general("INFO", "Ignoring non-displayable push of type", {
+        pushType: decryptedPush.type,
+        pushIden: decryptedPush.iden
+      });
+      return;
+    }
+    debugLogger.general("INFO", "Processing displayable push of type", {
+      pushType: decryptedPush.type,
+      pushIden: decryptedPush.iden
+    });
+    if (decryptedPush.type === "mirror") {
+      debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
+        completeMirrorData: decryptedPush
+      });
+    }
+    if (sessionCache.recentPushes) {
+      sessionCache.recentPushes.unshift(decryptedPush);
+      saveSessionCache(sessionCache);
+      sessionCache.lastUpdated = Date.now();
+      chrome.runtime.sendMessage({
+        action: "pushesUpdated" /* PUSHES_UPDATED */,
+        pushes: sessionCache.recentPushes
+      }).catch(() => {
+      });
+    }
+    showPushNotification(decryptedPush, notificationDataStore).catch(
+      (error) => {
+        debugLogger.general(
+          "ERROR",
+          "Failed to show notification",
+          null,
+          error
+        );
+        performanceMonitor.recordNotificationFailed();
+      }
     );
-    return null;
-  }
-  var websocketClient2 = null;
+    const autoOpenLinks2 = getAutoOpenLinks();
+    if (autoOpenLinks2 && isLinkPush(decryptedPush)) {
+      debugLogger.general("INFO", "Auto-opening link push", {
+        pushIden: decryptedPush.iden,
+        url: decryptedPush.url
+      });
+      chrome.tabs.create({
+        url: decryptedPush.url,
+        active: false
+        // Open in background to avoid disrupting user
+      }).catch((error) => {
+        debugLogger.general(
+          "ERROR",
+          "Failed to auto-open link",
+          {
+            url: decryptedPush.url
+          },
+          error
+        );
+      });
+    }
+  });
+  globalEventBus.on("websocket:connected", async () => {
+    debugLogger.websocket("INFO", "WebSocket connected - checking for offline links to open");
+    const recoveryTime = Date.now() - recoveryTimerStart;
+    debugLogger.performance("INFO", "WebSocket recovery time", {
+      duration: recoveryTime
+    });
+    const { recoveryTimings = [] } = await chrome.storage.local.get("recoveryTimings");
+    recoveryTimings.push(recoveryTime);
+    await chrome.storage.local.set({
+      recoveryTimings: recoveryTimings.slice(-20)
+    });
+    stateMachine.transition("WS_CONNECTED");
+    void runPostConnect();
+    try {
+      const apiKey2 = getApiKey();
+      if (!apiKey2) {
+        debugLogger.general("WARN", "No API key for auto-open links");
+        return;
+      }
+      const sessionCutoff = sessionCache.lastModifiedCutoff || await storageRepository.getLastModifiedCutoff() || 0;
+      await autoOpenOfflineLinks(apiKey2, sessionCutoff);
+    } catch (e) {
+      debugLogger.general("ERROR", "Auto-open on reconnect failed", { error: e.message });
+    }
+  });
+  globalEventBus.on("websocket:disconnected", () => {
+    stateMachine.transition("WS_DISCONNECTED");
+  });
+  globalEventBus.on("websocket:polling:check", () => {
+    checkPollingMode();
+  });
+  globalEventBus.on("websocket:polling:stop", () => {
+    stopPollingMode();
+  });
+  globalEventBus.on("websocket:state", (state) => {
+    updatePopupConnectionState(state);
+  });
   var recoveryTimerStart = 0;
   var stateMachine;
   var stateMachineCallbacks = {
@@ -3139,6 +3496,18 @@
     );
   });
   function connectWebSocket() {
+    if (websocketClient2) {
+      const isConnected = websocketClient2.isConnected();
+      const isConnecting = websocketClient2.getReadyState() === WebSocket.CONNECTING;
+      if (isConnected || isConnecting) {
+        debugLogger.websocket("DEBUG", "WebSocket already connected/connecting, skipping duplicate call", {
+          isConnected,
+          isConnecting,
+          readyState: websocketClient2.getReadyState()
+        });
+        return;
+      }
+    }
     recoveryTimerStart = Date.now();
     if (websocketClient2) {
       debugLogger.websocket(
@@ -3148,164 +3517,8 @@
       websocketClient2.disconnect();
       websocketClient2 = null;
     }
-    debugLogger.websocket(
-      "DEBUG",
-      "Cleaning up old event listeners before reconnecting"
-    );
-    globalEventBus.removeAllListeners("websocket:tickle:push");
-    globalEventBus.removeAllListeners("websocket:tickle:device");
-    globalEventBus.removeAllListeners("websocket:push");
-    globalEventBus.removeAllListeners("websocket:connected");
-    globalEventBus.removeAllListeners("websocket:disconnected");
-    globalEventBus.removeAllListeners("websocket:polling:check");
-    globalEventBus.removeAllListeners("websocket:polling:stop");
-    globalEventBus.removeAllListeners("websocket:state");
     websocketClient2 = new WebSocketClient(WEBSOCKET_URL, getApiKey);
     setWebSocketClient(websocketClient2);
-    globalEventBus.on("websocket:tickle:push", async () => {
-      await refreshPushes(notificationDataStore);
-    });
-    globalEventBus.on("websocket:tickle:device", async () => {
-      const apiKey2 = getApiKey();
-      if (apiKey2) {
-        const devices = await fetchDevices(apiKey2);
-        sessionCache.devices = devices;
-        sessionCache.lastUpdated = Date.now();
-        chrome.runtime.sendMessage({
-          action: "sessionDataUpdated" /* SESSION_DATA_UPDATED */,
-          devices,
-          userInfo: sessionCache.userInfo,
-          recentPushes: sessionCache.recentPushes,
-          autoOpenLinks: sessionCache.autoOpenLinks,
-          deviceNickname: sessionCache.deviceNickname
-        }).catch(() => {
-        });
-      }
-    });
-    globalEventBus.on("websocket:push", async (push) => {
-      await ensureConfigLoaded();
-      performanceMonitor.recordPushReceived();
-      let decryptedPush = push;
-      if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
-        try {
-          const password = await storageRepository.getEncryptionPassword();
-          if (password && sessionCache.userInfo) {
-            debugLogger.general("INFO", "Decrypting encrypted push", {
-              pushIden: push.iden
-            });
-            const decrypted = await PushbulletCrypto.decryptPush(
-              push,
-              password,
-              sessionCache.userInfo.iden
-            );
-            decryptedPush = decrypted;
-            debugLogger.general("INFO", "Push decrypted successfully", {
-              pushType: decryptedPush.type
-            });
-            debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
-              completeData: decryptedPush
-            });
-          } else {
-            debugLogger.general(
-              "WARN",
-              "Cannot decrypt push - no encryption password set"
-            );
-          }
-        } catch (error) {
-          debugLogger.general(
-            "ERROR",
-            "Failed to decrypt push",
-            {
-              error: error.message
-            },
-            error
-          );
-        }
-      }
-      const displayableTypes = ["mirror", "note", "link", "sms_changed"];
-      if (!displayableTypes.includes(decryptedPush.type)) {
-        debugLogger.general("INFO", "Ignoring non-displayable push of type", {
-          pushType: decryptedPush.type,
-          pushIden: decryptedPush.iden
-        });
-        return;
-      }
-      debugLogger.general("INFO", "Processing displayable push of type", {
-        pushType: decryptedPush.type,
-        pushIden: decryptedPush.iden
-      });
-      if (decryptedPush.type === "mirror") {
-        debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
-          completeMirrorData: decryptedPush
-        });
-      }
-      if (sessionCache.recentPushes) {
-        sessionCache.recentPushes.unshift(decryptedPush);
-        saveSessionCache(sessionCache);
-        sessionCache.lastUpdated = Date.now();
-        chrome.runtime.sendMessage({
-          action: "pushesUpdated" /* PUSHES_UPDATED */,
-          pushes: sessionCache.recentPushes
-        }).catch(() => {
-        });
-      }
-      showPushNotification(decryptedPush, notificationDataStore).catch(
-        (error) => {
-          debugLogger.general(
-            "ERROR",
-            "Failed to show notification",
-            null,
-            error
-          );
-          performanceMonitor.recordNotificationFailed();
-        }
-      );
-      const autoOpenLinks2 = getAutoOpenLinks();
-      if (autoOpenLinks2 && isLinkPush(decryptedPush)) {
-        debugLogger.general("INFO", "Auto-opening link push", {
-          pushIden: decryptedPush.iden,
-          url: decryptedPush.url
-        });
-        chrome.tabs.create({
-          url: decryptedPush.url,
-          active: false
-          // Open in background to avoid disrupting user
-        }).catch((error) => {
-          debugLogger.general(
-            "ERROR",
-            "Failed to auto-open link",
-            {
-              url: decryptedPush.url
-            },
-            error
-          );
-        });
-      }
-    });
-    globalEventBus.on("websocket:connected", async () => {
-      const recoveryTime = Date.now() - recoveryTimerStart;
-      debugLogger.performance("INFO", "WebSocket recovery time", {
-        duration: recoveryTime
-      });
-      const { recoveryTimings = [] } = await chrome.storage.local.get("recoveryTimings");
-      recoveryTimings.push(recoveryTime);
-      await chrome.storage.local.set({
-        recoveryTimings: recoveryTimings.slice(-20)
-      });
-      stateMachine.transition("WS_CONNECTED");
-    });
-    globalEventBus.on("websocket:disconnected", () => {
-      stateMachine.transition("WS_DISCONNECTED");
-    });
-    globalEventBus.on("websocket:polling:check", () => {
-      checkPollingMode();
-    });
-    globalEventBus.on("websocket:polling:stop", () => {
-      stopPollingMode();
-    });
-    globalEventBus.on("websocket:state", (state) => {
-      updatePopupConnectionState(state);
-    });
     websocketClient2.connect();
   }
   function disconnectWebSocket() {
@@ -3313,47 +3526,10 @@
       websocketClient2.disconnect();
     }
   }
-  chrome.runtime.onInstalled.addListener(async () => {
-    const { restarts = 0 } = await chrome.storage.local.get("restarts");
-    await chrome.storage.local.set({ restarts: restarts + 1 });
-    debugLogger.general("INFO", "Pushbullet extension installed/updated", {
-      reason: "onInstalled",
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    initTracker.recordInitialization("onInstalled");
-    setupContextMenu();
-    chrome.alarms.create("logFlush", { periodInMinutes: 1 });
-    chrome.alarms.create("keepalive", {
-      periodInMinutes: 0.5
-      // Every 30 seconds (Chrome's minimum)
-    });
-    await stateMachineReady;
-    const apiKey2 = await getApiKeyWithRetries();
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-  });
-  chrome.runtime.onStartup.addListener(async () => {
-    const { restarts = 0 } = await chrome.storage.local.get("restarts");
-    await chrome.storage.local.set({ restarts: restarts + 1 });
-    debugLogger.general(
-      "INFO",
-      "Browser started - reinitializing Pushbullet extension",
-      {
-        reason: "onStartup",
-        timestamp: (/* @__PURE__ */ new Date()).toISOString()
-      }
-    );
-    initTracker.recordInitialization("onStartup");
-    setupContextMenu();
-    chrome.alarms.create("logFlush", { periodInMinutes: 1 });
-    chrome.alarms.create("keepalive", {
-      periodInMinutes: 0.5
-      // Every 30 seconds (Chrome's minimum)
-    });
-    await stateMachineReady;
-    const apiKey2 = await getApiKeyWithRetries();
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-  });
   chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (handleKeepaliveAlarm(alarm)) {
+      return;
+    }
     if (alarm.name === "keepalive") {
       debugLogger.general("DEBUG", "Keepalive heartbeat");
       const apiKey2 = getApiKey();
@@ -3919,6 +4095,16 @@
   };
   debugLogger.general("INFO", "Background service worker initialized", {
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  async function bootstrap(trigger) {
+    debugLogger.general("INFO", "Bootstrap start", { trigger });
+    void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
+  }
+  chrome.runtime.onStartup.addListener(() => {
+    void bootstrap("startup");
+  });
+  chrome.runtime.onInstalled.addListener(() => {
+    void bootstrap("install");
   });
 })();
 //# sourceMappingURL=background.js.map

@@ -50,7 +50,11 @@ import {
   pushNote,
   updateConnectionIcon,
 } from "./utils";
+import { autoOpenOfflineLinks } from "./links";
+import { orchestrateInitialization } from "./startup";
+import { runPostConnect } from "../realtime/postConnectQueue";
 import { validatePrivilegedMessage } from "../lib/security/message-validation";
+import { handleKeepaliveAlarm } from "./keepalive";
 import type { Push } from "../types/domain";
 import { isLinkPush } from "../types/domain";
 import {
@@ -143,6 +147,220 @@ async function getApiKeyWithRetries(
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
 
+// Register WebSocket event listeners ONCE at module load
+// These should NOT be removed/re-registered on each connect
+globalEventBus.on("websocket:tickle:push", async () => {
+  await refreshPushes(notificationDataStore);
+});
+
+globalEventBus.on("websocket:tickle:device", async () => {
+  const apiKey = getApiKey();
+  if (apiKey) {
+    const devices = await fetchDevices(apiKey);
+    sessionCache.devices = devices;
+    sessionCache.lastUpdated = Date.now();
+
+    chrome.runtime
+      .sendMessage({
+        action: MessageAction.SESSION_DATA_UPDATED,
+        devices: devices,
+        userInfo: sessionCache.userInfo,
+        recentPushes: sessionCache.recentPushes,
+        autoOpenLinks: sessionCache.autoOpenLinks,
+        deviceNickname: sessionCache.deviceNickname,
+      })
+      .catch(() => {});
+  }
+});
+
+globalEventBus.on("websocket:push", async (push: Push) => {
+  // RACE CONDITION FIX: Ensure configuration is loaded before processing push
+  await ensureConfigLoaded();
+
+  // Track push received
+  performanceMonitor.recordPushReceived();
+
+  let decryptedPush = push;
+
+  // Check if push is encrypted
+  if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
+    try {
+      // Get encryption password from storage repository
+      const password = await storageRepository.getEncryptionPassword();
+
+      if (password && sessionCache.userInfo) {
+        debugLogger.general("INFO", "Decrypting encrypted push", {
+          pushIden: push.iden,
+        });
+
+        const decrypted = await PushbulletCrypto.decryptPush(
+          push as any,
+          password,
+          sessionCache.userInfo.iden,
+        );
+
+        decryptedPush = decrypted as Push;
+        debugLogger.general("INFO", "Push decrypted successfully", {
+          pushType: decryptedPush.type,
+        });
+
+        // ADD THIS - Full dump of decrypted data
+        debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
+          completeData: decryptedPush,
+        });
+      } else {
+        debugLogger.general(
+          "WARN",
+          "Cannot decrypt push - no encryption password set",
+        );
+      }
+    } catch (error) {
+      debugLogger.general(
+        "ERROR",
+        "Failed to decrypt push",
+        {
+          error: (error as Error).message,
+        },
+        error as Error,
+      );
+    }
+  }
+
+  // --- FILTERING LOGIC: Only process displayable push types ---
+  const displayableTypes = ["mirror", "note", "link", "sms_changed"];
+
+  if (!displayableTypes.includes(decryptedPush.type)) {
+    // Log for debugging purposes and ignore the push
+    debugLogger.general("INFO", "Ignoring non-displayable push of type", {
+      pushType: decryptedPush.type,
+      pushIden: decryptedPush.iden,
+    });
+    return;
+  }
+
+  // Log that we're processing a displayable push
+  debugLogger.general("INFO", "Processing displayable push of type", {
+    pushType: decryptedPush.type,
+    pushIden: decryptedPush.iden,
+  });
+
+  // ADD THIS - Dump for Mirror Messages
+  if (decryptedPush.type === 'mirror') {
+    // Log full mirror message data to see all available fields
+    debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
+      completeMirrorData: decryptedPush,
+    });
+  }
+
+  // Update cache (prepend)
+  if (sessionCache.recentPushes) {
+    sessionCache.recentPushes.unshift(decryptedPush);
+    // Save the updated cache (with the new push) to our database.
+    saveSessionCache(sessionCache);
+    sessionCache.lastUpdated = Date.now();
+
+    chrome.runtime
+      .sendMessage({
+        action: MessageAction.PUSHES_UPDATED,
+        pushes: sessionCache.recentPushes,
+      })
+      .catch(() => {});
+  }
+
+  // FIX: Don't await - let notifications show immediately without blocking
+  // This allows multiple notifications to appear concurrently
+  showPushNotification(decryptedPush, notificationDataStore).catch(
+    (error) => {
+      debugLogger.general(
+        "ERROR",
+        "Failed to show notification",
+        null,
+        error,
+      );
+      performanceMonitor.recordNotificationFailed();
+    },
+  );
+
+  // Auto-open links if setting is enabled
+  const autoOpenLinks = getAutoOpenLinks();
+  if (autoOpenLinks && isLinkPush(decryptedPush)) {
+    debugLogger.general("INFO", "Auto-opening link push", {
+      pushIden: decryptedPush.iden,
+      url: decryptedPush.url,
+    });
+
+    chrome.tabs
+      .create({
+        url: decryptedPush.url,
+        active: false, // Open in background to avoid disrupting user
+      })
+      .catch((error) => {
+        debugLogger.general(
+          "ERROR",
+          "Failed to auto-open link",
+          {
+            url: decryptedPush.url,
+          },
+          error,
+        );
+      });
+  }
+});
+
+globalEventBus.on("websocket:connected", async () => {
+  debugLogger.websocket('INFO', 'WebSocket connected - checking for offline links to open');
+
+  // MV3 LIFECYCLE TRACKING: Calculate and store recovery time
+  const recoveryTime = Date.now() - recoveryTimerStart;
+  debugLogger.performance("INFO", "WebSocket recovery time", {
+    duration: recoveryTime,
+  });
+  const { recoveryTimings = [] } =
+    await chrome.storage.local.get("recoveryTimings");
+  recoveryTimings.push(recoveryTime);
+  // Keep only the last 20 timings for averaging
+  await chrome.storage.local.set({
+    recoveryTimings: recoveryTimings.slice(-20),
+  });
+
+  // Trigger state machine transition
+  stateMachine.transition("WS_CONNECTED");
+
+  // Run post-connect tasks
+  void runPostConnect();
+
+  // Auto-open offline links if enabled
+  try {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      debugLogger.general('WARN', 'No API key for auto-open links');
+      return;
+    }
+
+    const sessionCutoff = sessionCache.lastModifiedCutoff || (await storageRepository.getLastModifiedCutoff()) || 0;
+    await autoOpenOfflineLinks(apiKey, sessionCutoff);
+  } catch (e) {
+    debugLogger.general('ERROR', 'Auto-open on reconnect failed', { error: (e as Error).message });
+  }
+});
+
+globalEventBus.on("websocket:disconnected", () => {
+  // Trigger state machine transition
+  stateMachine.transition("WS_DISCONNECTED");
+});
+
+globalEventBus.on("websocket:polling:check", () => {
+  checkPollingMode();
+});
+
+globalEventBus.on("websocket:polling:stop", () => {
+  stopPollingMode();
+});
+
+globalEventBus.on("websocket:state", (state: string) => {
+  updatePopupConnectionState(state);
+});
+
 // MV3 LIFECYCLE TRACKING: Recovery timer for measuring WebSocket reconnection time
 let recoveryTimerStart: number = 0;
 
@@ -208,6 +426,21 @@ const stateMachineReady = ServiceWorkerStateMachine.create(
  * Connect to WebSocket
  */
 function connectWebSocket(): void {
+  // Guard: Don't reconnect if already connected or connecting
+  if (websocketClient) {
+    const isConnected = websocketClient.isConnected();
+    const isConnecting = websocketClient.getReadyState() === WebSocket.CONNECTING;
+
+    if (isConnected || isConnecting) {
+      debugLogger.websocket('DEBUG', 'WebSocket already connected/connecting, skipping duplicate call', {
+        isConnected,
+        isConnecting,
+        readyState: websocketClient.getReadyState()
+      });
+      return; // EXIT EARLY - do not proceed
+    }
+  }
+
   // MV3 LIFECYCLE TRACKING: Start recovery timer
   recoveryTimerStart = Date.now();
 
@@ -221,222 +454,8 @@ function connectWebSocket(): void {
     websocketClient = null;
   }
 
-  // RACE CONDITION FIX: Remove all previous event listeners to prevent listener leaks
-  // When connectWebSocket is called multiple times (during reconnection attempts),
-  // old listeners accumulate, causing duplicate event handling and multiple notifications
-  // for the same push. This cleanup ensures only one set of listeners is active.
-  debugLogger.websocket(
-    "DEBUG",
-    "Cleaning up old event listeners before reconnecting",
-  );
-  globalEventBus.removeAllListeners("websocket:tickle:push");
-  globalEventBus.removeAllListeners("websocket:tickle:device");
-  globalEventBus.removeAllListeners("websocket:push");
-  globalEventBus.removeAllListeners("websocket:connected");
-  globalEventBus.removeAllListeners("websocket:disconnected");
-  globalEventBus.removeAllListeners("websocket:polling:check");
-  globalEventBus.removeAllListeners("websocket:polling:stop");
-  globalEventBus.removeAllListeners("websocket:state");
-
   websocketClient = new WebSocketClient(WEBSOCKET_URL, getApiKey);
   setWebSocketClient(websocketClient);
-
-  // Set up event listeners using event bus
-  // ARCHITECTURAL CHANGE: Using event-driven architecture instead of direct handler calls
-  // This decouples the WebSocketClient from the background script
-
-  globalEventBus.on("websocket:tickle:push", async () => {
-    await refreshPushes(notificationDataStore);
-  });
-
-  globalEventBus.on("websocket:tickle:device", async () => {
-    const apiKey = getApiKey();
-    if (apiKey) {
-      const devices = await fetchDevices(apiKey);
-      sessionCache.devices = devices;
-      sessionCache.lastUpdated = Date.now();
-
-      chrome.runtime
-        .sendMessage({
-          action: MessageAction.SESSION_DATA_UPDATED,
-          devices: devices,
-          userInfo: sessionCache.userInfo,
-          recentPushes: sessionCache.recentPushes,
-          autoOpenLinks: sessionCache.autoOpenLinks,
-          deviceNickname: sessionCache.deviceNickname,
-        })
-        .catch(() => {});
-    }
-  });
-
-  globalEventBus.on("websocket:push", async (push: Push) => {
-    // RACE CONDITION FIX: Ensure configuration is loaded before processing push
-    await ensureConfigLoaded();
-
-    // Track push received
-    performanceMonitor.recordPushReceived();
-
-    let decryptedPush = push;
-
-    // Check if push is encrypted
-    if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
-      try {
-        // Get encryption password from storage repository
-        const password = await storageRepository.getEncryptionPassword();
-
-        if (password && sessionCache.userInfo) {
-          debugLogger.general("INFO", "Decrypting encrypted push", {
-            pushIden: push.iden,
-          });
-
-          const decrypted = await PushbulletCrypto.decryptPush(
-            push as any,
-            password,
-            sessionCache.userInfo.iden,
-          );
-
-          decryptedPush = decrypted as Push;
-          debugLogger.general("INFO", "Push decrypted successfully", {
-            pushType: decryptedPush.type,
-          });
-
-          // ADD THIS - Full dump of decrypted data
-          debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
-            completeData: decryptedPush,
-          });
-        } else {
-          debugLogger.general(
-            "WARN",
-            "Cannot decrypt push - no encryption password set",
-          );
-        }
-      } catch (error) {
-        debugLogger.general(
-          "ERROR",
-          "Failed to decrypt push",
-          {
-            error: (error as Error).message,
-          },
-          error as Error,
-        );
-      }
-    }
-
-    // --- FILTERING LOGIC: Only process displayable push types ---
-    const displayableTypes = ["mirror", "note", "link", "sms_changed"];
-
-    if (!displayableTypes.includes(decryptedPush.type)) {
-      // Log for debugging purposes and ignore the push
-      debugLogger.general("INFO", "Ignoring non-displayable push of type", {
-        pushType: decryptedPush.type,
-        pushIden: decryptedPush.iden,
-      });
-      return;
-    }
-
-    // Log that we're processing a displayable push
-    debugLogger.general("INFO", "Processing displayable push of type", {
-      pushType: decryptedPush.type,
-      pushIden: decryptedPush.iden,
-    });
-
-    // ADD THIS - Dump for Mirror Messages
-    if (decryptedPush.type === 'mirror') {
-      // Log full mirror message data to see all available fields
-      debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
-        completeMirrorData: decryptedPush,
-      });
-    }
-
-    // Update cache (prepend)
-    if (sessionCache.recentPushes) {
-      sessionCache.recentPushes.unshift(decryptedPush);
-      // Save the updated cache (with the new push) to our database.
-      saveSessionCache(sessionCache);
-      sessionCache.lastUpdated = Date.now();
-
-      chrome.runtime
-        .sendMessage({
-          action: MessageAction.PUSHES_UPDATED,
-          pushes: sessionCache.recentPushes,
-        })
-        .catch(() => {});
-    }
-
-    // FIX: Don't await - let notifications show immediately without blocking
-    // This allows multiple notifications to appear concurrently
-    showPushNotification(decryptedPush, notificationDataStore).catch(
-      (error) => {
-        debugLogger.general(
-          "ERROR",
-          "Failed to show notification",
-          null,
-          error,
-        );
-        performanceMonitor.recordNotificationFailed();
-      },
-    );
-
-    // Auto-open links if setting is enabled
-    const autoOpenLinks = getAutoOpenLinks();
-    if (autoOpenLinks && isLinkPush(decryptedPush)) {
-      debugLogger.general("INFO", "Auto-opening link push", {
-        pushIden: decryptedPush.iden,
-        url: decryptedPush.url,
-      });
-
-      chrome.tabs
-        .create({
-          url: decryptedPush.url,
-          active: false, // Open in background to avoid disrupting user
-        })
-        .catch((error) => {
-          debugLogger.general(
-            "ERROR",
-            "Failed to auto-open link",
-            {
-              url: decryptedPush.url,
-            },
-            error,
-          );
-        });
-    }
-  });
-
-  globalEventBus.on("websocket:connected", async () => {
-    // MV3 LIFECYCLE TRACKING: Calculate and store recovery time
-    const recoveryTime = Date.now() - recoveryTimerStart;
-    debugLogger.performance("INFO", "WebSocket recovery time", {
-      duration: recoveryTime,
-    });
-    const { recoveryTimings = [] } =
-      await chrome.storage.local.get("recoveryTimings");
-    recoveryTimings.push(recoveryTime);
-    // Keep only the last 20 timings for averaging
-    await chrome.storage.local.set({
-      recoveryTimings: recoveryTimings.slice(-20),
-    });
-
-    // Trigger state machine transition
-    stateMachine.transition("WS_CONNECTED");
-  });
-
-  globalEventBus.on("websocket:disconnected", () => {
-    // Trigger state machine transition
-    stateMachine.transition("WS_DISCONNECTED");
-  });
-
-  globalEventBus.on("websocket:polling:check", () => {
-    checkPollingMode();
-  });
-
-  globalEventBus.on("websocket:polling:stop", () => {
-    stopPollingMode();
-  });
-
-  globalEventBus.on("websocket:state", (state: string) => {
-    updatePopupConnectionState(state);
-  });
 
   websocketClient.connect();
 }
@@ -454,82 +473,17 @@ function disconnectWebSocket(): void {
 // Chrome Event Listeners
 // ============================================================================
 
-/**
- * Extension installed/updated
- */
-chrome.runtime.onInstalled.addListener(async () => {
-  // MV3 LIFECYCLE TRACKING: Increment restart counter
-  const { restarts = 0 } = await chrome.storage.local.get("restarts");
-  await chrome.storage.local.set({ restarts: restarts + 1 });
 
-  debugLogger.general("INFO", "Pushbullet extension installed/updated", {
-    reason: "onInstalled",
-    timestamp: new Date().toISOString(),
-  });
-
-  initTracker.recordInitialization("onInstalled");
-  setupContextMenu();
-
-  // Create periodic log flush alarm
-  chrome.alarms.create("logFlush", { periodInMinutes: 1 });
-
-  // In chrome.runtime.onInstalled and onStartup listeners
-  chrome.alarms.create("keepalive", {
-    periodInMinutes: 0.5, // Every 30 seconds (Chrome's minimum)
-  });
-
-  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
-  // This ensures the state machine has loaded its persisted state from storage
-  await stateMachineReady;
-
-  // Now that the machine is ready and has its state, just tell it
-  // that a startup event happened. It will decide what to do.
-  const apiKey = await getApiKeyWithRetries();
-  await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
-});
-
-/**
- * Browser startup
- */
-chrome.runtime.onStartup.addListener(async () => {
-  // MV3 LIFECYCLE TRACKING: Increment restart counter
-  const { restarts = 0 } = await chrome.storage.local.get("restarts");
-  await chrome.storage.local.set({ restarts: restarts + 1 });
-
-  debugLogger.general(
-    "INFO",
-    "Browser started - reinitializing Pushbullet extension",
-    {
-      reason: "onStartup",
-      timestamp: new Date().toISOString(),
-    },
-  );
-
-  initTracker.recordInitialization("onStartup");
-  setupContextMenu();
-
-  // Create periodic log flush alarm
-  chrome.alarms.create("logFlush", { periodInMinutes: 1 });
-
-  // In chrome.runtime.onInstalled and onStartup listeners
-  chrome.alarms.create("keepalive", {
-    periodInMinutes: 0.5, // Every 30 seconds (Chrome's minimum)
-  });
-
-  // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
-  // This ensures the state machine has loaded its persisted state from storage
-  await stateMachineReady;
-
-  // Now that the machine is ready and has its state, just tell it
-  // that a startup event happened. It will decide what to do.
-  const apiKey = await getApiKeyWithRetries();
-  await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
-});
 
 /**
  * Alarm listener
  */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  // Handle critical keepalive FIRST
+  if (handleKeepaliveAlarm(alarm)) {
+    return; // Handled by keepalive utility
+  }
+
   if (alarm.name === "keepalive") {
     // Minimal work to prevent termination
     debugLogger.general("DEBUG", "Keepalive heartbeat");
@@ -1275,3 +1229,18 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 debugLogger.general("INFO", "Background service worker initialized", {
   timestamp: new Date().toISOString(),
 });
+
+// Bootstrap initialization immediately on startup/install
+async function bootstrap(trigger: 'startup' | 'install' | 'wakeup'): Promise<void> {
+  debugLogger.general('INFO', 'Bootstrap start', { trigger });
+  // Start session initialization right away
+  void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
+}
+
+chrome.runtime.onStartup.addListener(() => { void bootstrap('startup'); });
+chrome.runtime.onInstalled.addListener(() => { void bootstrap('install'); });
+
+// Optional: if you also track other wake-ups, funnel them here too
+// chrome.alarms.onAlarm.addListener(a => {
+//   if (a.name === 'keepAlive' || a.name === 'recovery') { void bootstrap('wakeup'); }
+// });

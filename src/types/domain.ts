@@ -147,6 +147,8 @@ export interface SessionCache {
   lastUpdated: number;
   autoOpenLinks: boolean;
   deviceNickname: string;
+  // NEW: server-driven cutoff for incremental sync
+  lastModifiedCutoff?: number; // max 'modified' seen
 }
 
 export interface InitializationState {
@@ -202,6 +204,7 @@ export interface DevicesResponse {
 
 export interface PushesResponse {
   pushes: Push[];
+  cursor?: string;
 }
 
 export type UserResponse = User;

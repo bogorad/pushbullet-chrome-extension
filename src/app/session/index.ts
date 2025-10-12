@@ -1,14 +1,16 @@
-import type { SessionCache } from "../../types/domain";
+import type { SessionCache, Push } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import {
   fetchChats,
   fetchDevices,
+  fetchIncrementalPushes,
   fetchRecentPushes,
   fetchUserInfo,
   registerDevice,
 } from "../api/client";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
 import { saveSessionCache } from "../../infrastructure/storage/indexed-db";
+import { startCriticalKeepalive, stopCriticalKeepalive } from "../../background/keepalive";
 
 // Session cache state
 export const sessionCache: SessionCache = {
@@ -92,6 +94,9 @@ export async function initializeSessionCache(
 
   // Create and store the initialization promise
   initPromise = (async () => {
+    // START keepalive
+    startCriticalKeepalive();
+
     try {
       debugLogger.general("INFO", "Initializing session cache", {
         source,
@@ -161,8 +166,21 @@ export async function initializeSessionCache(
         sessionCache.devices = devices;
 
         // Fetch recent pushes
-        const pushes = await fetchRecentPushes(apiKeyValue);
-        sessionCache.recentPushes = pushes;
+        const storedCutoff = await storageRepository.getLastModifiedCutoff();
+        let recentPushes: Push[] = [];
+
+        if (storedCutoff && storedCutoff > 0) {
+          // Incremental path
+          recentPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
+        } else {
+          // First run path: keep current behavior, then seed cutoff
+          recentPushes = await fetchRecentPushes(apiKeyValue); // existing function
+          const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+          if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+        }
+
+        sessionCache.recentPushes = recentPushes;
+        sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
 
         // ========== ADD THIS ENTIRE BLOCK ==========
         // Fetch chats (friends/contacts)
@@ -236,6 +254,8 @@ export async function initializeSessionCache(
       sessionCache.isAuthenticated = false;
       throw error;
     } finally {
+      // ALWAYS stop keepalive
+      stopCriticalKeepalive();
       // Clear the promise reference to allow retry on failure
       initPromise = null;
     }
@@ -269,8 +289,21 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
 
       // Fetch recent pushes
       debugLogger.general("DEBUG", "Refreshing recent pushes");
-      const pushes = await fetchRecentPushes(apiKeyParam);
-      sessionCache.recentPushes = pushes;
+      const storedCutoff = await storageRepository.getLastModifiedCutoff();
+      let recentPushes: Push[] = [];
+
+      if (storedCutoff && storedCutoff > 0) {
+        // Incremental path
+        recentPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
+      } else {
+        // First run path: keep current behavior, then seed cutoff
+        recentPushes = await fetchRecentPushes(apiKeyParam); // existing function
+        const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+        if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+      }
+
+      sessionCache.recentPushes = recentPushes;
+      sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
 
       // ========== ADD THIS ==========
       // Refresh chats

@@ -138,6 +138,75 @@
       await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
     }
     /**
+     * Get Last Modified Cutoff from local storage
+     */
+    async getLastModifiedCutoff() {
+      const result = await chrome.storage.local.get(["lastModifiedCutoff"]);
+      const cutoff = result.lastModifiedCutoff;
+      return typeof cutoff === "number" ? cutoff : null;
+    }
+    /**
+     * Set Last Modified Cutoff in local storage
+     */
+    async setLastModifiedCutoff(value) {
+      await chrome.storage.local.set({ lastModifiedCutoff: value });
+    }
+    /**
+     * Get Last Auto Open Cutoff from local storage
+     */
+    async getLastAutoOpenCutoff() {
+      const result = await chrome.storage.local.get(["lastAutoOpenCutoff"]);
+      const v = result.lastAutoOpenCutoff;
+      return typeof v === "number" ? v : null;
+    }
+    /**
+     * Set Last Auto Open Cutoff in local storage
+     */
+    async setLastAutoOpenCutoff(value) {
+      await chrome.storage.local.set({ lastAutoOpenCutoff: value });
+    }
+    /**
+     * Get Auto Open Links on Reconnect setting from local storage
+     */
+    async getAutoOpenLinksOnReconnect() {
+      const result = await chrome.storage.local.get(["autoOpenLinksOnReconnect"]);
+      const v = result.autoOpenLinksOnReconnect;
+      return typeof v === "boolean" ? v : false;
+    }
+    /**
+     * Set Auto Open Links on Reconnect setting in local storage
+     */
+    async setAutoOpenLinksOnReconnect(value) {
+      await chrome.storage.local.set({ autoOpenLinksOnReconnect: value });
+    }
+    /**
+     * Get Max Auto Open Per Reconnect from local storage
+     */
+    async getMaxAutoOpenPerReconnect() {
+      const result = await chrome.storage.local.get(["maxAutoOpenPerReconnect"]);
+      const v = result.maxAutoOpenPerReconnect;
+      return typeof v === "number" && v > 0 ? v : 5;
+    }
+    /**
+     * Set Max Auto Open Per Reconnect in local storage
+     */
+    async setMaxAutoOpenPerReconnect(value) {
+      await chrome.storage.local.set({ maxAutoOpenPerReconnect: value });
+    }
+    /**
+     * Get User Info Cache from local storage
+     */
+    async getUserInfoCache() {
+      const result = await chrome.storage.local.get(["userInfoCache"]);
+      return result.userInfoCache || null;
+    }
+    /**
+     * Set User Info Cache in local storage
+     */
+    async setUserInfoCache(value) {
+      await chrome.storage.local.set({ userInfoCache: value });
+    }
+    /**
      * Clear all storage (both sync and local)
      */
     async clear() {

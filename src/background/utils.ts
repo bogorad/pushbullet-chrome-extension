@@ -5,7 +5,8 @@
 import { debugLogger } from "../lib/logging";
 import { performanceMonitor } from "../lib/perf";
 import { sessionCache } from "../app/session";
-import { fetchRecentPushes } from "../app/api/client";
+import { fetchIncrementalPushes } from "../app/api/client";
+import { storageRepository } from "../infrastructure/storage/storage.repository";
 import {
   getApiKey,
   getAutoOpenLinks,
@@ -164,55 +165,65 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
   }
 }
 
+function upsertPushes(existing: Push[], incoming: Push[]): { updated: Push[]; newOnes: Push[] } {
+  const map = new Map(existing.map(p => [p.iden, p]));
+  const newOnes: Push[] = [];
+
+  for (const p of incoming) {
+    if (map.has(p.iden)) {
+      map.set(p.iden, { ...map.get(p.iden)!, ...p }); // merge updates like dismissed
+    } else {
+      newOnes.push(p);
+      map.set(p.iden, p);
+    }
+  }
+
+  // Keep most-recent-first, cap length to prevent unbounded growth (e.g., 200)
+  const updated = Array.from(map.values()).sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 200);
+  return { updated, newOnes };
+}
+
 /**
  * Refresh pushes from API and show notifications for new ones
  */
 export async function refreshPushes(
   notificationDataStore?: Map<string, Push>,
 ): Promise<void> {
-  // RACE CONDITION FIX: Ensure configuration is loaded before processing pushes
-  // This prevents the autoOpenLinks setting from being its default (false) value
-  // when a push arrives before settings have finished loading from storage
-  await ensureConfigLoaded();
-
+  await ensureConfigLoaded(); // already present in background flow
   const apiKey = getApiKey();
   if (!apiKey) {
-    debugLogger.general("WARN", "Cannot refresh pushes - no API key");
+    debugLogger.general('WARN', 'Cannot refresh pushes - no API key');
     return;
   }
 
   try {
-    debugLogger.general("DEBUG", "Refreshing pushes from API");
+    debugLogger.general('DEBUG', 'Refreshing pushes (incremental)');
 
-    // Get current push idens to detect new ones
-    const oldPushIdens = new Set(sessionCache.recentPushes.map((p) => p.iden));
+    const cutoff = sessionCache.lastModifiedCutoff || (await storageRepository.getLastModifiedCutoff()) || 0;
+    const changes = await fetchIncrementalPushes(apiKey, cutoff, 100);
 
-    const pushes = await fetchRecentPushes(apiKey);
+    if (changes.length === 0) {
+      debugLogger.general('INFO', 'No incremental push changes');
+      return;
+    }
 
-    // Find NEW pushes (not in old cache)
-    const newPushes = pushes.filter((p) => !oldPushIdens.has(p.iden));
-
-    debugLogger.general("INFO", "Pushes refreshed successfully", {
-      totalPushes: pushes.length,
-      newPushes: newPushes.length,
-    });
-
-    // Update cache
-    sessionCache.recentPushes = pushes;
+    const { updated, newOnes } = upsertPushes(sessionCache.recentPushes || [], changes);
+    sessionCache.recentPushes = updated;
     sessionCache.lastUpdated = Date.now();
 
-    // Show notifications for NEW pushes
-    for (const push of newPushes) {
-      debugLogger.general(
-        "INFO",
-        "Showing notification for new push from tickle",
-        {
-          pushIden: push.iden,
-          pushType: push.type,
-        },
-      );
-      // Don't await - fire and forget
-      showPushNotification(push, notificationDataStore).catch((error) => {
+    const maxModified = Math.max(
+      cutoff,
+      ...changes.map(p => (typeof p.modified === 'number' ? p.modified : 0))
+    );
+    if (maxModified > cutoff) {
+      sessionCache.lastModifiedCutoff = maxModified;
+      await storageRepository.setLastModifiedCutoff(maxModified);
+    }
+
+    // Notify only for truly new idens
+    for (const push of newOnes) {
+      debugLogger.general('INFO', 'Showing notification for new push', { pushIden: push.iden, pushType: push.type });
+      void showPushNotification(push, notificationDataStore).catch((error) => {
         debugLogger.general(
           "ERROR",
           "Failed to show notification",
@@ -224,7 +235,7 @@ export async function refreshPushes(
       // Auto-open links if setting is enabled
       const autoOpenLinks = getAutoOpenLinks();
       if (autoOpenLinks && isLinkPush(push)) {
-        debugLogger.general("INFO", "Auto-opening link push from tickle", {
+        debugLogger.general("INFO", "Auto-opening link push", {
           pushIden: push.iden,
           url: (push as LinkPush).url,
         });
@@ -237,7 +248,7 @@ export async function refreshPushes(
           .catch((error) => {
             debugLogger.general(
               "ERROR",
-              "Failed to auto-open link from tickle",
+              "Failed to auto-open link",
               {
                 url: (push as LinkPush).url,
               },
@@ -249,20 +260,13 @@ export async function refreshPushes(
 
     // Notify popup
     chrome.runtime
-      .sendMessage({
-        action: "pushesUpdated",
-        pushes: pushes,
-      })
-      .catch(() => {
-        // Popup may not be open
-      });
+      .sendMessage({ action: 'pushesUpdated', pushes: sessionCache.recentPushes })
+      .catch(() => undefined);
+
   } catch (error) {
-    debugLogger.general(
-      "ERROR",
-      "Failed to refresh pushes",
-      null,
-      error as Error,
-    );
+    debugLogger.general('ERROR', 'Incremental refresh failed', { error });
+    // Keep health/failure accounting as today
+    performanceMonitor.recordHealthCheckFailure();
   }
 }
 
@@ -689,42 +693,8 @@ export async function performPollingFetch(): Promise<void> {
     debugLogger.general("WARN", "Cannot perform polling fetch - no API key");
     return;
   }
-
-  debugLogger.general("DEBUG", "Performing polling fetch", {
-    timestamp: new Date().toISOString(),
-  });
-
-  try {
-    // Fetch recent pushes
-    const pushes = await fetchRecentPushes(apiKey);
-
-    // If fetch is successful, reset the failure counter.
-    performanceMonitor.recordHealthCheckSuccess();
-
-    // Check for new pushes
-    const latestPush = pushes[0];
-    if (latestPush && sessionCache.recentPushes[0]?.iden !== latestPush.iden) {
-      debugLogger.general("INFO", "New push detected via polling", {
-        pushId: latestPush.iden,
-        pushType: latestPush.type,
-      });
-
-      // Update session cache
-      sessionCache.recentPushes = pushes;
-
-      // Notify popup
-      chrome.runtime
-        .sendMessage({
-          action: "pushesUpdated",
-          pushes: pushes,
-        })
-        .catch(() => {});
-    }
-  } catch (error) {
-    debugLogger.general("ERROR", "Polling fetch failed", null, error as Error);
-    // Record the failure.
-    performanceMonitor.recordHealthCheckFailure();
-  }
+  debugLogger.general('DEBUG', 'Performing polling fetch (incremental)');
+  await refreshPushes(); // now incremental via refreshPushes
 }
 
 /**

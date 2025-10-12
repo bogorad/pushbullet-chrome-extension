@@ -1,6 +1,7 @@
 import type { Chat, User, Device, Push, DevicesResponse, PushesResponse } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
+import { fetchWithTimeout, retry } from "./http";
 
 const API_BASE_URL = 'https://api.pushbullet.com/v2';
 const PUSHES_URL = `${API_BASE_URL}/pushes`;
@@ -55,6 +56,19 @@ export async function fetchUserInfo(apiKey: string): Promise<User> {
     }, error as Error);
     throw error;
   }
+}
+
+export async function fetchUserInfoWithTimeout(apiKey: string): Promise<User> {
+  const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey) }, 5000);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getUserInfoWithTimeoutRetry(apiKey: string): Promise<User> {
+  return retry(() => fetchUserInfoWithTimeout(apiKey), 1, 500); // 1 retry with 500ms backoff
 }
 
 export async function fetchDevices(apiKey: string): Promise<Device[]> {
@@ -147,6 +161,66 @@ export async function fetchRecentPushes(apiKey: string): Promise<Push[]> {
   }
 }
 
+// NEW: Incremental fetch with modified_after + active=true + pagination
+export async function fetchIncrementalPushes(
+  apiKey: string,
+  modifiedAfter: number | null,
+  pageLimit = 100
+): Promise<Push[]> {
+  const all: Push[] = [];
+  let cursor: string | undefined = undefined;
+  let page = 0;
+
+  do {
+    const params = new URLSearchParams();
+    params.set('active', 'true'); // exclude deletions from "latest" list
+    params.set('limit', String(pageLimit));
+    if (modifiedAfter && modifiedAfter > 0) {
+      params.set('modified_after', String(modifiedAfter));
+    }
+    if (cursor) params.set('cursor', cursor);
+
+    const url = `${PUSHES_URL}?${params.toString()}`;
+    const startTime = Date.now();
+    const response = await fetch(url, { headers: authHeaders(apiKey) });
+    const duration = Date.now() - startTime;
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      const error = new Error(
+        `Failed to fetch pushes ${response.status} ${response.statusText} - ${errorText}`
+      );
+      debugLogger.api('ERROR', 'Incremental pushes fetch failed', { url, status: response.status, duration: `${duration}ms`, errorText });
+      throw error;
+    }
+
+    const data = (await response.json()) as PushesResponse;
+    const pagePushes = Array.isArray(data.pushes) ? data.pushes : [];
+    all.push(...pagePushes);
+    cursor = data.cursor;
+
+    debugLogger.api('INFO', 'Incremental pushes page fetched', {
+      url,
+      status: response.status,
+      duration: `${duration}ms`,
+      page,
+      pageCount: pagePushes.length,
+      totalSoFar: all.length,
+      hasMore: !!cursor,
+    });
+
+    page += 1;
+    // guard: avoid huge loops on first sync
+    if (page > 10) break;
+  } while (cursor);
+
+  // Optional: filter to only displayable types to match background flow
+  const displayableTypes = new Set(['mirror', 'note', 'link', 'sms_changed', 'file']);
+  const filtered = all.filter(p => displayableTypes.has(p.type) && !p.dismissed);
+
+  return filtered;
+}
+
 export async function ensureDeviceExists(apiKey: string, deviceIden: string): Promise<boolean> {
   const response = await fetch(
     `https://api.pushbullet.com/v2/devices/${deviceIden}`,
@@ -185,8 +259,18 @@ export async function registerDevice(
       if (existingDeviceIden) {
         debugLogger.general('INFO', 'Device already registered', { deviceIden: existingDeviceIden, deviceNickname });
 
+        // Check if nickname needs updating
         try {
-          await updateDeviceNickname(apiKey, existingDeviceIden, deviceNickname);
+          const devices = await fetchDevices(apiKey);
+          const currentDevice = devices.find(d => d.iden === existingDeviceIden);
+          const currentNickname = currentDevice?.nickname;
+
+          if (currentNickname !== deviceNickname) {
+            await updateDeviceNickname(apiKey, existingDeviceIden, deviceNickname);
+            debugLogger.general('INFO', 'Device nickname updated', { old: currentNickname, new: deviceNickname });
+          } else {
+            debugLogger.general('DEBUG', 'Device nickname unchanged, skipping update');
+          }
           return { deviceIden: existingDeviceIden, needsUpdate: false };
         } catch (error) {
           debugLogger.general('WARN', 'Failed to update existing device, will re-register', {

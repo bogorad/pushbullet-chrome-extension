@@ -11,6 +11,7 @@ const deviceNicknameInput = getElementById<HTMLInputElement>('device-nickname');
 const updateNicknameButton = getElementById<HTMLButtonElement>('update-nickname');
 const notificationTimeoutInput = getElementById<HTMLInputElement>('notification-timeout');
 const autoOpenLinksCheckbox = getElementById<HTMLInputElement>('auto-open-links');
+const autoOpenLinksOnReconnectCheckbox = getElementById<HTMLInputElement>('auto-open-links-on-reconnect');
 const encryptionPasswordInput = getElementById<HTMLInputElement>('encryption-password');
 const debugModeCheckbox = getElementById<HTMLInputElement>('debug-mode');
 const saveSettingsButton = getElementById<HTMLButtonElement>('save-settings');
@@ -23,6 +24,7 @@ const DEFAULT_SETTINGS = {
   deviceNickname: 'Chrome',
   notificationTimeout: 10000, // 10 seconds in milliseconds
   autoOpenLinks: true,
+  autoOpenLinksOnReconnect: false, // Off by default for safety
   encryptionPassword: '', // E2EE password (stored in local storage only)
   debugMode: true
 };
@@ -43,6 +45,7 @@ async function loadSettings(): Promise<void> {
     const deviceNickname = await storageRepository.getDeviceNickname();
     const notificationTimeout = await storageRepository.getNotificationTimeout();
     const autoOpenLinks = await storageRepository.getAutoOpenLinks();
+    const autoOpenLinksOnReconnect = await storageRepository.getAutoOpenLinksOnReconnect();
     const encryptionPassword = await storageRepository.getEncryptionPassword();
 
     // Set device nickname
@@ -53,6 +56,7 @@ async function loadSettings(): Promise<void> {
 
     // Set auto-open links
     autoOpenLinksCheckbox.checked = autoOpenLinks;
+    autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
 
     // Set encryption password
     encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
@@ -144,6 +148,21 @@ async function saveAutoOpenLinks(): Promise<void> {
 }
 
 /**
+ * Save auto-open links on reconnect setting
+ */
+async function saveAutoOpenLinksOnReconnect(): Promise<void> {
+  const enabled = autoOpenLinksOnReconnectCheckbox.checked;
+
+  try {
+    await storageRepository.setAutoOpenLinksOnReconnect(enabled);
+    showStatus('Auto-open links on reconnect setting updated', 'success');
+  } catch (error) {
+    console.error('Error saving auto-open links on reconnect:', error);
+    showStatus('Error saving auto-open links on reconnect setting', 'error');
+  }
+}
+
+/**
  * Save encryption password (to LOCAL storage only, not synced!)
  */
 async function saveEncryptionPassword(): Promise<void> {
@@ -205,6 +224,7 @@ async function saveAllSettings(): Promise<void> {
     const nickname = deviceNicknameInput.value.trim();
     const seconds = parseInt(notificationTimeoutInput.value, 10);
     const autoOpen = autoOpenLinksCheckbox.checked;
+    const autoOpenOnReconnect = autoOpenLinksOnReconnectCheckbox.checked;
     const debug = debugModeCheckbox.checked;
 
     // Validate
@@ -222,6 +242,7 @@ async function saveAllSettings(): Promise<void> {
     await storageRepository.setDeviceNickname(nickname);
     await storageRepository.setNotificationTimeout(seconds * 1000);
     await storageRepository.setAutoOpenLinks(autoOpen);
+    await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
 
     // Note: Debug config handling skipped for now (complex local storage structure)
 
@@ -232,6 +253,7 @@ async function saveAllSettings(): Promise<void> {
         deviceNickname: nickname,
         notificationTimeout: seconds * 1000,
         autoOpenLinks: autoOpen,
+        autoOpenLinksOnReconnect: autoOpenOnReconnect,
         debugMode: debug
       }
     });
@@ -256,6 +278,7 @@ async function resetToDefaults(): Promise<void> {
     await storageRepository.setDeviceNickname(DEFAULT_SETTINGS.deviceNickname);
     await storageRepository.setNotificationTimeout(DEFAULT_SETTINGS.notificationTimeout);
     await storageRepository.setAutoOpenLinks(DEFAULT_SETTINGS.autoOpenLinks);
+    await storageRepository.setAutoOpenLinksOnReconnect(DEFAULT_SETTINGS.autoOpenLinksOnReconnect);
 
     // Note: Debug config reset skipped for now (complex local storage structure)
 
@@ -287,6 +310,7 @@ function init(): void {
   });
 
   autoOpenLinksCheckbox.addEventListener('change', saveAutoOpenLinks);
+  autoOpenLinksOnReconnectCheckbox.addEventListener('change', saveAutoOpenLinksOnReconnect);
   encryptionPasswordInput.addEventListener('change', saveEncryptionPassword);
   debugModeCheckbox.addEventListener('change', saveDebugMode);
 

@@ -152,6 +152,75 @@
       await chrome.storage.local.set({ deviceRegistrationInProgress: inProgress });
     }
     /**
+     * Get Last Modified Cutoff from local storage
+     */
+    async getLastModifiedCutoff() {
+      const result = await chrome.storage.local.get(["lastModifiedCutoff"]);
+      const cutoff = result.lastModifiedCutoff;
+      return typeof cutoff === "number" ? cutoff : null;
+    }
+    /**
+     * Set Last Modified Cutoff in local storage
+     */
+    async setLastModifiedCutoff(value) {
+      await chrome.storage.local.set({ lastModifiedCutoff: value });
+    }
+    /**
+     * Get Last Auto Open Cutoff from local storage
+     */
+    async getLastAutoOpenCutoff() {
+      const result = await chrome.storage.local.get(["lastAutoOpenCutoff"]);
+      const v = result.lastAutoOpenCutoff;
+      return typeof v === "number" ? v : null;
+    }
+    /**
+     * Set Last Auto Open Cutoff in local storage
+     */
+    async setLastAutoOpenCutoff(value) {
+      await chrome.storage.local.set({ lastAutoOpenCutoff: value });
+    }
+    /**
+     * Get Auto Open Links on Reconnect setting from local storage
+     */
+    async getAutoOpenLinksOnReconnect() {
+      const result = await chrome.storage.local.get(["autoOpenLinksOnReconnect"]);
+      const v = result.autoOpenLinksOnReconnect;
+      return typeof v === "boolean" ? v : false;
+    }
+    /**
+     * Set Auto Open Links on Reconnect setting in local storage
+     */
+    async setAutoOpenLinksOnReconnect(value) {
+      await chrome.storage.local.set({ autoOpenLinksOnReconnect: value });
+    }
+    /**
+     * Get Max Auto Open Per Reconnect from local storage
+     */
+    async getMaxAutoOpenPerReconnect() {
+      const result = await chrome.storage.local.get(["maxAutoOpenPerReconnect"]);
+      const v = result.maxAutoOpenPerReconnect;
+      return typeof v === "number" && v > 0 ? v : 5;
+    }
+    /**
+     * Set Max Auto Open Per Reconnect in local storage
+     */
+    async setMaxAutoOpenPerReconnect(value) {
+      await chrome.storage.local.set({ maxAutoOpenPerReconnect: value });
+    }
+    /**
+     * Get User Info Cache from local storage
+     */
+    async getUserInfoCache() {
+      const result = await chrome.storage.local.get(["userInfoCache"]);
+      return result.userInfoCache || null;
+    }
+    /**
+     * Set User Info Cache in local storage
+     */
+    async setUserInfoCache(value) {
+      await chrome.storage.local.set({ userInfoCache: value });
+    }
+    /**
      * Clear all storage (both sync and local)
      */
     async clear() {
@@ -178,6 +247,7 @@
   var updateNicknameButton = getElementById("update-nickname");
   var notificationTimeoutInput = getElementById("notification-timeout");
   var autoOpenLinksCheckbox = getElementById("auto-open-links");
+  var autoOpenLinksOnReconnectCheckbox = getElementById("auto-open-links-on-reconnect");
   var encryptionPasswordInput = getElementById("encryption-password");
   var debugModeCheckbox = getElementById("debug-mode");
   var saveSettingsButton = getElementById("save-settings");
@@ -189,6 +259,8 @@
     notificationTimeout: 1e4,
     // 10 seconds in milliseconds
     autoOpenLinks: true,
+    autoOpenLinksOnReconnect: false,
+    // Off by default for safety
     encryptionPassword: "",
     // E2EE password (stored in local storage only)
     debugMode: true
@@ -201,10 +273,12 @@
       const deviceNickname = await storageRepository.getDeviceNickname();
       const notificationTimeout = await storageRepository.getNotificationTimeout();
       const autoOpenLinks = await storageRepository.getAutoOpenLinks();
+      const autoOpenLinksOnReconnect = await storageRepository.getAutoOpenLinksOnReconnect();
       const encryptionPassword = await storageRepository.getEncryptionPassword();
       deviceNicknameInput.value = deviceNickname || DEFAULT_SETTINGS.deviceNickname;
       notificationTimeoutInput.value = Math.round(notificationTimeout / 1e3).toString();
       autoOpenLinksCheckbox.checked = autoOpenLinks;
+      autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
       encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
       debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
       const manifest = chrome.runtime.getManifest();
@@ -262,6 +336,16 @@
       showStatus2("Error saving auto-open links setting", "error");
     }
   }
+  async function saveAutoOpenLinksOnReconnect() {
+    const enabled = autoOpenLinksOnReconnectCheckbox.checked;
+    try {
+      await storageRepository.setAutoOpenLinksOnReconnect(enabled);
+      showStatus2("Auto-open links on reconnect setting updated", "success");
+    } catch (error) {
+      console.error("Error saving auto-open links on reconnect:", error);
+      showStatus2("Error saving auto-open links on reconnect setting", "error");
+    }
+  }
   async function saveEncryptionPassword() {
     const password = encryptionPasswordInput.value.trim();
     try {
@@ -302,6 +386,7 @@
       const nickname = deviceNicknameInput.value.trim();
       const seconds = parseInt(notificationTimeoutInput.value, 10);
       const autoOpen = autoOpenLinksCheckbox.checked;
+      const autoOpenOnReconnect = autoOpenLinksOnReconnectCheckbox.checked;
       const debug = debugModeCheckbox.checked;
       if (!nickname) {
         showStatus2("Please enter a device nickname", "error");
@@ -314,12 +399,14 @@
       await storageRepository.setDeviceNickname(nickname);
       await storageRepository.setNotificationTimeout(seconds * 1e3);
       await storageRepository.setAutoOpenLinks(autoOpen);
+      await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
       chrome.runtime.sendMessage({
         action: "settingsChanged" /* SETTINGS_CHANGED */,
         settings: {
           deviceNickname: nickname,
           notificationTimeout: seconds * 1e3,
           autoOpenLinks: autoOpen,
+          autoOpenLinksOnReconnect: autoOpenOnReconnect,
           debugMode: debug
         }
       });
@@ -337,6 +424,7 @@
       await storageRepository.setDeviceNickname(DEFAULT_SETTINGS.deviceNickname);
       await storageRepository.setNotificationTimeout(DEFAULT_SETTINGS.notificationTimeout);
       await storageRepository.setAutoOpenLinks(DEFAULT_SETTINGS.autoOpenLinks);
+      await storageRepository.setAutoOpenLinksOnReconnect(DEFAULT_SETTINGS.autoOpenLinksOnReconnect);
       await loadSettings();
       showStatus2("Settings reset to defaults", "success");
     } catch (error) {
@@ -355,6 +443,7 @@
       }
     });
     autoOpenLinksCheckbox.addEventListener("change", saveAutoOpenLinks);
+    autoOpenLinksOnReconnectCheckbox.addEventListener("change", saveAutoOpenLinksOnReconnect);
     encryptionPasswordInput.addEventListener("change", saveEncryptionPassword);
     debugModeCheckbox.addEventListener("change", saveDebugMode);
     loadSettings();

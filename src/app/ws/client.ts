@@ -5,6 +5,7 @@ import type { WebSocketMessage } from "../../types/domain";
 import { WS_READY_STATE } from "../../types/domain";
 import { clearErrorBadge, showPermanentWebSocketError } from "../notifications";
 import { globalEventBus } from "../../lib/events/event-bus";
+import { updateConnectionIcon } from "../../background/utils";
 
 export interface CloseInfo {
   code: number;
@@ -54,8 +55,8 @@ export class WebSocketClient {
   /**
    * Get current ready state
    */
-  getReadyState(): number | null {
-    return this.socket ? this.socket.readyState : null;
+  getReadyState(): number {
+    return this.socket?.readyState ?? WebSocket.CLOSED;
   }
 
   /**
@@ -144,13 +145,17 @@ export class WebSocketClient {
         socketExists: !!this.socket,
       });
 
-      this.socket.onopen = () => {
-        debugLogger.websocket("INFO", "WebSocket connection established", {
-          timestamp: new Date().toISOString(),
-        });
-        this.lastNopReceived = Date.now();
-        performanceMonitor.recordWebSocketConnection(true);
-        wsStateMonitor.startMonitoring();
+       this.socket.onopen = () => {
+         debugLogger.websocket("INFO", "WebSocket connection established", {
+           timestamp: new Date().toISOString(),
+         });
+
+         // Set badge to green immediately when WebSocket connects
+         updateConnectionIcon("connected");
+
+         this.lastNopReceived = Date.now();
+         performanceMonitor.recordWebSocketConnection(true);
+         wsStateMonitor.startMonitoring();
 
         // Emit event to stop polling mode
         globalEventBus.emit("websocket:polling:stop");
