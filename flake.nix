@@ -56,6 +56,7 @@
             # Set zsh as the shell
             export SHELL=${pkgs.zsh}/bin/zsh
             echo "Environment ready. Run 'vitest run' or 'npm test' to execute tests."
+            ${pkgs.opencode}/bin/opencode .
           '';
         };
       }
