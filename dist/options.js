@@ -64,17 +64,17 @@
       }
     }
     /**
-     * Get Device Nickname from sync storage
-     */
+      * Get Device Nickname from local storage
+      */
     async getDeviceNickname() {
-      const result = await chrome.storage.sync.get(["deviceNickname"]);
+      const result = await chrome.storage.local.get(["deviceNickname"]);
       return result.deviceNickname || null;
     }
     /**
-     * Set Device Nickname in sync storage
-     */
+      * Set Device Nickname in local storage
+      */
     async setDeviceNickname(nickname) {
-      await chrome.storage.sync.set({ deviceNickname: nickname });
+      await chrome.storage.local.set({ deviceNickname: nickname });
     }
     /**
      * Get Auto Open Links setting from sync storage

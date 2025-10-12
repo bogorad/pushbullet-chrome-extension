@@ -105,18 +105,18 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   /**
-   * Get Device Nickname from sync storage
-   */
+    * Get Device Nickname from local storage
+    */
   async getDeviceNickname(): Promise<string | null> {
-    const result = await chrome.storage.sync.get(['deviceNickname']);
+    const result = await chrome.storage.local.get(['deviceNickname']);
     return result.deviceNickname || null;
   }
 
   /**
-   * Set Device Nickname in sync storage
-   */
+    * Set Device Nickname in local storage
+    */
   async setDeviceNickname(nickname: string): Promise<void> {
-    await chrome.storage.sync.set({ deviceNickname: nickname });
+    await chrome.storage.local.set({ deviceNickname: nickname });
   }
 
   /**

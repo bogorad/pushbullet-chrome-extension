@@ -8,7 +8,6 @@ import {
   getElementById,
 } from "../lib/ui/dom";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
-import { sessionCache } from "../app/session";
 
 // Response type for API key save operations
 type SaveKeyResponse = SessionDataResponse | { success: false; error?: string };
