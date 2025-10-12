@@ -48,6 +48,12 @@ vi.mock('../../src/app/reconnect', () => ({
   ensureConfigLoaded: vi.fn()
 }));
 
+vi.mock('../../src/lib/events/event-bus', () => ({
+  globalEventBus: {
+    emit: vi.fn()
+  }
+}));
+
 vi.mock('../../src/background/state', () => ({
   getApiKey: mockGetApiKey,
   getAutoOpenLinks: vi.fn(() => false),
@@ -483,7 +489,7 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
     // Create fresh mocks for each test
     mockWsClient = {
       isConnected: vi.fn(),
-      ping: vi.fn()
+      isConnectionHealthy: vi.fn()
     };
     mockConnectFn = vi.fn();
 
@@ -492,15 +498,35 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
     (getApiKey as any).mockReturnValue(null);
   });
 
-  it('should ping when WebSocket is connected', () => {
+  it('should check health when WebSocket is connected and healthy', async () => {
     // Arrange
     mockWsClient.isConnected.mockReturnValue(true);
+    mockWsClient.isConnectionHealthy.mockReturnValue(true);
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
 
     // Act
     performWebSocketHealthCheck(mockWsClient, mockConnectFn);
 
     // Assert
-    expect(mockWsClient.ping).toHaveBeenCalledTimes(1);
+    expect(mockWsClient.isConnectionHealthy).toHaveBeenCalledTimes(1);
+    expect(mockConnectFn).not.toHaveBeenCalled();
+  });
+
+  it('should emit disconnected event when WebSocket is connected but unhealthy', async () => {
+    // Arrange
+    mockWsClient.isConnected.mockReturnValue(true);
+    mockWsClient.isConnectionHealthy.mockReturnValue(false);
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
+    const { globalEventBus } = await import('../../src/lib/events/event-bus');
+
+    // Act
+    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
+
+    // Assert
+    expect(mockWsClient.isConnectionHealthy).toHaveBeenCalledTimes(1);
+    expect(globalEventBus.emit).toHaveBeenCalledWith('websocket:disconnected');
     expect(mockConnectFn).not.toHaveBeenCalled();
   });
 
@@ -513,7 +539,6 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
     performWebSocketHealthCheck(mockWsClient, mockConnectFn);
 
     // Assert
-    expect(mockWsClient.ping).not.toHaveBeenCalled();
     expect(mockConnectFn).not.toHaveBeenCalled();
   });
 
@@ -528,7 +553,6 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
     performWebSocketHealthCheck(mockWsClient, mockConnectFn);
 
     // Assert
-    expect(mockWsClient.ping).not.toHaveBeenCalled();
     expect(mockConnectFn).toHaveBeenCalledTimes(1);
   });
 
@@ -556,21 +580,6 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
 
     // Assert
     expect(mockConnectFn).toHaveBeenCalledTimes(1);
-  });
-
-  it('should not call connectFn when WebSocket is connected, even with API key', async () => {
-    // Arrange
-    mockWsClient.isConnected.mockReturnValue(true);
-    // Mock getApiKey to return a key
-    const { getApiKey } = await import('../../src/background/state');
-    (getApiKey as any).mockReturnValue('test-api-key');
-
-    // Act
-    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
-
-    // Assert
-    expect(mockWsClient.ping).toHaveBeenCalledTimes(1);
-    expect(mockConnectFn).not.toHaveBeenCalled();
   });
 });
 

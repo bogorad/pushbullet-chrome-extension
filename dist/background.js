@@ -546,12 +546,16 @@
       message: options.message || "",
       priority: options.priority || 1
     };
-    debugLogger.notifications("DEBUG", "Creating notification with safe options", {
-      notificationId,
-      iconUrl,
-      title: safeOptions.title,
-      messageLength: safeOptions.message?.length || 0
-    });
+    debugLogger.notifications(
+      "DEBUG",
+      "Creating notification with safe options",
+      {
+        notificationId,
+        iconUrl,
+        title: safeOptions.title,
+        messageLength: safeOptions.message?.length || 0
+      }
+    );
     chrome.notifications.create(notificationId, safeOptions, (createdId) => {
       if (chrome.runtime.lastError) {
         debugLogger.notifications("ERROR", "Notification creation error", {
@@ -569,9 +573,14 @@
           }, timeout);
         }
       } catch (error) {
-        debugLogger.notifications("ERROR", "Failed to set notification timeout", {
-          error: error.message
-        }, error);
+        debugLogger.notifications(
+          "ERROR",
+          "Failed to set notification timeout",
+          {
+            error: error.message
+          },
+          error
+        );
       }
     });
   }
@@ -594,14 +603,24 @@
       chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
       chrome.action.setBadgeText({ text: "ERR" });
     } catch (error) {
-      debugLogger.general("WARN", "Failed to set error badge", null, error);
+      debugLogger.general(
+        "WARN",
+        "Failed to set error badge",
+        null,
+        error
+      );
     }
   }
   function clearErrorBadge() {
     try {
-      chrome.action.setBadgeText({ text: "" });
+      chrome.action.setBadgeText({ text: " " });
     } catch (error) {
-      debugLogger.general("WARN", "Failed to clear error badge", null, error);
+      debugLogger.general(
+        "WARN",
+        "Failed to clear error badge",
+        null,
+        error
+      );
     }
   }
 
@@ -761,11 +780,12 @@
       this.websocketUrl = websocketUrl;
       this.getApiKey = getApiKey2;
     }
-    static PING_TIMEOUT = 1e4;
+    static NOP_TIMEOUT = 6e4;
+    // 60 seconds
     socket = null;
     reconnectAttempts = 0;
     reconnectTimeout = null;
-    pongTimeout = null;
+    lastNopReceived = 0;
     /**
      * Get current WebSocket instance
      */
@@ -848,6 +868,7 @@
           debugLogger.websocket("INFO", "WebSocket connection established", {
             timestamp: (/* @__PURE__ */ new Date()).toISOString()
           });
+          this.lastNopReceived = Date.now();
           performanceMonitor.recordWebSocketConnection(true);
           wsStateMonitor.startMonitoring();
           globalEventBus.emit("websocket:polling:stop");
@@ -889,11 +910,8 @@
                 }
                 break;
               case "nop":
-                if (this.pongTimeout !== null) {
-                  clearTimeout(this.pongTimeout);
-                  this.pongTimeout = null;
-                }
-                debugLogger.websocket("DEBUG", "Pong received (via nop)", {
+                this.lastNopReceived = Date.now();
+                debugLogger.websocket("DEBUG", "Server nop received", {
                   timestamp: (/* @__PURE__ */ new Date()).toISOString()
                 });
                 break;
@@ -1033,39 +1051,10 @@
     resetReconnectAttempts() {
       this.reconnectAttempts = 0;
     }
-    /**
-     * Send a ping to test connection health
-     */
-    ping() {
-      if (this.pongTimeout !== null) {
-        return;
-      }
-      if (this.socket === null || this.socket.readyState !== 1 /* OPEN */) {
-        return;
-      }
-      try {
-        this.socket.send(JSON.stringify({ type: "nop" }));
-        debugLogger.websocket("DEBUG", "Ping sent (as nop)", {
-          timestamp: (/* @__PURE__ */ new Date()).toISOString()
-        });
-        this.pongTimeout = setTimeout(() => {
-          debugLogger.websocket(
-            "WARN",
-            "Pong not received in 30 seconds. Assuming connection is dead."
-          );
-          globalEventBus.emit("websocket:disconnected");
-          this.socket?.close();
-        }, _WebSocketClient.PING_TIMEOUT);
-      } catch (error) {
-        debugLogger.websocket(
-          "ERROR",
-          "Failed to send ping",
-          {
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          },
-          error
-        );
-      }
+    isConnectionHealthy() {
+      if (!this.isConnected()) return false;
+      const timeSinceLastNop = Date.now() - this.lastNopReceived;
+      return timeSinceLastNop < _WebSocketClient.NOP_TIMEOUT;
     }
   };
 
@@ -1342,6 +1331,13 @@
       throw error;
     }
   }
+  async function ensureDeviceExists(apiKey2, deviceIden2) {
+    const response = await fetch(
+      `https://api.pushbullet.com/v2/devices/${deviceIden2}`,
+      { method: "GET", headers: { "Access-Token": apiKey2 } }
+    );
+    return response.status !== 404;
+  }
   async function registerDevice(apiKey2, deviceIden2, deviceNickname2) {
     if (registrationPromise) {
       debugLogger.general("INFO", "Device registration already in progress, reusing promise", {
@@ -1438,6 +1434,10 @@
     return registrationPromise;
   }
   async function updateDeviceNickname(apiKey2, deviceIden2, newNickname) {
+    const deviceExists = await ensureDeviceExists(apiKey2, deviceIden2);
+    if (!deviceExists) {
+      throw new Error(`Device with iden ${deviceIden2} not found on server.`);
+    }
     debugLogger.general("INFO", "Updating device nickname", {
       deviceIden: deviceIden2,
       newNickname,
@@ -2389,8 +2389,14 @@
       performanceMonitor.recordHealthCheckFailure();
       connectFn();
     } else if (wsClient && wsClient.isConnected()) {
-      debugLogger.websocket("DEBUG", "Performing active health check (ping).");
-      wsClient.ping();
+      if (wsClient.isConnectionHealthy()) {
+        debugLogger.websocket("DEBUG", "WebSocket connection is healthy.");
+        performanceMonitor.recordHealthCheckSuccess();
+      } else {
+        debugLogger.websocket("WARN", "WebSocket connection is unhealthy. Triggering reconnect.");
+        performanceMonitor.recordHealthCheckFailure();
+        globalEventBus.emit("websocket:disconnected");
+      }
     }
   }
   function updatePopupConnectionState(state) {
@@ -2762,6 +2768,7 @@
       updateExtensionTooltip(this.getStateDescription());
       switch (state) {
         case "idle" /* IDLE */:
+          updateConnectionIcon("disconnected");
           if (this.callbacks.onClearData) {
             await this.callbacks.onClearData();
           }
@@ -2782,6 +2789,7 @@
           }
           break;
         case "ready" /* READY */:
+          updateConnectionIcon("connected");
           if (previousState === "degraded" /* DEGRADED */ && this.callbacks.onStopPolling) {
             this.callbacks.onStopPolling();
           }
@@ -3143,7 +3151,6 @@
         recoveryTimings: recoveryTimings.slice(-20)
       });
       stateMachine.transition("WS_CONNECTED");
-      updateConnectionIcon("connected");
     });
     globalEventBus.on("websocket:disconnected", () => {
       stateMachine.transition("WS_DISCONNECTED");
@@ -3171,10 +3178,13 @@
       reason: "onInstalled",
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
-    setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onInstalled");
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+    chrome.alarms.create("keepalive", {
+      periodInMinutes: 0.5
+      // Every 30 seconds (Chrome's minimum)
+    });
     await stateMachineReady;
     const apiKey2 = await getApiKeyWithRetries();
     await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
@@ -3190,31 +3200,53 @@
         timestamp: (/* @__PURE__ */ new Date()).toISOString()
       }
     );
-    setTimeout(() => updateConnectionIcon("disconnected"), 100);
     initTracker.recordInitialization("onStartup");
     setupContextMenu();
     chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+    chrome.alarms.create("keepalive", {
+      periodInMinutes: 0.5
+      // Every 30 seconds (Chrome's minimum)
+    });
     await stateMachineReady;
     const apiKey2 = await getApiKeyWithRetries();
     await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
   });
   chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === "keepalive") {
+      debugLogger.general("DEBUG", "Keepalive heartbeat");
+      const apiKey2 = getApiKey();
+      if (!apiKey2) {
+        debugLogger.general("WARN", "Keepalive: API key missing, reloading");
+        await ensureConfigLoaded();
+      }
+      return;
+    }
     if (alarm.name === "logFlush") {
       await debugLogger.flush();
       return;
     }
     await stateMachineReady;
     if (alarm.name === "websocketHealthCheck") {
+      if (stateMachine.isInState("error" /* ERROR */)) {
+        debugLogger.general("INFO", "In ERROR state, ignoring health check.");
+        return;
+      }
       await ensureConfigLoaded();
       if (stateMachine.isInState("degraded" /* DEGRADED */)) {
         await performPollingFetch();
         const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
         const FAILURE_THRESHOLD = 5;
         if (failures >= FAILURE_THRESHOLD) {
-          debugLogger.general("ERROR", `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`);
+          debugLogger.general(
+            "ERROR",
+            `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`
+          );
           await stateMachine.transition("WS_PERMANENT_ERROR");
         } else {
-          debugLogger.general("INFO", "Health check found us in DEGRADED state. Attempting to reconnect.");
+          debugLogger.general(
+            "INFO",
+            "Health check found us in DEGRADED state. Attempting to reconnect."
+          );
           await stateMachine.transition("ATTEMPT_RECONNECT");
         }
       } else {

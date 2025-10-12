@@ -454,14 +454,16 @@ chrome.runtime.onInstalled.addListener(async () => {
     timestamp: new Date().toISOString(),
   });
 
-  // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
-  setTimeout(() => updateConnectionIcon("disconnected"), 100);
-
   initTracker.recordInitialization("onInstalled");
   setupContextMenu();
 
   // Create periodic log flush alarm
   chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+
+  // In chrome.runtime.onInstalled and onStartup listeners
+  chrome.alarms.create("keepalive", {
+    periodInMinutes: 0.5, // Every 30 seconds (Chrome's minimum)
+  });
 
   // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
   // This ensures the state machine has loaded its persisted state from storage
@@ -490,14 +492,16 @@ chrome.runtime.onStartup.addListener(async () => {
     },
   );
 
-  // Set initial icon to disconnected (with small delay to ensure Chrome is ready)
-  setTimeout(() => updateConnectionIcon("disconnected"), 100);
-
   initTracker.recordInitialization("onStartup");
   setupContextMenu();
 
   // Create periodic log flush alarm
   chrome.alarms.create("logFlush", { periodInMinutes: 1 });
+
+  // In chrome.runtime.onInstalled and onStartup listeners
+  chrome.alarms.create("keepalive", {
+    periodInMinutes: 0.5, // Every 30 seconds (Chrome's minimum)
+  });
 
   // STATE MACHINE HYDRATION: Wait for state machine to be ready before attempting transitions
   // This ensures the state machine has loaded its persisted state from storage
@@ -513,6 +517,19 @@ chrome.runtime.onStartup.addListener(async () => {
  * Alarm listener
  */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === "keepalive") {
+    // Minimal work to prevent termination
+    debugLogger.general("DEBUG", "Keepalive heartbeat");
+
+    // Verify critical state integrity
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      debugLogger.general("WARN", "Keepalive: API key missing, reloading");
+      await ensureConfigLoaded();
+    }
+    return;
+  }
+
   if (alarm.name === "logFlush") {
     await debugLogger.flush();
     return;
@@ -536,16 +553,23 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await performPollingFetch();
 
       // Check for escalation to ERROR state
-      const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
+      const failures =
+        performanceMonitor.getQualityMetrics().consecutiveFailures;
       const FAILURE_THRESHOLD = 5; // Escalate after 5 consecutive failures (approx. 5 minutes)
 
       if (failures >= FAILURE_THRESHOLD) {
         // If we've failed too many times, escalate to ERROR and STOP.
-        debugLogger.general("ERROR", `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`);
+        debugLogger.general(
+          "ERROR",
+          `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`,
+        );
         await stateMachine.transition("WS_PERMANENT_ERROR");
       } else {
         // Only if we are NOT escalating to error, do we try to reconnect.
-        debugLogger.general("INFO", "Health check found us in DEGRADED state. Attempting to reconnect.");
+        debugLogger.general(
+          "INFO",
+          "Health check found us in DEGRADED state. Attempting to reconnect.",
+        );
         // Tell the state machine to start the reconnect process.
         await stateMachine.transition("ATTEMPT_RECONNECT");
       }
@@ -554,8 +578,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       performWebSocketHealthCheck(websocketClient, connectWebSocket);
     }
   }
-
-
 });
 
 /**

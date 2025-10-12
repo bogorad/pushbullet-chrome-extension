@@ -16,6 +16,7 @@ import type { Push, LinkPush } from "../types/domain";
 import { isLinkPush } from "../types/domain";
 import { createNotificationWithTimeout } from "../app/notifications";
 import { ensureConfigLoaded } from "../app/reconnect";
+import { globalEventBus } from "../lib/events/event-bus";
 
 // Guard flag to prevent concurrent context menu setup
 // Ensures idempotent behavior when multiple startup events fire
@@ -640,10 +641,16 @@ export function performWebSocketHealthCheck(wsClient: any, connectFn: () => void
     // ...then it's the health check's job to initiate the connection.
     connectFn(); // This calls connectWebSocket in the background script.
   }
-  // The ping logic for active connections remains the same.
+  // The new health check for active connections.
   else if (wsClient && wsClient.isConnected()) {
-    debugLogger.websocket("DEBUG", "Performing active health check (ping).");
-    wsClient.ping();
+    if (wsClient.isConnectionHealthy()) {
+      debugLogger.websocket("DEBUG", "WebSocket connection is healthy.");
+      performanceMonitor.recordHealthCheckSuccess();
+    } else {
+      debugLogger.websocket("WARN", "WebSocket connection is unhealthy. Triggering reconnect.");
+      performanceMonitor.recordHealthCheckFailure();
+      globalEventBus.emit("websocket:disconnected");
+    }
   }
 }
 

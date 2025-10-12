@@ -147,6 +147,14 @@ export async function fetchRecentPushes(apiKey: string): Promise<Push[]> {
   }
 }
 
+export async function ensureDeviceExists(apiKey: string, deviceIden: string): Promise<boolean> {
+  const response = await fetch(
+    `https://api.pushbullet.com/v2/devices/${deviceIden}`,
+    { method: 'GET', headers: { 'Access-Token': apiKey } }
+  );
+  return response.status !== 404;
+}
+
 export async function registerDevice(
   apiKey: string,
   deviceIden: string | null,
@@ -274,6 +282,11 @@ export async function updateDeviceNickname(
   deviceIden: string,
   newNickname: string
 ): Promise<void> {
+  const deviceExists = await ensureDeviceExists(apiKey, deviceIden);
+  if (!deviceExists) {
+    throw new Error(`Device with iden ${deviceIden} not found on server.`);
+  }
+
   debugLogger.general('INFO', 'Updating device nickname', {
     deviceIden,
     newNickname,

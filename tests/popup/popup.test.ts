@@ -2,8 +2,6 @@
 
 // Import necessary tools
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
-import fs from 'fs'
-import path from 'path'
 
 // Chrome API is mocked globally in tests/setup.ts
 declare const chrome: any
@@ -20,7 +18,7 @@ vi.mock('src/infrastructure/storage/storage.repository', () => ({
 }))
 
 // Read the HTML file content from the disk once
-const popupHtml = fs.readFileSync(path.resolve('popup.html'), 'utf8')
+const { default: popupHtml } = await vi.importActual('/popup.html?raw')
 
 describe('Popup UI and Logic', () => {
   beforeAll(() => {

@@ -306,6 +306,7 @@ export class ServiceWorkerStateMachine {
 
     switch (state) {
     case ServiceWorkerState.IDLE:
+      updateConnectionIcon("disconnected");  // Red
       // Clean slate - clear all data
       if (this.callbacks.onClearData) {
         await this.callbacks.onClearData();
@@ -333,6 +334,7 @@ export class ServiceWorkerStateMachine {
       break;
 
     case ServiceWorkerState.READY:
+      updateConnectionIcon("connected");
       // Stop polling if we were in DEGRADED mode
       if (previousState === ServiceWorkerState.DEGRADED && this.callbacks.onStopPolling) {
         this.callbacks.onStopPolling();

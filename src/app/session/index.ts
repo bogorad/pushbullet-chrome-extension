@@ -193,12 +193,12 @@ export async function initializeSessionCache(
         );
       }
 
-       // Save our freshly built session to the database for next time.
-       saveSessionCache(sessionCache);
-       debugLogger.general("INFO", "Initialization completed successfully", {
-         source,
-         timestamp: new Date().toISOString(),
-       });
+      // Save our freshly built session to the database for next time.
+      saveSessionCache(sessionCache);
+      debugLogger.general("INFO", "Initialization completed successfully", {
+        source,
+        timestamp: new Date().toISOString(),
+      });
 
       return apiKeyValue;
     } catch (error) {
