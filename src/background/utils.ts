@@ -340,24 +340,87 @@ export async function showPushNotification(
       const imageUrl = sms.image_url;
 
       if (imageUrl && isTrustedImageUrl(imageUrl)) {
-        // It's an MMS with a valid image
-        notificationOptions = {
-          ...baseOptions,
-          type: "basic",
-          title: title,
-          message: message,
-          iconUrl: imageUrl,
-        };
-        debugLogger.notifications("INFO", "Showing image notification for MMS");
+        try {
+          debugLogger.notifications(
+            "DEBUG",
+            "Fetching contact photo for SMS notification",
+            {
+              imageUrl,
+            },
+          );
+
+          // Fetch the image and convert to data URL to avoid CORS issues
+          const response = await fetch(imageUrl);
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const blob = await response.blob();
+
+          // Convert blob to data URL
+          const reader = new FileReader();
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+
+          debugLogger.notifications("DEBUG", "Contact photo converted to data URL", {
+            originalUrl: imageUrl,
+            dataUrlLength: dataUrl.length,
+            blobSize: blob.size,
+            blobType: blob.type,
+          });
+
+          // Use data URL for notification (avoids CORS issues)
+          notificationOptions = {
+            ...baseOptions,
+            type: "basic",
+            title: title,
+            message: message,
+            iconUrl: dataUrl,
+          };
+
+          debugLogger.notifications(
+            "INFO",
+            "Showing business card SMS notification with contact photo",
+            {
+              title,
+              hasIcon: true,
+            },
+          );
+        } catch (error) {
+          debugLogger.notifications(
+            "WARN",
+            "Failed to fetch/convert contact photo, showing SMS without image",
+            {
+              imageUrl,
+              error: (error as Error).message,
+            },
+          );
+
+          // Fallback: notification without image
+          notificationOptions = {
+            ...baseOptions,
+            type: "basic",
+            title: title,
+            message: message,
+          };
+        }
       } else {
-        // It's a regular SMS
+        // Regular SMS without photo
         notificationOptions = {
           ...baseOptions,
           type: "basic",
           title: title,
           message: message,
         };
-        debugLogger.notifications("INFO", "Showing basic notification for SMS");
+
+        debugLogger.notifications("INFO", "Showing basic notification for SMS", {
+          title,
+          hasImage: false,
+        });
       }
     } else {
       // Standard handler for note, link, and file

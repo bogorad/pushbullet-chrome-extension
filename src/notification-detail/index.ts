@@ -3,10 +3,9 @@
  */
 
 import type { Push } from '../types/domain';
-import { MessageAction } from '../types/domain';
 import { getElementById, querySelector, setText } from '../lib/ui/dom';
 
-let pushData: Push | null = null;
+
 
 /**
  * Get notification ID from URL
@@ -21,26 +20,62 @@ function getNotificationId(): string | null {
  */
 function loadNotification(): void {
   const notificationId = getNotificationId();
-  
+
   if (!notificationId) {
     const messageEl = getElementById<HTMLDivElement>('message');
     setText(messageEl, 'No notification ID provided');
     return;
   }
 
-  // Request notification data from background
-  chrome.runtime.sendMessage({
-    action: MessageAction.GET_NOTIFICATION_DATA,
-    notificationId: notificationId
-  }, (response: { success: boolean; push?: Push; error?: string }) => {
-    if (response && response.push) {
-      pushData = response.push;
-      displayNotification(pushData);
-    } else {
-      const messageEl = getElementById<HTMLDivElement>('message');
-      setText(messageEl, 'Notification not found');
-    }
-  });
+  // Request push data
+  chrome.runtime.sendMessage(
+    { type: "GET_PUSH_DATA", notificationId },
+    (response) => {
+      if (!response || !response.success || !response.push) {
+        document.getElementById("message")!.textContent =
+          "Notification not found";
+        return;
+      }
+
+      const push = response.push;
+
+      // Display contact photo for SMS
+      if (push.type === "sms_changed" && push.notifications?.[0]?.image_url) {
+        const imageUrl = push.notifications[0].image_url;
+
+        // Fetch and convert to data URL
+        fetch(imageUrl)
+          .then((res) => res.blob())
+          .then((blob) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              // Create circular contact photo
+              const photo = document.createElement("div");
+              photo.style.cssText = `
+                width: 80px; height: 80px; border-radius: 50%;
+                overflow: hidden; margin: 0 auto 16px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+              `;
+
+              const img = document.createElement("img");
+              img.src = reader.result as string;
+              img.style.cssText = "width: 100%; height: 100%; object-fit: cover;";
+              photo.appendChild(img);
+
+              // Insert at top of header
+              const header = document.querySelector(".header");
+              if (header) {
+                header.insertBefore(photo, header.firstChild);
+              }
+            };
+            reader.readAsDataURL(blob);
+          })
+          .catch((err) => console.error("Failed to load photo:", err));
+      }
+
+      displayNotification(push);
+    },
+  );
 }
 
 /**

@@ -2161,14 +2161,62 @@
         const message = sms.body;
         const imageUrl = sms.image_url;
         if (imageUrl && isTrustedImageUrl(imageUrl)) {
-          notificationOptions = {
-            ...baseOptions,
-            type: "basic",
-            title,
-            message,
-            iconUrl: imageUrl
-          };
-          debugLogger.notifications("INFO", "Showing image notification for MMS");
+          try {
+            debugLogger.notifications(
+              "DEBUG",
+              "Fetching contact photo for SMS notification",
+              {
+                imageUrl
+              }
+            );
+            const response = await fetch(imageUrl);
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const blob = await response.blob();
+            const reader = new FileReader();
+            const dataUrl = await new Promise((resolve, reject) => {
+              reader.onloadend = () => resolve(reader.result);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            debugLogger.notifications("DEBUG", "Contact photo converted to data URL", {
+              originalUrl: imageUrl,
+              dataUrlLength: dataUrl.length,
+              blobSize: blob.size,
+              blobType: blob.type
+            });
+            notificationOptions = {
+              ...baseOptions,
+              type: "basic",
+              title,
+              message,
+              iconUrl: dataUrl
+            };
+            debugLogger.notifications(
+              "INFO",
+              "Showing business card SMS notification with contact photo",
+              {
+                title,
+                hasIcon: true
+              }
+            );
+          } catch (error) {
+            debugLogger.notifications(
+              "WARN",
+              "Failed to fetch/convert contact photo, showing SMS without image",
+              {
+                imageUrl,
+                error: error.message
+              }
+            );
+            notificationOptions = {
+              ...baseOptions,
+              type: "basic",
+              title,
+              message
+            };
+          }
         } else {
           notificationOptions = {
             ...baseOptions,
@@ -2176,7 +2224,10 @@
             title,
             message
           };
-          debugLogger.notifications("INFO", "Showing basic notification for SMS");
+          debugLogger.notifications("INFO", "Showing basic notification for SMS", {
+            title,
+            hasImage: false
+          });
         }
       } else {
         let title = "Pushbullet";
@@ -3331,6 +3382,30 @@
       }
       return false;
     }
+    debugLogger.general("DEBUG", "Message received", {
+      type: message.type,
+      sender: sender.id
+    });
+    if (message.type === "GET_PUSH_DATA") {
+      debugLogger.general("DEBUG", "GET_PUSH_DATA request received", {
+        notificationId: message.notificationId
+      });
+      const push = notificationDataStore.get(message.notificationId);
+      if (push) {
+        debugLogger.general("DEBUG", "Push data found", {
+          notificationId: message.notificationId,
+          pushType: push.type
+        });
+        sendResponse({ success: true, push });
+      } else {
+        debugLogger.general("WARN", "Push data not found", {
+          notificationId: message.notificationId,
+          storeSize: notificationDataStore.size
+        });
+        sendResponse({ success: false, error: "Push data not found" });
+      }
+      return true;
+    }
     if (message.action === "getSessionData" /* GET_SESSION_DATA */) {
       (async () => {
         try {
@@ -3690,6 +3765,52 @@
       return true;
     }
     return false;
+  });
+  chrome.notifications.onClicked.addListener((notificationId) => {
+    debugLogger.notifications("INFO", "Notification clicked", {
+      notificationId
+    });
+    const push = notificationDataStore.get(notificationId);
+    if (!push) {
+      debugLogger.notifications(
+        "WARN",
+        "No push data found for clicked notification",
+        {
+          notificationId
+        }
+      );
+      return;
+    }
+    const detailUrl = chrome.runtime.getURL(
+      `notification-detail.html?id=${encodeURIComponent(notificationId)}`
+    );
+    chrome.windows.create(
+      {
+        url: detailUrl,
+        type: "popup",
+        width: 500,
+        height: 600,
+        focused: true
+      },
+      (window) => {
+        if (chrome.runtime.lastError) {
+          debugLogger.notifications(
+            "ERROR",
+            "Failed to open notification detail",
+            {
+              notificationId,
+              error: chrome.runtime.lastError.message
+            }
+          );
+        } else {
+          debugLogger.notifications("INFO", "Notification detail opened in popup", {
+            notificationId,
+            windowId: window?.id
+          });
+        }
+      }
+    );
+    chrome.notifications.clear(notificationId);
   });
   globalThis.exportDebugInfo = function() {
     return {

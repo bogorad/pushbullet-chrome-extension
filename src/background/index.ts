@@ -662,6 +662,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  debugLogger.general("DEBUG", "Message received", {
+    type: message.type,
+    sender: sender.id,
+  });
+
+  if (message.type === "GET_PUSH_DATA") {
+    debugLogger.general("DEBUG", "GET_PUSH_DATA request received", {
+      notificationId: message.notificationId,
+    });
+
+    const push = notificationDataStore.get(message.notificationId);
+
+    if (push) {
+      debugLogger.general("DEBUG", "Push data found", {
+        notificationId: message.notificationId,
+        pushType: push.type,
+      });
+
+      sendResponse({ success: true, push });
+    } else {
+      debugLogger.general("WARN", "Push data not found", {
+        notificationId: message.notificationId,
+        storeSize: notificationDataStore.size,
+      });
+
+      sendResponse({ success: false, error: "Push data not found" });
+    }
+
+    return true; // IMPORTANT: Keep channel open
+  }
+
   if (message.action === MessageAction.GET_SESSION_DATA) {
     // SERVICE WORKER AMNESIA FIX: Check storage directly, not the in-memory variable
     // After service worker restart, in-memory variables are null, but storage persists.
@@ -1141,6 +1172,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   return false;
+});
+
+// Notification clicked handler
+chrome.notifications.onClicked.addListener((notificationId: string) => {
+  debugLogger.notifications("INFO", "Notification clicked", {
+    notificationId,
+  });
+
+  // Get the push data from the notification store
+  const push = notificationDataStore.get(notificationId);
+
+  if (!push) {
+    debugLogger.notifications(
+      "WARN",
+      "No push data found for clicked notification",
+      {
+        notificationId,
+      },
+    );
+    return;
+  }
+
+  // Open notification detail page in a popup window
+  const detailUrl = chrome.runtime.getURL(
+    `notification-detail.html?id=${encodeURIComponent(notificationId)}`,
+  );
+
+  chrome.windows.create(
+    {
+      url: detailUrl,
+      type: 'popup',
+      width: 500,
+      height: 600,
+      focused: true,
+    },
+    (window) => {
+      if (chrome.runtime.lastError) {
+        debugLogger.notifications(
+          "ERROR",
+          "Failed to open notification detail",
+          {
+            notificationId,
+            error: chrome.runtime.lastError.message,
+          },
+        );
+      } else {
+        debugLogger.notifications("INFO", "Notification detail opened in popup", {
+          notificationId,
+          windowId: window?.id,
+        });
+      }
+    },
+  );
+
+  // Clear the notification after opening
+  chrome.notifications.clear(notificationId);
 });
 
 // Export debug info function for console access

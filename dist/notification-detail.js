@@ -32,18 +32,41 @@
       setText(messageEl, "No notification ID provided");
       return;
     }
-    chrome.runtime.sendMessage({
-      action: "getNotificationData" /* GET_NOTIFICATION_DATA */,
-      notificationId
-    }, (response) => {
-      if (response && response.push) {
-        pushData = response.push;
-        displayNotification(pushData);
-      } else {
-        const messageEl = getElementById("message");
-        setText(messageEl, "Notification not found");
+    chrome.runtime.sendMessage(
+      { type: "GET_PUSH_DATA", notificationId },
+      (response) => {
+        if (!response || !response.success || !response.push) {
+          document.getElementById("message").textContent = "Notification not found";
+          return;
+        }
+        const push = response.push;
+        if (push.type === "sms_changed" && push.notifications?.[0]?.image_url) {
+          const imageUrl = push.notifications[0].image_url;
+          fetch(imageUrl).then((res) => res.blob()).then((blob) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const photo = document.createElement("div");
+              photo.style.cssText = `
+                width: 80px; height: 80px; border-radius: 50%;
+                overflow: hidden; margin: 0 auto 16px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+              `;
+              const img = document.createElement("img");
+              img.src = reader.result;
+              img.style.cssText = "width: 100%; height: 100%; object-fit: cover;";
+              photo.appendChild(img);
+              const header = document.querySelector(".header");
+              if (header) {
+                header.insertBefore(photo, header.firstChild);
+              }
+            };
+            reader.readAsDataURL(blob);
+          }).catch((err) => console.error("Failed to load photo:", err));
+        }
+        pushData = push;
+        displayNotification(push);
       }
-    });
+    );
   }
   function isTrustedImageUrl(urlString) {
     if (!urlString) return false;
