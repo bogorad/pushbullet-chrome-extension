@@ -1,9 +1,10 @@
 import type { SessionCache } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import {
-  fetchUserInfo,
+  fetchChats,
   fetchDevices,
   fetchRecentPushes,
+  fetchUserInfo,
   registerDevice,
 } from "../api/client";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
@@ -14,6 +15,7 @@ export const sessionCache: SessionCache = {
   userInfo: null,
   devices: [],
   recentPushes: [],
+  chats: [], // ← ADD THIS LINE
   isAuthenticated: false,
   lastUpdated: 0,
   autoOpenLinks: true,
@@ -28,6 +30,7 @@ export function resetSessionCache(): void {
   sessionCache.userInfo = null;
   sessionCache.devices = [];
   sessionCache.recentPushes = [];
+  sessionCache.chats = [];
   sessionCache.isAuthenticated = false;
   sessionCache.lastUpdated = 0;
   sessionCache.autoOpenLinks = true;
@@ -161,6 +164,23 @@ export async function initializeSessionCache(
         const pushes = await fetchRecentPushes(apiKeyValue);
         sessionCache.recentPushes = pushes;
 
+        // ========== ADD THIS ENTIRE BLOCK ==========
+        // Fetch chats (friends/contacts)
+        try {
+          const chats = await fetchChats(apiKeyValue);
+          sessionCache.chats = chats;
+          debugLogger.general("INFO", "Chats loaded successfully", {
+            chatCount: chats.length,
+          });
+        } catch (error) {
+          // Don't fail initialization if chats fail to load
+          debugLogger.general("WARN", "Failed to load chats, continuing anyway", {
+            error: (error as Error).message,
+          });
+          sessionCache.chats = [];
+        }
+        // ========== END OF BLOCK ==========
+
         // Update session cache
         sessionCache.isAuthenticated = true;
         sessionCache.lastUpdated = Date.now();
@@ -251,6 +271,18 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
       debugLogger.general("DEBUG", "Refreshing recent pushes");
       const pushes = await fetchRecentPushes(apiKeyParam);
       sessionCache.recentPushes = pushes;
+
+      // ========== ADD THIS ==========
+      // Refresh chats
+      try {
+        const chats = await fetchChats(apiKeyParam);
+        sessionCache.chats = chats;
+      } catch (error) {
+        debugLogger.general("WARN", "Failed to refresh chats", {
+          error: (error as Error).message,
+        });
+      }
+      // ========== END ==========
 
       // Update session cache
       sessionCache.isAuthenticated = true;

@@ -1,4 +1,4 @@
-import type { User, Device, Push, DevicesResponse, PushesResponse } from "../../types/domain";
+import type { Chat, User, Device, Push, DevicesResponse, PushesResponse } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
 
@@ -337,4 +337,48 @@ export async function updateDeviceNickname(
     throw error;
   }
 }
+
+/**
+ * Fetch chats (contacts/friends) from Pushbullet
+ * Returns list of active chats only
+ */
+export async function fetchChats(apiKey: string): Promise<Chat[]> {
+  try {
+    debugLogger.api("INFO", "Fetching chats from Pushbullet API");
+
+    const response = await fetch('https://api.pushbullet.com/v2/chats', {
+      method: 'GET',
+      headers: {
+        'Access-Token': apiKey,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch chats: ${response.status} ${response.statusText}`
+      );
+    }
+
+    const data = await response.json();
+    const chats = data.chats || [];
+
+    // Filter to only active chats (not deleted)
+    const activeChats = chats.filter((chat: Chat) => chat.active);
+
+    debugLogger.api("INFO", "Chats fetched successfully", {
+      totalChats: chats.length,
+      activeChats: activeChats.length,
+    });
+
+    return activeChats;
+
+  } catch (error) {
+    debugLogger.api("ERROR", "Error fetching chats", {
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+}
+
 

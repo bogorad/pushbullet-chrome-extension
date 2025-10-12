@@ -210,7 +210,7 @@
     if (response.userInfo) {
       updateUserInfo(response.userInfo);
     }
-    populateDeviceDropdown(response.devices);
+    populateDeviceDropdown(response.devices, response.chats);
     displayPushes(response.recentPushes);
     showSection("main");
   }
@@ -341,7 +341,7 @@
       userImage.style.display = "none";
     }
   }
-  function populateDeviceDropdown(devicesList) {
+  function populateDeviceDropdown(devicesList, chatsList) {
     const devicesToUse = devicesList || devices;
     while (targetDeviceSelect.options.length > 1) {
       targetDeviceSelect.remove(1);
@@ -352,6 +352,20 @@
       option.textContent = device.nickname || device.model || "Unknown Device";
       targetDeviceSelect.appendChild(option);
     });
+    const chatsToUse = chatsList || [];
+    if (chatsToUse && chatsToUse.length > 0) {
+      const friendSeparator = document.createElement("option");
+      friendSeparator.disabled = true;
+      friendSeparator.textContent = "--- Friends ---";
+      targetDeviceSelect.appendChild(friendSeparator);
+      chatsToUse.forEach((chat) => {
+        const option = document.createElement("option");
+        option.value = `friend:${chat.with.email}`;
+        const displayName = chat.with.name || chat.with.email;
+        option.textContent = `F: ${displayName}`;
+        targetDeviceSelect.appendChild(option);
+      });
+    }
   }
   function displayPushes(pushes) {
     pushesList.innerHTML = "";
@@ -497,7 +511,24 @@
         type: pushType
       };
       if (targetDevice !== "all") {
-        pushData.device_iden = targetDevice;
+        if (targetDevice.startsWith("friend:")) {
+          const email = targetDevice.replace("friend:", "");
+          pushData.email = email;
+          logToBackground("INFO", "Sending push to friend", {
+            email,
+            pushType
+          });
+        } else {
+          pushData.device_iden = targetDevice;
+          logToBackground("INFO", "Sending push to device", {
+            deviceIden: targetDevice,
+            pushType
+          });
+        }
+      } else {
+        logToBackground("INFO", "Sending push to all devices", {
+          pushType
+        });
       }
       if (pushType === "note") {
         logToBackground("INFO", '[sendPush] Handling "note" type.');

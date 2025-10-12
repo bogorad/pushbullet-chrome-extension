@@ -2,12 +2,13 @@
  * Popup page - Full TypeScript implementation
  */
 
-import type { Push, Device, User, SessionDataResponse } from "../types/domain";
+import type { Push, Device, User, Chat, SessionDataResponse } from "../types/domain";
 import { MessageAction } from "../types/domain";
 import {
   getElementById,
 } from "../lib/ui/dom";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
+import { sessionCache } from "../app/session";
 
 // Response type for API key save operations
 type SaveKeyResponse = SessionDataResponse | { success: false; error?: string };
@@ -33,6 +34,7 @@ interface SessionData {
   userInfo: User | null;
   devices: Device[];
   recentPushes: Push[];
+  chats: Chat[]; // ← ADD THIS
   autoOpenLinks: boolean;
   websocketConnected?: boolean;
   deviceNickname: string;
@@ -43,6 +45,7 @@ type PushType = "note" | "link" | "file";
 interface PushData {
   type: PushType;
   device_iden?: string;
+  email?: string;
   source_device_iden?: string;
   title?: string;
   body?: string;
@@ -129,7 +132,7 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
   }
 
   // Populate device dropdown
-  populateDeviceDropdown(response.devices);
+  populateDeviceDropdown(response.devices, response.chats);
 
   // Display pushes
   displayPushes(response.recentPushes);
@@ -384,7 +387,7 @@ function updateUserInfo(userInfo: User): void {
 /**
  * Populate device dropdown
  */
-function populateDeviceDropdown(devicesList: Device[]): void {
+function populateDeviceDropdown(devicesList: Device[], chatsList?: Chat[]): void {
   const devicesToUse = devicesList || devices;
 
   // Clear existing options except 'All Devices'
@@ -399,6 +402,32 @@ function populateDeviceDropdown(devicesList: Device[]): void {
     option.textContent = device.nickname || device.model || "Unknown Device";
     targetDeviceSelect.appendChild(option);
   });
+
+  // ========== ADD THIS ENTIRE SECTION ==========
+  // Add friends/contacts to dropdown
+  const chatsToUse = chatsList || [];
+  if (chatsToUse && chatsToUse.length > 0) {
+    // Add visual separator
+    const friendSeparator = document.createElement("option");
+    friendSeparator.disabled = true;
+    friendSeparator.textContent = "--- Friends ---";
+    targetDeviceSelect.appendChild(friendSeparator);
+
+    // Add each friend
+    chatsToUse.forEach((chat) => {
+      const option = document.createElement("option");
+
+      // Value: "friend:<email>" - lets us detect friend selection
+      option.value = `friend:${chat.with.email}`;
+
+      // Display: "F: <name>" or "F: <email>" if no name
+      const displayName = chat.with.name || chat.with.email;
+      option.textContent = `F: ${displayName}`;
+
+      targetDeviceSelect.appendChild(option);
+    });
+  }
+  // ========== END OF SECTION ==========
 }
 
 /**
@@ -599,10 +628,34 @@ async function sendPush(): Promise<void> {
       type: pushType,
     };
 
-    // Set device target
+    // ========== REPLACE OLD CODE WITH THIS ==========
+    // Check if sending to friend or device
     if (targetDevice !== "all") {
-      pushData.device_iden = targetDevice;
+      if (targetDevice.startsWith("friend:")) {
+        // Sending to a friend - extract email
+        const email = targetDevice.replace("friend:", "");
+        pushData.email = email; // Use email field, not device_iden
+
+        logToBackground("INFO", "Sending push to friend", {
+          email: email,
+          pushType: pushType,
+        });
+      } else {
+        // Sending to a specific device
+        pushData.device_iden = targetDevice;
+
+        logToBackground("INFO", "Sending push to device", {
+          deviceIden: targetDevice,
+          pushType: pushType,
+        });
+      }
+    } else {
+      // No selection = send to all devices
+      logToBackground("INFO", "Sending push to all devices", {
+        pushType: pushType,
+      });
     }
+    // ========== END OF REPLACEMENT ==========
 
     // Set push data based on type
     if (pushType === "note") {

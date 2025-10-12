@@ -111,6 +111,30 @@ export interface SmsChangedPush extends PushBase {
 export type Push = LinkPush | NotePush | FilePush | MirrorPush | DismissalPush | SmsChangedPush;
 
 // ============================================================================
+// Chat Types
+// ============================================================================
+
+/**
+ * Represents a chat/conversation with a contact
+ * From /v2/chats API endpoint
+ */
+export interface Chat {
+  iden: string;
+  active: boolean;
+  created: number;
+  modified: number;
+  muted?: boolean;
+  with: {
+    email: string;
+    email_normalized: string;
+    iden?: string;
+    image_url?: string;
+    name?: string;
+    type: "user" | "email";
+  };
+}
+
+// ============================================================================
 // Session and State Types
 // ============================================================================
 
@@ -118,6 +142,7 @@ export interface SessionCache {
   userInfo: User | null;
   devices: Device[];
   recentPushes: Push[];
+  chats: Chat[]; // ← ADD THIS LINE
   isAuthenticated: boolean;
   lastUpdated: number;
   autoOpenLinks: boolean;
@@ -237,6 +262,7 @@ export interface SessionDataResponse {
   userInfo: User | null;
   devices: Device[];
   recentPushes: Push[];
+  chats: Chat[]; // ← ADD THIS
   autoOpenLinks: boolean;
   deviceNickname: string;
   websocketConnected?: boolean;

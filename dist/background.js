@@ -1483,6 +1483,36 @@
       throw error;
     }
   }
+  async function fetchChats(apiKey2) {
+    try {
+      debugLogger.api("INFO", "Fetching chats from Pushbullet API");
+      const response = await fetch("https://api.pushbullet.com/v2/chats", {
+        method: "GET",
+        headers: {
+          "Access-Token": apiKey2,
+          "Content-Type": "application/json"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch chats: ${response.status} ${response.statusText}`
+        );
+      }
+      const data = await response.json();
+      const chats = data.chats || [];
+      const activeChats = chats.filter((chat) => chat.active);
+      debugLogger.api("INFO", "Chats fetched successfully", {
+        totalChats: chats.length,
+        activeChats: activeChats.length
+      });
+      return activeChats;
+    } catch (error) {
+      debugLogger.api("ERROR", "Error fetching chats", {
+        error: error.message
+      });
+      throw error;
+    }
+  }
 
   // src/infrastructure/storage/indexed-db.ts
   var DB_NAME = "PushbulletState";
@@ -1553,6 +1583,8 @@
     userInfo: null,
     devices: [],
     recentPushes: [],
+    chats: [],
+    // ← ADD THIS LINE
     isAuthenticated: false,
     lastUpdated: 0,
     autoOpenLinks: true,
@@ -1562,6 +1594,7 @@
     sessionCache.userInfo = null;
     sessionCache.devices = [];
     sessionCache.recentPushes = [];
+    sessionCache.chats = [];
     sessionCache.isAuthenticated = false;
     sessionCache.lastUpdated = 0;
     sessionCache.autoOpenLinks = true;
@@ -1639,6 +1672,18 @@
           sessionCache.devices = devices;
           const pushes = await fetchRecentPushes(apiKeyValue);
           sessionCache.recentPushes = pushes;
+          try {
+            const chats = await fetchChats(apiKeyValue);
+            sessionCache.chats = chats;
+            debugLogger.general("INFO", "Chats loaded successfully", {
+              chatCount: chats.length
+            });
+          } catch (error) {
+            debugLogger.general("WARN", "Failed to load chats, continuing anyway", {
+              error: error.message
+            });
+            sessionCache.chats = [];
+          }
           sessionCache.isAuthenticated = true;
           sessionCache.lastUpdated = Date.now();
           debugLogger.general("INFO", "Session cache populated successfully", {
@@ -1705,6 +1750,14 @@
         debugLogger.general("DEBUG", "Refreshing recent pushes");
         const pushes = await fetchRecentPushes(apiKeyParam);
         sessionCache.recentPushes = pushes;
+        try {
+          const chats = await fetchChats(apiKeyParam);
+          sessionCache.chats = chats;
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to refresh chats", {
+            error: error.message
+          });
+        }
         sessionCache.isAuthenticated = true;
         sessionCache.lastUpdated = Date.now();
         debugLogger.general("INFO", "Session cache refreshed successfully", {
@@ -3409,10 +3462,13 @@
       }
       return false;
     }
-    debugLogger.general("DEBUG", "Message received", {
-      type: message.type,
-      sender: sender.id
-    });
+    if (message.action !== "getDebugSummary" /* GET_DEBUG_SUMMARY */) {
+      debugLogger.general("DEBUG", "Message received", {
+        type: message.type,
+        action: message.action,
+        sender: sender.id
+      });
+    }
     if (message.type === "GET_PUSH_DATA") {
       debugLogger.general("DEBUG", "GET_PUSH_DATA request received", {
         notificationId: message.notificationId
@@ -3456,6 +3512,8 @@
             userInfo: sessionCache.userInfo,
             devices: sessionCache.devices,
             recentPushes: sessionCache.recentPushes,
+            chats: sessionCache.chats || [],
+            // ← ADD THIS
             autoOpenLinks: getAutoOpenLinks(),
             deviceNickname: getDeviceNickname(),
             websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
@@ -3496,6 +3554,8 @@
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,
           recentPushes: sessionCache.recentPushes,
+          chats: sessionCache.chats || [],
+          // ← ADD THIS
           autoOpenLinks: sessionCache.autoOpenLinks,
           deviceNickname: sessionCache.deviceNickname,
           websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
@@ -3532,6 +3592,8 @@
               userInfo: sessionCache.userInfo,
               devices: sessionCache.devices,
               recentPushes: sessionCache.recentPushes,
+              chats: sessionCache.chats || [],
+              // ← ADD THIS
               autoOpenLinks: sessionCache.autoOpenLinks,
               deviceNickname: sessionCache.deviceNickname
             });

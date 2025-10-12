@@ -675,10 +675,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  debugLogger.general("DEBUG", "Message received", {
-    type: message.type,
-    sender: sender.id,
-  });
+  // Log the message (skip debug dashboard auto-refresh spam)
+  if (message.action !== MessageAction.GET_DEBUG_SUMMARY) {
+    debugLogger.general("DEBUG", "Message received", {
+      type: message.type,
+      action: message.action,
+      sender: sender.id,
+    });
+  }
 
   if (message.type === "GET_PUSH_DATA") {
     debugLogger.general("DEBUG", "GET_PUSH_DATA request received", {
@@ -741,6 +745,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,
           recentPushes: sessionCache.recentPushes,
+          chats: sessionCache.chats || [], // ← ADD THIS
           autoOpenLinks: getAutoOpenLinks(),
           deviceNickname: getDeviceNickname(),
           websocketConnected: websocketClient
@@ -798,6 +803,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,
           recentPushes: sessionCache.recentPushes,
+          chats: sessionCache.chats || [], // ← ADD THIS
           autoOpenLinks: sessionCache.autoOpenLinks,
           deviceNickname: sessionCache.deviceNickname,
           websocketConnected: websocketClient
@@ -851,6 +857,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               userInfo: sessionCache.userInfo,
               devices: sessionCache.devices,
               recentPushes: sessionCache.recentPushes,
+              chats: sessionCache.chats || [], // ← ADD THIS
               autoOpenLinks: sessionCache.autoOpenLinks,
               deviceNickname: sessionCache.deviceNickname,
             });
