@@ -20,7 +20,6 @@
   }
 
   // src/notification-detail/index.ts
-  var pushData = null;
   function getNotificationId() {
     const urlParams = new URLSearchParams(window.location.search);
     return urlParams.get("id");
@@ -63,7 +62,6 @@
             reader.readAsDataURL(blob);
           }).catch((err) => console.error("Failed to load photo:", err));
         }
-        pushData = push;
         displayNotification(push);
       }
     );

@@ -339,3 +339,33 @@ a:hover {
 .secondary-btn:active {
   background-color: #545b62;
 }
+
+/* Pushbullet Web App Link */
+.web-app-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 6px;
+  border-radius: 50%;
+  background-color: transparent;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    transform 0.1s;
+  text-decoration: none;
+  margin-left: 8px;
+}
+
+.web-app-link:hover {
+  background-color: rgba(74, 179, 103, 0.15);
+  transform: scale(1.1);
+}
+
+.web-app-icon {
+  width: 24px;
+  height: 24px;
+  display: block;
+  image-rendering: crisp-edges;
+}

@@ -327,7 +327,7 @@ describe('showPushNotification - Notification Creation', () => {
     const [notificationId, notificationOptions] = chrome.notifications.create.mock.calls[0];
     
     expect(notificationOptions.type).toBe('basic');
-    expect(notificationOptions.title).toBe('Mirrored Title');
+    expect(notificationOptions.title).toBe('TestApp: Mirrored Title');
     expect(notificationOptions.message).toBe('Mirrored body');
     expect(notificationOptions.iconUrl).toBeDefined();
   });

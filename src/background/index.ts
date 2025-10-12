@@ -299,6 +299,11 @@ function connectWebSocket(): void {
           debugLogger.general("INFO", "Push decrypted successfully", {
             pushType: decryptedPush.type,
           });
+
+          // ADD THIS - Full dump of decrypted data
+          debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
+            completeData: decryptedPush,
+          });
         } else {
           debugLogger.general(
             "WARN",
@@ -334,6 +339,14 @@ function connectWebSocket(): void {
       pushType: decryptedPush.type,
       pushIden: decryptedPush.iden,
     });
+
+    // ADD THIS - Dump for Mirror Messages
+    if (decryptedPush.type === 'mirror') {
+      // Log full mirror message data to see all available fields
+      debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
+        completeMirrorData: decryptedPush,
+      });
+    }
 
     // Update cache (prepend)
     if (sessionCache.recentPushes) {

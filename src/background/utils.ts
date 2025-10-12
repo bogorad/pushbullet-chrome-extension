@@ -521,39 +521,67 @@ export async function showPushNotification(
           }
         }
       } else if (push.type === "mirror") {
+        // Format title as "AppName: SenderName" for better clarity
         const mirrorTitle =
-          push.title || push.application_name || "Notification";
+          push.application_name && push.title
+            ? `${push.application_name}: ${push.title}`
+            : push.title || push.application_name || "Notification";
         const mirrorMessage = push.body || "";
+        const iconData = (push as any).icon;
 
-        // Security validation for image URLs
-        const mirrorImageUrl = (push as any).image_url;
-        if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
-          notificationOptions = {
-            ...baseOptions,
-            type: "image",
+        // Check if mirror has an icon (base64 image data)
+        if (iconData && typeof iconData === 'string' && iconData.startsWith('/9j/')) {
+          debugLogger.notifications("DEBUG", "Processing mirror notification icon", {
+            iconDataLength: iconData.length,
             title: mirrorTitle,
-            message: mirrorMessage,
-            imageUrl: mirrorImageUrl,
-          };
-          debugLogger.notifications(
-            "INFO",
-            "Showing image notification for trusted mirrored push",
-            { pushType: push.type },
-          );
-        } else {
-          // Fallback to basic notification for security
+          });
+
+          // Icon is already base64 JPEG data, just add data URL prefix
+          const dataUrl = `data:image/jpeg;base64,${iconData}`;
+
           notificationOptions = {
             ...baseOptions,
             type: "basic",
             title: mirrorTitle,
             message: mirrorMessage,
+            iconUrl: dataUrl,
           };
-          if (mirrorImageUrl) {
+
+          debugLogger.notifications("INFO", "Showing mirror notification with icon", {
+            title: mirrorTitle,
+            hasIcon: true,
+            application: push.application_name,
+          });
+        } else {
+          // Security validation for image URLs (fallback)
+          const mirrorImageUrl = (push as any).image_url;
+          if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
+            notificationOptions = {
+              ...baseOptions,
+              type: "image",
+              title: mirrorTitle,
+              message: mirrorMessage,
+              imageUrl: mirrorImageUrl,
+            };
             debugLogger.notifications(
-              "WARN",
-              "Ignored image from untrusted domain for mirror push",
-              { imageUrl: mirrorImageUrl },
+              "INFO",
+              "Showing image notification for trusted mirrored push",
+              { pushType: push.type },
             );
+          } else {
+            // No icon, show basic notification
+            notificationOptions = {
+              ...baseOptions,
+              type: "basic",
+              title: mirrorTitle,
+              message: mirrorMessage,
+            };
+
+            debugLogger.notifications("INFO", "Showing mirror notification without icon", {
+              title: mirrorTitle,
+              hasIcon: false,
+              application: push.application_name,
+            });
           }
         }
       } else {

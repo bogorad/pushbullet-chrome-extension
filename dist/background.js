@@ -2307,35 +2307,54 @@
             }
           }
         } else if (push.type === "mirror") {
-          const mirrorTitle = push.title || push.application_name || "Notification";
+          const mirrorTitle = push.application_name && push.title ? `${push.application_name}: ${push.title}` : push.title || push.application_name || "Notification";
           const mirrorMessage = push.body || "";
-          const mirrorImageUrl = push.image_url;
-          if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
-            notificationOptions = {
-              ...baseOptions,
-              type: "image",
-              title: mirrorTitle,
-              message: mirrorMessage,
-              imageUrl: mirrorImageUrl
-            };
-            debugLogger.notifications(
-              "INFO",
-              "Showing image notification for trusted mirrored push",
-              { pushType: push.type }
-            );
-          } else {
+          const iconData = push.icon;
+          if (iconData && typeof iconData === "string" && iconData.startsWith("/9j/")) {
+            debugLogger.notifications("DEBUG", "Processing mirror notification icon", {
+              iconDataLength: iconData.length,
+              title: mirrorTitle
+            });
+            const dataUrl = `data:image/jpeg;base64,${iconData}`;
             notificationOptions = {
               ...baseOptions,
               type: "basic",
               title: mirrorTitle,
-              message: mirrorMessage
+              message: mirrorMessage,
+              iconUrl: dataUrl
             };
-            if (mirrorImageUrl) {
+            debugLogger.notifications("INFO", "Showing mirror notification with icon", {
+              title: mirrorTitle,
+              hasIcon: true,
+              application: push.application_name
+            });
+          } else {
+            const mirrorImageUrl = push.image_url;
+            if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
+              notificationOptions = {
+                ...baseOptions,
+                type: "image",
+                title: mirrorTitle,
+                message: mirrorMessage,
+                imageUrl: mirrorImageUrl
+              };
               debugLogger.notifications(
-                "WARN",
-                "Ignored image from untrusted domain for mirror push",
-                { imageUrl: mirrorImageUrl }
+                "INFO",
+                "Showing image notification for trusted mirrored push",
+                { pushType: push.type }
               );
+            } else {
+              notificationOptions = {
+                ...baseOptions,
+                type: "basic",
+                title: mirrorTitle,
+                message: mirrorMessage
+              };
+              debugLogger.notifications("INFO", "Showing mirror notification without icon", {
+                title: mirrorTitle,
+                hasIcon: false,
+                application: push.application_name
+              });
             }
           }
         } else {
@@ -3130,6 +3149,9 @@
             debugLogger.general("INFO", "Push decrypted successfully", {
               pushType: decryptedPush.type
             });
+            debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
+              completeData: decryptedPush
+            });
           } else {
             debugLogger.general(
               "WARN",
@@ -3159,6 +3181,11 @@
         pushType: decryptedPush.type,
         pushIden: decryptedPush.iden
       });
+      if (decryptedPush.type === "mirror") {
+        debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
+          completeMirrorData: decryptedPush
+        });
+      }
       if (sessionCache.recentPushes) {
         sessionCache.recentPushes.unshift(decryptedPush);
         saveSessionCache(sessionCache);
