@@ -2003,7 +2003,7 @@
     }
     try {
       const url = new URL(urlString);
-      return url.hostname.endsWith(".pushbullet.com") || /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);
+      return url.hostname.endsWith(".pushbullet.com") || url.hostname.endsWith(".pushbulletusercontent.com") || /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);
     } catch {
       debugLogger.general("WARN", "Could not parse URL for domain check", {
         url: urlString
@@ -2036,10 +2036,15 @@
         badgeColor
       });
     } catch (error) {
-      debugLogger.general("ERROR", "Exception setting badge", {
-        status,
-        error: error.message
-      }, error);
+      debugLogger.general(
+        "ERROR",
+        "Exception setting badge",
+        {
+          status,
+          error: error.message
+        },
+        error
+      );
     }
   }
   async function refreshPushes(notificationDataStore2) {
@@ -2158,10 +2163,10 @@
         if (imageUrl && isTrustedImageUrl(imageUrl)) {
           notificationOptions = {
             ...baseOptions,
-            type: "image",
+            type: "basic",
             title,
             message,
-            imageUrl
+            iconUrl: imageUrl
           };
           debugLogger.notifications("INFO", "Showing image notification for MMS");
         } else {
@@ -2385,7 +2390,10 @@
   function performWebSocketHealthCheck(wsClient, connectFn) {
     const apiKey2 = getApiKey();
     if (apiKey2 && (!wsClient || !wsClient.isConnected())) {
-      debugLogger.websocket("WARN", "Health check failed - WebSocket is disconnected. Triggering reconnect.");
+      debugLogger.websocket(
+        "WARN",
+        "Health check failed - WebSocket is disconnected. Triggering reconnect."
+      );
       performanceMonitor.recordHealthCheckFailure();
       connectFn();
     } else if (wsClient && wsClient.isConnected()) {
@@ -2393,7 +2401,10 @@
         debugLogger.websocket("DEBUG", "WebSocket connection is healthy.");
         performanceMonitor.recordHealthCheckSuccess();
       } else {
-        debugLogger.websocket("WARN", "WebSocket connection is unhealthy. Triggering reconnect.");
+        debugLogger.websocket(
+          "WARN",
+          "WebSocket connection is unhealthy. Triggering reconnect."
+        );
         performanceMonitor.recordHealthCheckFailure();
         globalEventBus.emit("websocket:disconnected");
       }

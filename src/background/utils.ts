@@ -25,7 +25,11 @@ let isSettingUpContextMenu = false;
 /**
  * Connection status for icon updates
  */
-export type ConnectionStatus = "connected" | "connecting" | "disconnected" | "degraded";
+export type ConnectionStatus =
+  | "connected"
+  | "connecting"
+  | "disconnected"
+  | "degraded";
 
 /**
  * Sanitize text to prevent XSS attacks
@@ -92,6 +96,7 @@ function isTrustedImageUrl(urlString: string): boolean {
     // Trust Pushbullet domains and Google secure content domains
     return (
       url.hostname.endsWith(".pushbullet.com") ||
+      url.hostname.endsWith(".pushbulletusercontent.com") ||
       /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname)
     );
   } catch {
@@ -147,10 +152,15 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
       badgeColor,
     });
   } catch (error) {
-    debugLogger.general("ERROR", "Exception setting badge", {
-      status,
-      error: (error as Error).message,
-    }, error as Error);
+    debugLogger.general(
+      "ERROR",
+      "Exception setting badge",
+      {
+        status,
+        error: (error as Error).message,
+      },
+      error as Error,
+    );
   }
 }
 
@@ -333,10 +343,10 @@ export async function showPushNotification(
         // It's an MMS with a valid image
         notificationOptions = {
           ...baseOptions,
-          type: "image",
+          type: "basic",
           title: title,
           message: message,
-          imageUrl: imageUrl,
+          iconUrl: imageUrl,
         };
         debugLogger.notifications("INFO", "Showing image notification for MMS");
       } else {
@@ -629,13 +639,19 @@ export async function performPollingFetch(): Promise<void> {
 /**
  * Perform WebSocket health check
  */
-export function performWebSocketHealthCheck(wsClient: any, connectFn: () => void): void {
+export function performWebSocketHealthCheck(
+  wsClient: any,
+  connectFn: () => void,
+): void {
   const apiKey = getApiKey();
 
   // This is the key condition:
   // If we SHOULD be connected (we have an API key) but we ARE NOT...
   if (apiKey && (!wsClient || !wsClient.isConnected())) {
-    debugLogger.websocket("WARN", "Health check failed - WebSocket is disconnected. Triggering reconnect.");
+    debugLogger.websocket(
+      "WARN",
+      "Health check failed - WebSocket is disconnected. Triggering reconnect.",
+    );
     performanceMonitor.recordHealthCheckFailure();
 
     // ...then it's the health check's job to initiate the connection.
@@ -647,7 +663,10 @@ export function performWebSocketHealthCheck(wsClient: any, connectFn: () => void
       debugLogger.websocket("DEBUG", "WebSocket connection is healthy.");
       performanceMonitor.recordHealthCheckSuccess();
     } else {
-      debugLogger.websocket("WARN", "WebSocket connection is unhealthy. Triggering reconnect.");
+      debugLogger.websocket(
+        "WARN",
+        "WebSocket connection is unhealthy. Triggering reconnect.",
+      );
       performanceMonitor.recordHealthCheckFailure();
       globalEventBus.emit("websocket:disconnected");
     }
@@ -708,7 +727,7 @@ export function setupContextMenu(): void {
         });
         if (chrome.runtime.lastError) {
           const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || 'Unknown error';
+          const errorMessage = lastError.message || "Unknown error";
           debugLogger.general("ERROR", "Failed to create push-link menu", {
             error: errorMessage,
           });
@@ -721,7 +740,7 @@ export function setupContextMenu(): void {
         });
         if (chrome.runtime.lastError) {
           const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || 'Unknown error';
+          const errorMessage = lastError.message || "Unknown error";
           debugLogger.general("ERROR", "Failed to create push-page menu", {
             error: errorMessage,
           });
@@ -734,7 +753,7 @@ export function setupContextMenu(): void {
         });
         if (chrome.runtime.lastError) {
           const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || 'Unknown error';
+          const errorMessage = lastError.message || "Unknown error";
           debugLogger.general("ERROR", "Failed to create push-selection menu", {
             error: errorMessage,
           });
@@ -747,7 +766,7 @@ export function setupContextMenu(): void {
         });
         if (chrome.runtime.lastError) {
           const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || 'Unknown error';
+          const errorMessage = lastError.message || "Unknown error";
           debugLogger.general("ERROR", "Failed to create push-image menu", {
             error: errorMessage,
           });
