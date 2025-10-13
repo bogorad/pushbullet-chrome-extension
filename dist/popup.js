@@ -328,6 +328,52 @@
     loginSection.style.display = section === "login" ? "block" : "none";
     mainSection.style.display = section === "main" ? "block" : "none";
   }
+  function handleGlobalHotkeys(event) {
+    const target = event.target;
+    const isTypingInInput = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+    if (event.ctrlKey && event.key === "Enter") {
+      event.preventDefault();
+      sendPush();
+      return;
+    }
+    if (isTypingInInput) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    switch (key) {
+      case "n":
+        event.preventDefault();
+        togglePushType("note");
+        setTimeout(() => noteTitleInput.focus(), 50);
+        break;
+      case "l":
+        event.preventDefault();
+        togglePushType("link");
+        setTimeout(() => linkBodyInput.focus(), 100);
+        break;
+      case "a":
+        event.preventDefault();
+        togglePushType("file");
+        setTimeout(() => fileInput.click(), 50);
+        break;
+      case "s":
+        event.preventDefault();
+        chrome.runtime.openOptionsPage();
+        break;
+      case "d":
+        event.preventDefault();
+        chrome.tabs.create({
+          url: chrome.runtime.getURL("debug-dashboard.html")
+        });
+        break;
+      case "p":
+        event.preventDefault();
+        chrome.tabs.create({
+          url: "https://www.pushbullet.com"
+        });
+        break;
+    }
+  }
   function setupEventListeners() {
     saveApiKeyButton.addEventListener("click", saveApiKey);
     apiKeyInput.addEventListener("keyup", (event) => {
@@ -354,6 +400,7 @@
         url: chrome.runtime.getURL("debug-dashboard.html")
       });
     });
+    document.addEventListener("keydown", handleGlobalHotkeys);
   }
   async function saveApiKey() {
     const newApiKey = apiKeyInput.value.trim();

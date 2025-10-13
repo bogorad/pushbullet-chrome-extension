@@ -202,6 +202,88 @@ function showSection(section: "loading" | "login" | "main"): void {
 }
 
 /**
+ * Handles global keyboard shortcuts for the popup.
+ * This function responds to hotkeys like N, L, A for switching modes,
+ * and Ctrl+Enter for instant send.
+ *
+ * @param event - The keyboard event
+ */
+function handleGlobalHotkeys(event: KeyboardEvent): void {
+  // IMPORTANT: Get the element that's currently focused
+  const target = event.target as HTMLElement;
+  const isTypingInInput =
+    target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+
+  // === HANDLE CTRL+ENTER (works from ANY field) ===
+  if (event.ctrlKey && event.key === "Enter") {
+    event.preventDefault(); // Stop the browser's default behavior
+    sendPush(); // Call the existing send function
+    return; // Exit early - we're done
+  }
+
+  // === PREVENT HOTKEYS WHILE TYPING ===
+  // If user is typing in a text field, don't trigger mode-switching hotkeys
+  // (This prevents "n" from switching to Note mode while typing "connect")
+  if (isTypingInInput) {
+    return; // Exit - let the user type normally
+  }
+
+  // === MODE-SWITCHING HOTKEYS ===
+  // Convert key to lowercase so both "N" and "n" work
+  const key = event.key.toLowerCase();
+
+  switch (key) {
+  case "n":
+    // Switch to Note mode and focus the title input
+    event.preventDefault();
+    togglePushType("note");
+    // Wait a tiny bit for the form to show, then focus
+    setTimeout(() => noteTitleInput.focus(), 50);
+    break;
+
+  case "l":
+    // Switch to Link mode and focus the COMMENT field (URL is auto-filled)
+    event.preventDefault();
+    togglePushType("link");
+    // Wait for togglePushType to finish auto-filling the URL
+    setTimeout(() => linkBodyInput.focus(), 100);
+    break;
+
+  case "a":
+    // Switch to Attach mode and open file picker
+    event.preventDefault();
+    togglePushType("file");
+    // Trigger the file input's click to open file picker dialog
+    setTimeout(() => fileInput.click(), 50);
+    break;
+
+  case "s":
+    // Open Settings page
+    event.preventDefault();
+    chrome.runtime.openOptionsPage();
+    break;
+
+  case "d":
+    // Open Debug Dashboard
+    event.preventDefault();
+    chrome.tabs.create({
+      url: chrome.runtime.getURL("debug-dashboard.html"),
+    });
+    break;
+
+  case "p":
+    // Open Pushbullet website
+    event.preventDefault();
+    chrome.tabs.create({
+      url: "https://www.pushbullet.com",
+    });
+    break;
+
+    // ESC is handled by Chrome automatically - it closes popups by default
+  }
+}
+
+/**
  * Set up event listeners
  */
 function setupEventListeners(): void {
@@ -247,6 +329,10 @@ function setupEventListeners(): void {
       url: chrome.runtime.getURL("debug-dashboard.html"),
     });
   });
+
+  // === NEW CODE: Global keyboard shortcuts ===
+  document.addEventListener("keydown", handleGlobalHotkeys);
+  // === END NEW CODE ===
 }
 
 /**

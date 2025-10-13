@@ -91,6 +91,18 @@
       border-radius: 4px;
       font-size: 13px;
     }
+
+    .send-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .hotkey-hint {
+      font-size: 11px;
+      color: #666;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -149,11 +161,11 @@
       
        <div class="form-group">
          <label>Push Type:</label>
-         <div class="push-type-buttons">
-           <button id="push-type-note" class="push-type-btn active">Note</button>
-           <button id="push-type-link" class="push-type-btn">Link</button>
-           <button id="push-type-file" class="push-type-btn">Attach</button>
-         </div>
+          <div class="push-type-buttons">
+            <button id="push-type-note" class="push-type-btn active">[N]ote</button>
+            <button id="push-type-link" class="push-type-btn">[L]ink</button>
+            <button id="push-type-file" class="push-type-btn">[A]ttach</button>
+          </div>
        </div>
       
       <div id="note-form">
@@ -201,9 +213,12 @@
         </select>
       </div>
       
-      <div class="form-group">
-        <button id="send-push">Send</button>
-      </div>
+       <div class="form-group">
+         <div class="send-section">
+           <button id="send-push">Send</button>
+           <span class="hotkey-hint">(Ctrl+Enter to send)</span>
+         </div>
+       </div>
       
       <div id="status-message"></div>
     </div>

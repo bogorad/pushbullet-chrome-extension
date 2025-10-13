@@ -3294,12 +3294,46 @@
     return p.type === "link" && typeof p.url === "string" && p.url.length > 0;
   }
   async function openTab(url) {
+    if (!url || typeof url !== "string") {
+      debugLogger.general("ERROR", "Cannot open tab: invalid URL provided", {
+        url
+      });
+      throw new Error("Invalid URL provided to openTab");
+    }
     try {
       await chrome.tabs.create({ url, active: false });
-    } catch (e) {
+      debugLogger.general("DEBUG", "Tab created successfully", { url });
+      return;
+    } catch (primaryError) {
+      debugLogger.general(
+        "WARN",
+        "Failed to create tab, attempting window fallback",
+        {
+          url,
+          error: primaryError.message,
+          errorType: primaryError.name
+        },
+        primaryError
+      );
       try {
         await chrome.windows.create({ url, focused: false });
-      } catch {
+        debugLogger.general("INFO", "Window created as fallback", { url });
+        return;
+      } catch (fallbackError) {
+        const error = new Error(
+          `Failed to open URL in tab or window: ${fallbackError.message}`
+        );
+        debugLogger.general(
+          "ERROR",
+          "Both tab and window creation failed",
+          {
+            url,
+            primaryError: primaryError.message,
+            fallbackError: fallbackError.message
+          },
+          error
+        );
+        throw error;
       }
     }
   }
@@ -3312,25 +3346,41 @@
     const safetyCap = await storageRepository.getMaxAutoOpenPerReconnect();
     const lastAuto = await storageRepository.getLastAutoOpenCutoff() || 0;
     const modifiedAfter = Math.max(lastAuto, sessionCutoff || 0);
-    debugLogger.websocket("INFO", "Auto-open links: fetching incremental changes", { modifiedAfter });
+    debugLogger.websocket(
+      "INFO",
+      "Auto-open links: fetching incremental changes",
+      { modifiedAfter }
+    );
     const changes = await fetchIncrementalPushes(apiKey2, modifiedAfter, 100);
     const candidates = changes.filter(isLinkPush2).filter((p) => (typeof p.created === "number" ? p.created : 0) > lastAuto).sort((a, b) => (a.created || 0) - (b.created || 0));
     if (candidates.length === 0) {
-      debugLogger.websocket("INFO", "Auto-open links: no new link pushes to open");
+      debugLogger.websocket(
+        "INFO",
+        "Auto-open links: no new link pushes to open"
+      );
       return;
     }
     const toOpen = candidates.slice(0, safetyCap);
-    debugLogger.websocket("INFO", "Auto-opening link pushes", { count: toOpen.length, total: candidates.length });
+    debugLogger.websocket("INFO", "Auto-opening link pushes", {
+      count: toOpen.length,
+      total: candidates.length
+    });
     for (const p of toOpen) {
       await openTab(p.url);
     }
     const maxCreated = Math.max(lastAuto, ...toOpen.map((p) => p.created || 0));
     if (maxCreated > lastAuto) {
       await storageRepository.setLastAutoOpenCutoff(maxCreated);
-      debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", { old: lastAuto, new: maxCreated });
+      debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", {
+        old: lastAuto,
+        new: maxCreated
+      });
     }
     if (candidates.length > safetyCap) {
-      debugLogger.websocket("WARN", "Auto-open links capped", { total: candidates.length, opened: toOpen.length });
+      debugLogger.websocket("WARN", "Auto-open links capped", {
+        total: candidates.length,
+        opened: toOpen.length
+      });
     }
   }
 
@@ -3482,13 +3532,21 @@
       await refreshPushes(notificationDataStore);
     } catch (error) {
       if (error.name === "InvalidCursorError") {
-        debugLogger.general("WARN", "Caught invalid cursor error - triggering recovery");
+        debugLogger.general(
+          "WARN",
+          "Caught invalid cursor error - triggering recovery"
+        );
         const apiKey2 = getApiKey();
         if (apiKey2) {
           await handleInvalidCursorRecovery(apiKey2, connectWebSocket);
         }
       } else {
-        debugLogger.general("ERROR", "Error refreshing pushes", null, error);
+        debugLogger.general(
+          "ERROR",
+          "Error refreshing pushes",
+          null,
+          error
+        );
       }
     }
   });
@@ -3591,17 +3649,10 @@
       }).catch(() => {
       });
     }
-    showPushNotification(decryptedPush, notificationDataStore).catch(
-      (error) => {
-        debugLogger.general(
-          "ERROR",
-          "Failed to show notification",
-          null,
-          error
-        );
-        performanceMonitor.recordNotificationFailed();
-      }
-    );
+    showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+      debugLogger.general("ERROR", "Failed to show notification", null, error);
+      performanceMonitor.recordNotificationFailed();
+    });
     const autoOpenLinks2 = getAutoOpenLinks();
     if (autoOpenLinks2 && isLinkPush(decryptedPush)) {
       debugLogger.general("INFO", "Auto-opening link push", {
@@ -3625,7 +3676,10 @@
     }
   });
   globalEventBus.on("websocket:connected", async () => {
-    debugLogger.websocket("INFO", "WebSocket connected - checking for offline links to open");
+    debugLogger.websocket(
+      "INFO",
+      "WebSocket connected - checking for offline links to open"
+    );
     const recoveryTime = Date.now() - recoveryTimerStart;
     debugLogger.performance("INFO", "WebSocket recovery time", {
       duration: recoveryTime
@@ -3646,7 +3700,9 @@
       const sessionCutoff = sessionCache.lastModifiedCutoff || await storageRepository.getLastModifiedCutoff() || 0;
       await autoOpenOfflineLinks(apiKey2, sessionCutoff);
     } catch (e) {
-      debugLogger.general("ERROR", "Auto-open on reconnect failed", { error: e.message });
+      debugLogger.general("ERROR", "Auto-open on reconnect failed", {
+        error: e.message
+      });
     }
   });
   globalEventBus.on("websocket:disconnected", () => {
@@ -3710,11 +3766,15 @@
       const isConnected = websocketClient2.isConnected();
       const isConnecting = websocketClient2.getReadyState() === WebSocket.CONNECTING;
       if (isConnected || isConnecting) {
-        debugLogger.websocket("DEBUG", "WebSocket already connected/connecting, skipping duplicate call", {
-          isConnected,
-          isConnecting,
-          readyState: websocketClient2.getReadyState()
-        });
+        debugLogger.websocket(
+          "DEBUG",
+          "WebSocket already connected/connecting, skipping duplicate call",
+          {
+            isConnected,
+            isConnecting,
+            readyState: websocketClient2.getReadyState()
+          }
+        );
         return;
       }
     }
@@ -4229,13 +4289,21 @@
             await refreshPushes(notificationDataStore);
           } catch (error) {
             if (error.name === "InvalidCursorError") {
-              debugLogger.general("WARN", "Caught invalid cursor error during push send - triggering recovery");
+              debugLogger.general(
+                "WARN",
+                "Caught invalid cursor error during push send - triggering recovery"
+              );
               const apiKey3 = getApiKey();
               if (apiKey3) {
                 await handleInvalidCursorRecovery(apiKey3, connectWebSocket);
               }
             } else {
-              debugLogger.general("ERROR", "Error refreshing pushes after send", null, error);
+              debugLogger.general(
+                "ERROR",
+                "Error refreshing pushes after send",
+                null,
+                error
+              );
             }
           }
           sendResponse({ success: true });
@@ -4290,10 +4358,14 @@
             }
           );
         } else {
-          debugLogger.notifications("INFO", "Notification detail opened in popup", {
-            notificationId,
-            windowId: window?.id
-          });
+          debugLogger.notifications(
+            "INFO",
+            "Notification detail opened in popup",
+            {
+              notificationId,
+              windowId: window?.id
+            }
+          );
         }
       }
     );

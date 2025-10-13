@@ -20,10 +20,7 @@ import {
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
-import {
-  checkPushTypeSupport,
-  SUPPORTED_PUSH_TYPES,
-} from "../app/push-types";
+import { checkPushTypeSupport, SUPPORTED_PUSH_TYPES } from "../app/push-types";
 import { PushbulletCrypto } from "../lib/crypto";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 import { MessageAction } from "../types/domain";
@@ -50,7 +47,6 @@ import {
   performPollingFetch,
   performWebSocketHealthCheck,
   updatePopupConnectionState,
-  setupContextMenu,
   pushLink,
   pushNote,
   updateConnectionIcon,
@@ -108,46 +104,6 @@ export function getNotificationStore(): Map<string, Push> {
  * @param delay - Delay in milliseconds between attempts (default: 100)
  * @returns The API key string, or null if not found after all retries
  */
-async function getApiKeyWithRetries(
-  attempts = 3,
-  delay = 100,
-): Promise<string | null> {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const apiKey = await storageRepository.getApiKey();
-      if (apiKey) {
-        debugLogger.storage(
-          "INFO",
-          `API key found on attempt ${i + 1}/${attempts}`,
-        );
-        return apiKey;
-      }
-      // API key is null - could be genuinely missing or storage not ready yet
-      debugLogger.storage(
-        "DEBUG",
-        `API key not found on attempt ${i + 1}/${attempts}, will retry`,
-      );
-    } catch (error) {
-      debugLogger.storage(
-        "WARN",
-        `Error getting API key on attempt ${i + 1}/${attempts}`,
-        null,
-        error as Error,
-      );
-    }
-
-    // Wait before the next attempt (but not after the last attempt)
-    if (i < attempts - 1) {
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-
-  debugLogger.storage(
-    "WARN",
-    `API key not found after ${attempts} retry attempts - assuming no key configured`,
-  );
-  return null;
-}
 
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
@@ -159,15 +115,23 @@ globalEventBus.on("websocket:tickle:push", async () => {
     await refreshPushes(notificationDataStore);
   } catch (error) {
     // NEW: Check if it's an invalid cursor error
-    if ((error as Error).name === 'InvalidCursorError') {
-      debugLogger.general('WARN', 'Caught invalid cursor error - triggering recovery');
+    if ((error as Error).name === "InvalidCursorError") {
+      debugLogger.general(
+        "WARN",
+        "Caught invalid cursor error - triggering recovery",
+      );
       const apiKey = getApiKey();
       if (apiKey) {
         await handleInvalidCursorRecovery(apiKey, connectWebSocket);
       }
     } else {
       // Re-throw other errors
-      debugLogger.general('ERROR', 'Error refreshing pushes', null, error as Error);
+      debugLogger.general(
+        "ERROR",
+        "Error refreshing pushes",
+        null,
+        error as Error,
+      );
     }
   }
 });
@@ -281,7 +245,7 @@ globalEventBus.on("websocket:push", async (push: Push) => {
   });
 
   // ADD THIS - Dump for Mirror Messages
-  if (decryptedPush.type === 'mirror') {
+  if (decryptedPush.type === "mirror") {
     // Log full mirror message data to see all available fields
     debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
       completeMirrorData: decryptedPush,
@@ -305,17 +269,10 @@ globalEventBus.on("websocket:push", async (push: Push) => {
 
   // FIX: Don't await - let notifications show immediately without blocking
   // This allows multiple notifications to appear concurrently
-  showPushNotification(decryptedPush, notificationDataStore).catch(
-    (error) => {
-      debugLogger.general(
-        "ERROR",
-        "Failed to show notification",
-        null,
-        error,
-      );
-      performanceMonitor.recordNotificationFailed();
-    },
-  );
+  showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+    debugLogger.general("ERROR", "Failed to show notification", null, error);
+    performanceMonitor.recordNotificationFailed();
+  });
 
   // Auto-open links if setting is enabled
   const autoOpenLinks = getAutoOpenLinks();
@@ -344,7 +301,10 @@ globalEventBus.on("websocket:push", async (push: Push) => {
 });
 
 globalEventBus.on("websocket:connected", async () => {
-  debugLogger.websocket('INFO', 'WebSocket connected - checking for offline links to open');
+  debugLogger.websocket(
+    "INFO",
+    "WebSocket connected - checking for offline links to open",
+  );
 
   // MV3 LIFECYCLE TRACKING: Calculate and store recovery time
   const recoveryTime = Date.now() - recoveryTimerStart;
@@ -369,14 +329,19 @@ globalEventBus.on("websocket:connected", async () => {
   try {
     const apiKey = getApiKey();
     if (!apiKey) {
-      debugLogger.general('WARN', 'No API key for auto-open links');
+      debugLogger.general("WARN", "No API key for auto-open links");
       return;
     }
 
-    const sessionCutoff = sessionCache.lastModifiedCutoff || (await storageRepository.getLastModifiedCutoff()) || 0;
+    const sessionCutoff =
+      sessionCache.lastModifiedCutoff ||
+      (await storageRepository.getLastModifiedCutoff()) ||
+      0;
     await autoOpenOfflineLinks(apiKey, sessionCutoff);
   } catch (e) {
-    debugLogger.general('ERROR', 'Auto-open on reconnect failed', { error: (e as Error).message });
+    debugLogger.general("ERROR", "Auto-open on reconnect failed", {
+      error: (e as Error).message,
+    });
   }
 });
 
@@ -465,14 +430,19 @@ function connectWebSocket(): void {
   // Guard: Don't reconnect if already connected or connecting
   if (websocketClient) {
     const isConnected = websocketClient.isConnected();
-    const isConnecting = websocketClient.getReadyState() === WebSocket.CONNECTING;
+    const isConnecting =
+      websocketClient.getReadyState() === WebSocket.CONNECTING;
 
     if (isConnected || isConnecting) {
-      debugLogger.websocket('DEBUG', 'WebSocket already connected/connecting, skipping duplicate call', {
-        isConnected,
-        isConnecting,
-        readyState: websocketClient.getReadyState()
-      });
+      debugLogger.websocket(
+        "DEBUG",
+        "WebSocket already connected/connecting, skipping duplicate call",
+        {
+          isConnected,
+          isConnecting,
+          readyState: websocketClient.getReadyState(),
+        },
+      );
       return; // EXIT EARLY - do not proceed
     }
   }
@@ -508,8 +478,6 @@ function disconnectWebSocket(): void {
 // ============================================================================
 // Chrome Event Listeners
 // ============================================================================
-
-
 
 /**
  * Alarm listener
@@ -1168,15 +1136,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await refreshPushes(notificationDataStore);
         } catch (error) {
           // Check if it's an invalid cursor error
-          if ((error as Error).name === 'InvalidCursorError') {
-            debugLogger.general('WARN', 'Caught invalid cursor error during push send - triggering recovery');
+          if ((error as Error).name === "InvalidCursorError") {
+            debugLogger.general(
+              "WARN",
+              "Caught invalid cursor error during push send - triggering recovery",
+            );
             const apiKey = getApiKey();
             if (apiKey) {
               await handleInvalidCursorRecovery(apiKey, connectWebSocket);
             }
           } else {
             // Re-throw other errors
-            debugLogger.general('ERROR', 'Error refreshing pushes after send', null, error as Error);
+            debugLogger.general(
+              "ERROR",
+              "Error refreshing pushes after send",
+              null,
+              error as Error,
+            );
           }
         }
 
@@ -1226,7 +1202,7 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
   chrome.windows.create(
     {
       url: detailUrl,
-      type: 'popup',
+      type: "popup",
       width: 500,
       height: 600,
       focused: true,
@@ -1242,10 +1218,14 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
           },
         );
       } else {
-        debugLogger.notifications("INFO", "Notification detail opened in popup", {
-          notificationId,
-          windowId: window?.id,
-        });
+        debugLogger.notifications(
+          "INFO",
+          "Notification detail opened in popup",
+          {
+            notificationId,
+            windowId: window?.id,
+          },
+        );
       }
     },
   );
@@ -1281,14 +1261,20 @@ debugLogger.general("INFO", "Background service worker initialized", {
 });
 
 // Bootstrap initialization immediately on startup/install
-async function bootstrap(trigger: 'startup' | 'install' | 'wakeup'): Promise<void> {
-  debugLogger.general('INFO', 'Bootstrap start', { trigger });
+async function bootstrap(
+  trigger: "startup" | "install" | "wakeup",
+): Promise<void> {
+  debugLogger.general("INFO", "Bootstrap start", { trigger });
   // Start session initialization right away
   void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
 }
 
-chrome.runtime.onStartup.addListener(() => { void bootstrap('startup'); });
-chrome.runtime.onInstalled.addListener(() => { void bootstrap('install'); });
+chrome.runtime.onStartup.addListener(() => {
+  void bootstrap("startup");
+});
+chrome.runtime.onInstalled.addListener(() => {
+  void bootstrap("install");
+});
 
 // Optional: if you also track other wake-ups, funnel them here too
 // chrome.alarms.onAlarm.addListener(a => {
