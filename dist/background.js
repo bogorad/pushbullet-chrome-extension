@@ -1016,6 +1016,54 @@
     throw lastErr;
   }
 
+  // src/app/push-types.ts
+  var SUPPORTED_PUSH_TYPES = [
+    "note",
+    "link",
+    "mirror",
+    "smschanged",
+    "file"
+  ];
+  var KNOWN_UNSUPPORTED_TYPES = [
+    "dismissal",
+    "clip",
+    "ephemeral",
+    "channel"
+  ];
+  function checkPushTypeSupport(pushType) {
+    if (SUPPORTED_PUSH_TYPES.includes(pushType)) {
+      return { supported: true, category: "supported" };
+    }
+    if (KNOWN_UNSUPPORTED_TYPES.includes(pushType)) {
+      return { supported: false, category: "known-unsupported" };
+    }
+    return { supported: false, category: "unknown" };
+  }
+  function logUnsupportedPushType(pushType, pushIden, source, fullPush) {
+    const typeCheck = checkPushTypeSupport(pushType);
+    if (typeCheck.category === "known-unsupported") {
+      debugLogger.general("WARN", "Encountered known unsupported push type", {
+        pushType,
+        pushIden,
+        source,
+        category: typeCheck.category,
+        reason: "This push type is not supported by the extension",
+        supportedTypes: SUPPORTED_PUSH_TYPES
+      });
+    } else if (typeCheck.category === "unknown") {
+      debugLogger.general("WARN", "Encountered unknown push type", {
+        pushType,
+        pushIden,
+        source,
+        category: typeCheck.category,
+        reason: "This is a new or unrecognized push type",
+        supportedTypes: SUPPORTED_PUSH_TYPES,
+        // Include full push data for unknown types
+        fullPushData: fullPush
+      });
+    }
+  }
+
   // src/app/api/client.ts
   var API_BASE_URL = "https://api.pushbullet.com/v2";
   var PUSHES_URL = `${API_BASE_URL}/pushes`;
@@ -1024,6 +1072,17 @@
   var registrationPromise = null;
   function authHeaders(apiKey2) {
     return { "Access-Token": apiKey2 };
+  }
+  async function fetchUserInfoWithTimeout(apiKey2) {
+    const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey2) }, 5e3);
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unknown error");
+      throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+    return response.json();
+  }
+  async function getUserInfoWithTimeoutRetry(apiKey2) {
+    return retry(() => fetchUserInfoWithTimeout(apiKey2), 1, 500);
   }
   async function fetchUserInfo(apiKey2) {
     const startTime = Date.now();
@@ -1062,17 +1121,6 @@
       throw error;
     }
   }
-  async function fetchUserInfoWithTimeout(apiKey2) {
-    const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey2) }, 5e3);
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
-    }
-    return response.json();
-  }
-  async function getUserInfoWithTimeoutRetry(apiKey2) {
-    return retry(() => fetchUserInfoWithTimeout(apiKey2), 1, 500);
-  }
   async function fetchDevices(apiKey2) {
     const startTime = Date.now();
     debugLogger.api("INFO", "Fetching devices", { url: DEVICES_URL, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
@@ -1109,9 +1157,9 @@
       throw error;
     }
   }
-  async function fetchRecentPushes(apiKey2) {
+  async function fetchRecentPushes(apiKey2, limit = 20) {
     const startTime = Date.now();
-    const url = `${PUSHES_URL}?limit=20`;
+    const url = `${PUSHES_URL}?limit=${limit}`;
     debugLogger.api("INFO", "Fetching recent pushes", { url, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     try {
       const response = await fetch(url, { headers: authHeaders(apiKey2) });
@@ -1128,8 +1176,16 @@
       }
       const data = await response.json();
       const filteredPushes = data.pushes.filter((push) => {
+        if (push.dismissed) {
+          return false;
+        }
+        const typeCheck = checkPushTypeSupport(push.type);
+        if (!typeCheck.supported) {
+          logUnsupportedPushType(push.type, push.iden || "unknown", "fetchRecentPushes");
+          return false;
+        }
         const hasContent = "title" in push && push.title || "body" in push && push.body || "url" in push && push.url || "file_name" in push && push.file_name || "file_url" in push && push.file_url;
-        return hasContent && !push.dismissed;
+        return hasContent;
       });
       debugLogger.api("INFO", "Pushes fetched successfully", {
         url,
@@ -1190,9 +1246,38 @@
       page += 1;
       if (page > 10) break;
     } while (cursor);
-    const displayableTypes = /* @__PURE__ */ new Set(["mirror", "note", "link", "sms_changed", "file"]);
-    const filtered = all.filter((p) => displayableTypes.has(p.type) && !p.dismissed);
+    const filtered = all.filter((p) => {
+      if (p.dismissed) {
+        return false;
+      }
+      const typeCheck = checkPushTypeSupport(p.type);
+      if (!typeCheck.supported) {
+        logUnsupportedPushType(p.type, p.iden || "unknown", "fetchIncrementalPushes");
+        return false;
+      }
+      return true;
+    });
     return filtered;
+  }
+  async function fetchDisplayPushes(apiKey2, limit = 50) {
+    debugLogger.api("INFO", "Fetching display pushes", {
+      limit,
+      hasApiKey: !!apiKey2,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    try {
+      const pushes = await fetchRecentPushes(apiKey2, limit);
+      debugLogger.api("INFO", "Display pushes fetched successfully", {
+        count: pushes.length,
+        limit
+      });
+      return pushes;
+    } catch (error) {
+      debugLogger.api("ERROR", "Failed to fetch display pushes", {
+        error: error.message
+      });
+      throw error;
+    }
   }
   async function ensureDeviceExists(apiKey2, deviceIden2) {
     const response = await fetch(
@@ -1501,7 +1586,9 @@
     isAuthenticated: false,
     lastUpdated: 0,
     autoOpenLinks: true,
-    deviceNickname: "Chrome"
+    deviceNickname: "Chrome",
+    lastModifiedCutoff: 0
+    // ← ADD: Initialize to 0
   };
   function resetSessionCache() {
     sessionCache.userInfo = null;
@@ -1512,6 +1599,7 @@
     sessionCache.lastUpdated = 0;
     sessionCache.autoOpenLinks = true;
     sessionCache.deviceNickname = "Chrome";
+    sessionCache.lastModifiedCutoff = 0;
   }
   var initPromise = null;
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
@@ -1584,17 +1672,37 @@
           sessionCache.userInfo = userInfo;
           const devices = await fetchDevices(apiKeyValue);
           sessionCache.devices = devices;
+          debugLogger.general("INFO", "Pipeline 1: Fetching incremental pushes for auto-open");
           const storedCutoff = await storageRepository.getLastModifiedCutoff();
-          let recentPushes = [];
+          sessionCache.lastModifiedCutoff = storedCutoff ?? 0;
+          let incrementalPushes = [];
           if (storedCutoff && storedCutoff > 0) {
-            recentPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
+            incrementalPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
+            debugLogger.general("INFO", "Pipeline 1: Incremental fetch complete", {
+              count: incrementalPushes.length,
+              cutoff: storedCutoff
+            });
           } else {
-            recentPushes = await fetchRecentPushes(apiKeyValue);
-            const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
-            if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+            incrementalPushes = await fetchRecentPushes(apiKeyValue, 20);
+            debugLogger.general("INFO", "Pipeline 1: First run, seeding cutoff", {
+              count: incrementalPushes.length
+            });
           }
-          sessionCache.recentPushes = recentPushes;
-          sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+          const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
+          if (maxModified > sessionCache.lastModifiedCutoff) {
+            sessionCache.lastModifiedCutoff = maxModified;
+            await storageRepository.setLastModifiedCutoff(maxModified);
+            debugLogger.general("DEBUG", "Pipeline 1: Updated cutoff", {
+              old: storedCutoff ?? 0,
+              new: maxModified
+            });
+          }
+          debugLogger.general("INFO", "Pipeline 2: Fetching display pushes for UI");
+          const displayPushes = await fetchDisplayPushes(apiKeyValue, 50);
+          debugLogger.general("INFO", "Pipeline 2: Display fetch complete", {
+            count: displayPushes.length
+          });
+          sessionCache.recentPushes = displayPushes;
           try {
             const chats = await fetchChats(apiKeyValue);
             sessionCache.chats = chats;
@@ -1671,18 +1779,26 @@
         debugLogger.general("DEBUG", "Refreshing devices");
         const devices = await fetchDevices(apiKeyParam);
         sessionCache.devices = devices;
-        debugLogger.general("DEBUG", "Refreshing recent pushes");
+        debugLogger.general("DEBUG", "Pipeline 1: Refreshing incremental pushes");
         const storedCutoff = await storageRepository.getLastModifiedCutoff();
-        let recentPushes = [];
+        let incrementalPushes = [];
         if (storedCutoff && storedCutoff > 0) {
-          recentPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
+          incrementalPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
         } else {
-          recentPushes = await fetchRecentPushes(apiKeyParam);
-          const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
-          if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+          incrementalPushes = await fetchRecentPushes(apiKeyParam, 20);
         }
-        sessionCache.recentPushes = recentPushes;
-        sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+        const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
+        if (maxModified > (sessionCache.lastModifiedCutoff ?? 0)) {
+          sessionCache.lastModifiedCutoff = maxModified;
+          await storageRepository.setLastModifiedCutoff(maxModified);
+        }
+        debugLogger.general("DEBUG", "Pipeline 2: Refreshing display pushes");
+        const displayPushes = await fetchDisplayPushes(apiKeyParam, 50);
+        sessionCache.recentPushes = displayPushes;
+        debugLogger.general("INFO", "Session refresh complete", {
+          incrementalCount: incrementalPushes.length,
+          displayCount: displayPushes.length
+        });
         try {
           const chats = await fetchChats(apiKeyParam);
           sessionCache.chats = chats;
@@ -1936,7 +2052,7 @@
       }
     }
     const updated = Array.from(map.values()).sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 200);
-    return { updated, newOnes };
+    return [updated, newOnes];
   }
   async function refreshPushes(notificationDataStore2) {
     await ensureConfigLoaded();
@@ -1946,33 +2062,49 @@
       return;
     }
     try {
-      debugLogger.general("DEBUG", "Refreshing pushes (incremental)");
-      const cutoff = sessionCache.lastModifiedCutoff || await storageRepository.getLastModifiedCutoff() || 0;
-      const changes = await fetchIncrementalPushes(apiKey2, cutoff, 100);
-      if (changes.length === 0) {
-        debugLogger.general("INFO", "No incremental push changes");
+      debugLogger.general("DEBUG", "Pipeline 1: Checking for new pushes (incremental)");
+      const cutoff = sessionCache.lastModifiedCutoff ?? await storageRepository.getLastModifiedCutoff() ?? 0;
+      const incrementalPushes = await fetchIncrementalPushes(apiKey2, cutoff, 100);
+      debugLogger.general("INFO", "Pipeline 1: Incremental fetch complete", {
+        newPushCount: incrementalPushes.length,
+        cutoff
+      });
+      if (incrementalPushes.length === 0) {
+        debugLogger.general("INFO", "Pipeline 1: No new pushes to process");
         return;
       }
-      const { updated, newOnes } = upsertPushes(sessionCache.recentPushes || [], changes);
-      sessionCache.recentPushes = updated;
-      sessionCache.lastUpdated = Date.now();
       const maxModified = Math.max(
         cutoff,
-        ...changes.map((p) => typeof p.modified === "number" ? p.modified : 0)
+        ...incrementalPushes.map((p) => typeof p.modified === "number" ? p.modified : 0)
       );
       if (maxModified > cutoff) {
         sessionCache.lastModifiedCutoff = maxModified;
         await storageRepository.setLastModifiedCutoff(maxModified);
+        debugLogger.general("DEBUG", "Pipeline 1: Updated cutoff", {
+          old: cutoff,
+          new: maxModified
+        });
       }
-      for (const push of newOnes) {
-        debugLogger.general("INFO", "Showing notification for new push", { pushIden: push.iden, pushType: push.type });
+      debugLogger.general("DEBUG", "Pipeline 2: Updating display pushes");
+      const [updatedDisplayPushes, newPushes] = upsertPushes(
+        sessionCache.recentPushes ?? [],
+        incrementalPushes
+      );
+      sessionCache.recentPushes = updatedDisplayPushes;
+      sessionCache.lastUpdated = Date.now();
+      debugLogger.general("INFO", "Pipeline 2: Display updated", {
+        totalDisplayPushes: updatedDisplayPushes.length,
+        newPushes: newPushes.length
+      });
+      for (const push of newPushes) {
+        debugLogger.general("INFO", "Processing new push", {
+          pushIden: push.iden,
+          pushType: push.type
+        });
         void showPushNotification(push, notificationDataStore2).catch((error) => {
-          debugLogger.general(
-            "ERROR",
-            "Failed to show notification",
-            { pushIden: push.iden },
-            error
-          );
+          debugLogger.general("ERROR", "Failed to show notification", {
+            pushIden: push.iden
+          }, error);
         });
         const autoOpenLinks2 = getAutoOpenLinks();
         if (autoOpenLinks2 && isLinkPush(push)) {
@@ -1980,25 +2112,19 @@
             pushIden: push.iden,
             url: push.url
           });
-          chrome.tabs.create({
-            url: push.url,
-            active: false
-            // Open in background to avoid disrupting user
-          }).catch((error) => {
-            debugLogger.general(
-              "ERROR",
-              "Failed to auto-open link",
-              {
-                url: push.url
-              },
-              error
-            );
+          chrome.tabs.create({ url: push.url, active: false }).catch((error) => {
+            debugLogger.general("ERROR", "Failed to auto-open link", {
+              url: push.url
+            }, error);
           });
         }
       }
-      chrome.runtime.sendMessage({ action: "pushesUpdated", pushes: sessionCache.recentPushes }).catch(() => void 0);
+      chrome.runtime.sendMessage({
+        action: "pushesUpdated",
+        pushes: sessionCache.recentPushes
+      }).catch(() => void 0);
     } catch (error) {
-      debugLogger.general("ERROR", "Incremental refresh failed", { error });
+      debugLogger.general("ERROR", "Incremental refresh failed", {}, error);
       performanceMonitor.recordHealthCheckFailure();
     }
   }
@@ -3354,15 +3480,30 @@
         );
       }
     }
-    const displayableTypes = ["mirror", "note", "link", "sms_changed"];
-    if (!displayableTypes.includes(decryptedPush.type)) {
-      debugLogger.general("INFO", "Ignoring non-displayable push of type", {
-        pushType: decryptedPush.type,
-        pushIden: decryptedPush.iden
-      });
+    const typeCheck = checkPushTypeSupport(decryptedPush.type);
+    if (!typeCheck.supported) {
+      if (typeCheck.category === "known-unsupported") {
+        debugLogger.general("WARN", "Received known unsupported push type", {
+          pushType: decryptedPush.type,
+          pushIden: decryptedPush.iden,
+          category: typeCheck.category,
+          reason: "This push type is not supported by the extension",
+          supportedTypes: SUPPORTED_PUSH_TYPES
+        });
+      } else if (typeCheck.category === "unknown") {
+        debugLogger.general("WARN", "Received unknown push type", {
+          pushType: decryptedPush.type,
+          pushIden: decryptedPush.iden,
+          category: typeCheck.category,
+          reason: "This is a new or unrecognized push type",
+          supportedTypes: SUPPORTED_PUSH_TYPES,
+          // Include full push data for investigation
+          fullPushData: decryptedPush
+        });
+      }
       return;
     }
-    debugLogger.general("INFO", "Processing displayable push of type", {
+    debugLogger.general("INFO", "Processing supported push type", {
       pushType: decryptedPush.type,
       pushIden: decryptedPush.iden
     });

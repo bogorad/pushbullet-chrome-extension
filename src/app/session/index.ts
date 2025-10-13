@@ -3,6 +3,7 @@ import { debugLogger } from "../../lib/logging";
 import {
   fetchChats,
   fetchDevices,
+  fetchDisplayPushes,  // ← ADD: Import new function
   fetchIncrementalPushes,
   fetchRecentPushes,
   fetchUserInfo,
@@ -22,6 +23,7 @@ export const sessionCache: SessionCache = {
   lastUpdated: 0,
   autoOpenLinks: true,
   deviceNickname: "Chrome",
+  lastModifiedCutoff: 0,  // ← ADD: Initialize to 0
 };
 
 /**
@@ -37,6 +39,7 @@ export function resetSessionCache(): void {
   sessionCache.lastUpdated = 0;
   sessionCache.autoOpenLinks = true;
   sessionCache.deviceNickname = "Chrome";
+  sessionCache.lastModifiedCutoff = 0;  // ← ADD: Reset cutoff on logout
 }
 
 
@@ -165,22 +168,66 @@ export async function initializeSessionCache(
         const devices = await fetchDevices(apiKeyValue);
         sessionCache.devices = devices;
 
-        // Fetch recent pushes
+        // ========================================
+        // PIPELINE 1: Incremental Auto-Open Pipeline
+        // ========================================
+        // This pipeline tracks what pushes we've already seen and processes
+        // new ones for auto-opening links. It uses lastModifiedCutoff to
+        // fetch only changes since the last check.
+
+        debugLogger.general('INFO', 'Pipeline 1: Fetching incremental pushes for auto-open');
+
         const storedCutoff = await storageRepository.getLastModifiedCutoff();
-        let recentPushes: Push[] = [];
+        sessionCache.lastModifiedCutoff = storedCutoff ?? 0;
+
+        let incrementalPushes: Push[] = [];
 
         if (storedCutoff && storedCutoff > 0) {
-          // Incremental path
-          recentPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
+          // We have a cutoff timestamp - fetch only new pushes
+          incrementalPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
+
+          debugLogger.general('INFO', 'Pipeline 1: Incremental fetch complete', {
+            count: incrementalPushes.length,
+            cutoff: storedCutoff,
+          });
         } else {
-          // First run path: keep current behavior, then seed cutoff
-          recentPushes = await fetchRecentPushes(apiKeyValue); // existing function
-          const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
-          if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+          // First run - no cutoff yet, use regular fetch to seed
+          incrementalPushes = await fetchRecentPushes(apiKeyValue, 20);
+
+          debugLogger.general('INFO', 'Pipeline 1: First run, seeding cutoff', {
+            count: incrementalPushes.length,
+          });
         }
 
-        sessionCache.recentPushes = recentPushes;
-        sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+        // Update the cutoff timestamp with the latest push we've seen
+        const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
+        if (maxModified > sessionCache.lastModifiedCutoff) {
+          sessionCache.lastModifiedCutoff = maxModified;
+          await storageRepository.setLastModifiedCutoff(maxModified);
+
+          debugLogger.general('DEBUG', 'Pipeline 1: Updated cutoff', {
+            old: storedCutoff ?? 0,
+            new: maxModified,
+          });
+        }
+
+        // ========================================
+        // PIPELINE 2: Display History Pipeline
+        // ========================================
+        // This pipeline fetches the last 50 pushes for display in the popup.
+        // It is completely independent of the incremental tracking used for
+        // auto-opening links.
+
+        debugLogger.general('INFO', 'Pipeline 2: Fetching display pushes for UI');
+
+        const displayPushes = await fetchDisplayPushes(apiKeyValue, 50);
+
+        debugLogger.general('INFO', 'Pipeline 2: Display fetch complete', {
+          count: displayPushes.length,
+        });
+
+        // Store display pushes in session cache for popup consumption
+        sessionCache.recentPushes = displayPushes;
 
         // ========== ADD THIS ENTIRE BLOCK ==========
         // Fetch chats (friends/contacts)
@@ -287,23 +334,39 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
       const devices = await fetchDevices(apiKeyParam);
       sessionCache.devices = devices;
 
-      // Fetch recent pushes
-      debugLogger.general("DEBUG", "Refreshing recent pushes");
+      // ========================================
+      // PIPELINE 1: Incremental Auto-Open Pipeline (Refresh)
+      // ========================================
+      debugLogger.general('DEBUG', 'Pipeline 1: Refreshing incremental pushes');
+
       const storedCutoff = await storageRepository.getLastModifiedCutoff();
-      let recentPushes: Push[] = [];
+      let incrementalPushes: Push[] = [];
 
       if (storedCutoff && storedCutoff > 0) {
-        // Incremental path
-        recentPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
+        incrementalPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
       } else {
-        // First run path: keep current behavior, then seed cutoff
-        recentPushes = await fetchRecentPushes(apiKeyParam); // existing function
-        const maxModified = recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
-        if (maxModified > 0) await storageRepository.setLastModifiedCutoff(maxModified);
+        incrementalPushes = await fetchRecentPushes(apiKeyParam, 20);
       }
 
-      sessionCache.recentPushes = recentPushes;
-      sessionCache.lastModifiedCutoff = storedCutoff || sessionCache.recentPushes.reduce((m, p) => Math.max(m, p.modified || 0), 0);
+      // Update cutoff
+      const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
+      if (maxModified > (sessionCache.lastModifiedCutoff ?? 0)) {
+        sessionCache.lastModifiedCutoff = maxModified;
+        await storageRepository.setLastModifiedCutoff(maxModified);
+      }
+
+      // ========================================
+      // PIPELINE 2: Display History Pipeline (Refresh)
+      // ========================================
+      debugLogger.general('DEBUG', 'Pipeline 2: Refreshing display pushes');
+
+      const displayPushes = await fetchDisplayPushes(apiKeyParam, 50);
+      sessionCache.recentPushes = displayPushes;
+
+      debugLogger.general('INFO', 'Session refresh complete', {
+        incrementalCount: incrementalPushes.length,
+        displayCount: displayPushes.length,
+      });
 
       // ========== ADD THIS ==========
       // Refresh chats

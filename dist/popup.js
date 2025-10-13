@@ -281,6 +281,12 @@
     }
     populateDeviceDropdown(response.devices, response.chats);
     displayPushes(response.recentPushes);
+    const manifest = chrome.runtime.getManifest();
+    const version = manifest.version;
+    const sendPushHeading = document.getElementById("send-push-heading");
+    if (sendPushHeading) {
+      sendPushHeading.innerHTML = `Send a Push <span class="version-text">(v.${version})</span>`;
+    }
     showSection("main");
   }
   function checkStorageForApiKey() {

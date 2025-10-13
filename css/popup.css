@@ -369,3 +369,10 @@ a:hover {
   display: block;
   image-rendering: crisp-edges;
 }
+
+/* Version text styling for popup heading */
+.version-text {
+  font-size: 0.9em;
+  color: #888;
+  font-weight: normal;
+}
