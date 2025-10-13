@@ -1,7 +1,7 @@
 import type { Chat, User, Device, Push, DevicesResponse, PushesResponse } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
-import { fetchWithTimeout, retry } from "./http";
+import { fetchWithTimeout, retry, isInvalidCursorError } from "./http";
 import { checkPushTypeSupport, logUnsupportedPushType } from "../push-types";
 
 const API_BASE_URL = 'https://api.pushbullet.com/v2';
@@ -204,10 +204,39 @@ export async function fetchIncrementalPushes(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
+
+      // NEW: Try to parse error response
+      let errorData: any = null;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        // Not JSON, that's okay
+      }
+
+      // NEW: Check for invalid cursor
+      if (isInvalidCursorError(response, errorData)) {
+        debugLogger.api('WARN', 'Invalid cursor error detected', {
+          status: response.status,
+          errorText,
+          modifiedAfter
+        });
+
+        // Throw special error type that can be caught by caller
+        const error = new Error('INVALID_CURSOR');
+        error.name = 'InvalidCursorError';
+        throw error;
+      }
+
+      // Original error handling for other errors
       const error = new Error(
-        `Failed to fetch pushes ${response.status} ${response.statusText} - ${errorText}`
+        `Failed to fetch pushes (${response.status} ${response.statusText}) - ${errorText}`
       );
-      debugLogger.api('ERROR', 'Incremental pushes fetch failed', { url, status: response.status, duration: `${duration}ms`, errorText });
+      debugLogger.api('ERROR', 'Incremental pushes fetch failed', {
+        url,
+        status: response.status,
+        duration: `${duration}ms`,
+        errorText
+      });
       throw error;
     }
 

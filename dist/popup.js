@@ -152,6 +152,13 @@
       await chrome.storage.local.set({ lastModifiedCutoff: value });
     }
     /**
+     * Remove Last Modified Cutoff from local storage
+     * Used during invalid cursor recovery
+     */
+    async removeLastModifiedCutoff() {
+      await chrome.storage.local.remove("lastModifiedCutoff");
+    }
+    /**
      * Get Last Auto Open Cutoff from local storage
      */
     async getLastAutoOpenCutoff() {

@@ -52,6 +52,7 @@ export interface StorageRepository {
   // Last Modified Cutoff
   getLastModifiedCutoff(): Promise<number | null>;
   setLastModifiedCutoff(value: number): Promise<void>;
+  removeLastModifiedCutoff(): Promise<void>;
 
   // Auto Open Links on Reconnect
   getLastAutoOpenCutoff(): Promise<number | null>;
@@ -235,6 +236,14 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async setLastModifiedCutoff(value: number): Promise<void> {
     await chrome.storage.local.set({ lastModifiedCutoff: value });
+  }
+
+  /**
+   * Remove Last Modified Cutoff from local storage
+   * Used during invalid cursor recovery
+   */
+  async removeLastModifiedCutoff(): Promise<void> {
+    await chrome.storage.local.remove('lastModifiedCutoff');
   }
 
   /**

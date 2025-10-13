@@ -403,6 +403,7 @@
     notificationMetrics = { pushesReceived: 0, notificationsCreated: 0, notificationsFailed: 0, unknownTypes: 0 };
     healthChecks = { success: 0, failure: 0, lastCheck: null };
     quality = { disconnections: 0, permanentErrors: 0, consecutiveFailures: 0 };
+    recoveryMetrics = { invalidCursorRecoveries: 0, lastRecoveryTime: null };
     timers = {};
     record(metric, value = 1) {
       const cur = this.metrics.get(metric) || 0;
@@ -468,8 +469,12 @@
     recordUnknownPushType() {
       this.notificationMetrics.unknownTypes++;
     }
+    recordInvalidCursorRecovery() {
+      this.recoveryMetrics.invalidCursorRecoveries++;
+      this.recoveryMetrics.lastRecoveryTime = Date.now();
+    }
     getPerformanceSummary() {
-      return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, metrics: Object.fromEntries(this.metrics) };
+      return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, recovery: this.recoveryMetrics, metrics: Object.fromEntries(this.metrics) };
     }
     getQualityMetrics() {
       return this.quality;
@@ -917,6 +922,13 @@
       await chrome.storage.local.set({ lastModifiedCutoff: value });
     }
     /**
+     * Remove Last Modified Cutoff from local storage
+     * Used during invalid cursor recovery
+     */
+    async removeLastModifiedCutoff() {
+      await chrome.storage.local.remove("lastModifiedCutoff");
+    }
+    /**
      * Get Last Auto Open Cutoff from local storage
      */
     async getLastAutoOpenCutoff() {
@@ -1014,6 +1026,14 @@
       }
     }
     throw lastErr;
+  }
+  function isInvalidCursorError(response, errorData) {
+    if (response.status === 400 || response.status === 410) {
+      const errorMessage = errorData?.error?.message || errorData?.message || "";
+      const lowerMessage = errorMessage.toLowerCase();
+      return lowerMessage.includes("cursor") || lowerMessage.includes("invalid") || lowerMessage.includes("expired");
+    }
+    return false;
   }
 
   // src/app/push-types.ts
@@ -1224,10 +1244,30 @@
       const duration = Date.now() - startTime;
       if (!response.ok) {
         const errorText = await response.text().catch(() => "Unknown error");
+        let errorData = null;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+        }
+        if (isInvalidCursorError(response, errorData)) {
+          debugLogger.api("WARN", "Invalid cursor error detected", {
+            status: response.status,
+            errorText,
+            modifiedAfter
+          });
+          const error2 = new Error("INVALID_CURSOR");
+          error2.name = "InvalidCursorError";
+          throw error2;
+        }
         const error = new Error(
-          `Failed to fetch pushes ${response.status} ${response.statusText} - ${errorText}`
+          `Failed to fetch pushes (${response.status} ${response.statusText}) - ${errorText}`
         );
-        debugLogger.api("ERROR", "Incremental pushes fetch failed", { url, status: response.status, duration: `${duration}ms`, errorText });
+        debugLogger.api("ERROR", "Incremental pushes fetch failed", {
+          url,
+          status: response.status,
+          duration: `${duration}ms`,
+          errorText
+        });
         throw error;
       }
       const data = await response.json();
@@ -1600,6 +1640,23 @@
     sessionCache.autoOpenLinks = true;
     sessionCache.deviceNickname = "Chrome";
     sessionCache.lastModifiedCutoff = 0;
+  }
+  async function handleInvalidCursorRecovery(apiKey2, connectWebSocketFn) {
+    debugLogger.general("WARN", "Invalid cursor detected - starting recovery process");
+    try {
+      debugLogger.general("INFO", "Clearing invalid cursor from storage");
+      await storageRepository.removeLastModifiedCutoff();
+      debugLogger.general("INFO", "Resetting session cache");
+      sessionCache.lastModifiedCutoff = 0;
+      sessionCache.recentPushes = [];
+      performanceMonitor.recordInvalidCursorRecovery();
+      debugLogger.general("INFO", "Re-bootstrapping session after invalid cursor");
+      await initializeSessionCache("invalid-cursor-recovery", connectWebSocketFn);
+      debugLogger.general("INFO", "Invalid cursor recovery completed successfully");
+    } catch (error) {
+      debugLogger.general("ERROR", "Failed to recover from invalid cursor", null, error);
+      throw error;
+    }
   }
   var initPromise = null;
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
@@ -3421,7 +3478,19 @@
   }
   var websocketClient2 = null;
   globalEventBus.on("websocket:tickle:push", async () => {
-    await refreshPushes(notificationDataStore);
+    try {
+      await refreshPushes(notificationDataStore);
+    } catch (error) {
+      if (error.name === "InvalidCursorError") {
+        debugLogger.general("WARN", "Caught invalid cursor error - triggering recovery");
+        const apiKey2 = getApiKey();
+        if (apiKey2) {
+          await handleInvalidCursorRecovery(apiKey2, connectWebSocket);
+        }
+      } else {
+        debugLogger.general("ERROR", "Error refreshing pushes", null, error);
+      }
+    }
   });
   globalEventBus.on("websocket:tickle:device", async () => {
     const apiKey2 = getApiKey();
@@ -4156,7 +4225,19 @@
             }
             throw new Error(errorMessage);
           }
-          await refreshPushes(notificationDataStore);
+          try {
+            await refreshPushes(notificationDataStore);
+          } catch (error) {
+            if (error.name === "InvalidCursorError") {
+              debugLogger.general("WARN", "Caught invalid cursor error during push send - triggering recovery");
+              const apiKey3 = getApiKey();
+              if (apiKey3) {
+                await handleInvalidCursorRecovery(apiKey3, connectWebSocket);
+              }
+            } else {
+              debugLogger.general("ERROR", "Error refreshing pushes after send", null, error);
+            }
+          }
           sendResponse({ success: true });
         } catch (error) {
           debugLogger.general(

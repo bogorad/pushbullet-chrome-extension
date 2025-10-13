@@ -1,5 +1,6 @@
 import type { SessionCache, Push } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
+import { performanceMonitor } from "../../lib/perf";
 import {
   fetchChats,
   fetchDevices,
@@ -40,6 +41,47 @@ export function resetSessionCache(): void {
   sessionCache.autoOpenLinks = true;
   sessionCache.deviceNickname = "Chrome";
   sessionCache.lastModifiedCutoff = 0;  // ← ADD: Reset cutoff on logout
+}
+
+/**
+ * Handle invalid cursor recovery
+ *
+ * This function is called when the API returns an invalid_cursor error.
+ * It clears all local state and triggers a fresh bootstrap.
+ *
+ * Steps:
+ * 1. Clear the corrupted cursor from storage
+ * 2. Reset session cache to empty
+ * 3. Trigger full re-initialization
+ */
+export async function handleInvalidCursorRecovery(
+  apiKey: string,
+  connectWebSocketFn?: () => void
+): Promise<void> {
+  debugLogger.general('WARN', 'Invalid cursor detected - starting recovery process');
+
+  try {
+    // Step 1: Clear cursor from storage
+    debugLogger.general('INFO', 'Clearing invalid cursor from storage');
+    await storageRepository.removeLastModifiedCutoff();
+
+    // Step 2: Reset session cache
+    debugLogger.general('INFO', 'Resetting session cache');
+    sessionCache.lastModifiedCutoff = 0;
+    sessionCache.recentPushes = [];
+
+    // Step 3: Track recovery attempt
+    performanceMonitor.recordInvalidCursorRecovery();
+
+    // Step 4: Re-bootstrap session
+    debugLogger.general('INFO', 'Re-bootstrapping session after invalid cursor');
+    await initializeSessionCache('invalid-cursor-recovery', connectWebSocketFn);
+
+    debugLogger.general('INFO', 'Invalid cursor recovery completed successfully');
+  } catch (error) {
+    debugLogger.general('ERROR', 'Failed to recover from invalid cursor', null, error as Error);
+    throw error;
+  }
 }
 
 

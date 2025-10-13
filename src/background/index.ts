@@ -16,6 +16,7 @@ import {
   initializeSessionCache,
   refreshSessionCache,
   resetSessionCache,
+  handleInvalidCursorRecovery,
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
@@ -154,7 +155,21 @@ let websocketClient: WebSocketClient | null = null;
 // Register WebSocket event listeners ONCE at module load
 // These should NOT be removed/re-registered on each connect
 globalEventBus.on("websocket:tickle:push", async () => {
-  await refreshPushes(notificationDataStore);
+  try {
+    await refreshPushes(notificationDataStore);
+  } catch (error) {
+    // NEW: Check if it's an invalid cursor error
+    if ((error as Error).name === 'InvalidCursorError') {
+      debugLogger.general('WARN', 'Caught invalid cursor error - triggering recovery');
+      const apiKey = getApiKey();
+      if (apiKey) {
+        await handleInvalidCursorRecovery(apiKey, connectWebSocket);
+      }
+    } else {
+      // Re-throw other errors
+      debugLogger.general('ERROR', 'Error refreshing pushes', null, error as Error);
+    }
+  }
 });
 
 globalEventBus.on("websocket:tickle:device", async () => {
@@ -1149,7 +1164,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         // Refresh pushes after sending
-        await refreshPushes(notificationDataStore);
+        try {
+          await refreshPushes(notificationDataStore);
+        } catch (error) {
+          // Check if it's an invalid cursor error
+          if ((error as Error).name === 'InvalidCursorError') {
+            debugLogger.general('WARN', 'Caught invalid cursor error during push send - triggering recovery');
+            const apiKey = getApiKey();
+            if (apiKey) {
+              await handleInvalidCursorRecovery(apiKey, connectWebSocket);
+            }
+          } else {
+            // Re-throw other errors
+            debugLogger.general('ERROR', 'Error refreshing pushes after send', null, error as Error);
+          }
+        }
 
         sendResponse({ success: true });
       } catch (error) {

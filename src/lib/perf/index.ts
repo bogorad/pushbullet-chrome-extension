@@ -8,6 +8,7 @@ export class PerformanceMonitor {
   private notificationMetrics = { pushesReceived: 0, notificationsCreated: 0, notificationsFailed: 0, unknownTypes: 0 };
   private healthChecks = { success: 0, failure: 0, lastCheck: null as number | null };
   private quality = { disconnections: 0, permanentErrors: 0, consecutiveFailures: 0 };
+  private recoveryMetrics = { invalidCursorRecoveries: 0, lastRecoveryTime: null as number | null };
   private timers: Record<string, number> = {};
 
   record(metric: string, value = 1) { const cur = this.metrics.get(metric) || 0; this.metrics.set(metric, cur + value); }
@@ -25,7 +26,8 @@ export class PerformanceMonitor {
   recordNotificationCreated() { this.notificationMetrics.notificationsCreated++; }
   recordNotificationFailed() { this.notificationMetrics.notificationsFailed++; }
   recordUnknownPushType() { this.notificationMetrics.unknownTypes++; }
-  getPerformanceSummary() { return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, metrics: Object.fromEntries(this.metrics) as Record<string, number> }; }
+  recordInvalidCursorRecovery() { this.recoveryMetrics.invalidCursorRecoveries++; this.recoveryMetrics.lastRecoveryTime = Date.now(); }
+  getPerformanceSummary() { return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, recovery: this.recoveryMetrics, metrics: Object.fromEntries(this.metrics) as Record<string, number> }; }
   getQualityMetrics() { return this.quality; }
   exportPerformanceData() { return { summary: this.getPerformanceSummary(), timeline: this.notificationTimeline.slice(-200) }; }
 }
