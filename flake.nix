@@ -25,7 +25,9 @@
             zsh
             nodePackages.npm # Use npm instead of pnpm
             nodePackages.typescript
-            esbuild
+            esbuild # build
+            prettier # format js/ts
+            biome # format json
           ];
 
           shell = "${pkgs.zsh}/bin/zsh";
