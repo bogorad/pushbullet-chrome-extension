@@ -121,6 +121,59 @@ interface WebSocketState {
   [key: string]: unknown;
 }
 
+/**
+ * Log level hierarchy map.
+ * Each key is a log level, and the value is an array of levels that should be visible
+ * when that level is selected in the filter.
+ *
+ * Hierarchy (least to most severe): DEBUG < INFO < WARN < ERROR
+ *
+ * Examples:
+ * - Selecting DEBUG shows all levels (nothing is filtered out)
+ * - Selecting WARN shows WARN and ERROR only
+ * - Selecting ERROR shows only ERROR
+ */
+const LOG_LEVEL_HIERARCHY: Record<string, string[]> = {
+  DEBUG: ["DEBUG", "INFO", "WARN", "ERROR"], // Show everything
+  INFO: ["INFO", "WARN", "ERROR"], // Show INFO and above
+  WARN: ["WARN", "ERROR"], // Show WARN and above
+  ERROR: ["ERROR"], // Show only ERROR
+};
+
+/**
+ * Check if a log entry should be visible based on the selected filter level.
+ * Uses hierarchical filtering where selecting a level shows that level plus all more severe levels.
+ *
+ * @param logLevel - The level of the log entry (DEBUG, INFO, WARN, ERROR)
+ * @param filterLevel - The currently selected filter level (or empty string for "All")
+ * @returns True if the log should be shown, false if it should be filtered out
+ *
+ * @example
+ * // Filter is set to "WARN"
+ * shouldShowLogByLevel('DEBUG', 'WARN')  // false (DEBUG is less severe than WARN)
+ * shouldShowLogByLevel('INFO', 'WARN')   // false (INFO is less severe than WARN)
+ * shouldShowLogByLevel('WARN', 'WARN')   // true (WARN matches)
+ * shouldShowLogByLevel('ERROR', 'WARN')  // true (ERROR is more severe than WARN)
+ */
+function shouldShowLogByLevel(logLevel: string, filterLevel: string): boolean {
+  // If no filter is selected (empty string or "All"), show everything
+  if (!filterLevel || filterLevel === "") {
+    return true;
+  }
+
+  // Get the array of levels that should be visible for this filter
+  const allowedLevels = LOG_LEVEL_HIERARCHY[filterLevel];
+
+  // If the filter level is not in our hierarchy map, show everything (fail-safe)
+  if (!allowedLevels) {
+    console.warn(`Unknown filter level: ${filterLevel}, showing all logs`);
+    return true;
+  }
+
+  // Check if the log's level is in the allowed levels array
+  return allowedLevels.includes(logLevel);
+}
+
 // DOM Elements
 const refreshBtn = getElementById<HTMLButtonElement>('refresh-btn');
 const exportJsonBtn = getElementById<HTMLButtonElement>('export-json-btn');
@@ -377,8 +430,11 @@ function renderLogs(): void {
     filteredLogs = filteredLogs.filter(log => log.category === categoryFilter);
   }
 
+  // Filter by level (hierarchical - shows selected level + more severe levels)
   if (levelFilter) {
-    filteredLogs = filteredLogs.filter(log => log.level === levelFilter);
+    filteredLogs = filteredLogs.filter((log) =>
+      shouldShowLogByLevel(log.level, levelFilter),
+    );
   }
 
   // Render logs

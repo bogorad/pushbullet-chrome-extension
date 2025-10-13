@@ -165,7 +165,10 @@ export function updateConnectionIcon(status: ConnectionStatus): void {
   }
 }
 
-function upsertPushes(existing: Push[], incoming: Push[]): { updated: Push[]; newOnes: Push[] } {
+function upsertPushes(
+  existing: Push[],
+  incoming: Push[]
+): [updated: Push[], newOnes: Push[]] {
   const map = new Map(existing.map(p => [p.iden, p]));
   const newOnes: Push[] = [];
 
@@ -180,7 +183,7 @@ function upsertPushes(existing: Push[], incoming: Push[]): { updated: Push[]; ne
 
   // Keep most-recent-first, cap length to prevent unbounded growth (e.g., 200)
   const updated = Array.from(map.values()).sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 200);
-  return { updated, newOnes };
+  return [updated, newOnes];
 }
 
 /**
@@ -197,75 +200,108 @@ export async function refreshPushes(
   }
 
   try {
-    debugLogger.general('DEBUG', 'Refreshing pushes (incremental)');
+    // ========================================
+    // PIPELINE 1: Incremental Auto-Open Pipeline
+    // ========================================
+    // Fetch only NEW pushes since last check for auto-opening
 
-    const cutoff = sessionCache.lastModifiedCutoff || (await storageRepository.getLastModifiedCutoff()) || 0;
-    const changes = await fetchIncrementalPushes(apiKey, cutoff, 100);
+    debugLogger.general('DEBUG', 'Pipeline 1: Checking for new pushes (incremental)');
 
-    if (changes.length === 0) {
-      debugLogger.general('INFO', 'No incremental push changes');
-      return;
+    const cutoff = sessionCache.lastModifiedCutoff ?? (await storageRepository.getLastModifiedCutoff()) ?? 0;
+    const incrementalPushes = await fetchIncrementalPushes(apiKey, cutoff, 100);
+
+    debugLogger.general('INFO', 'Pipeline 1: Incremental fetch complete', {
+      newPushCount: incrementalPushes.length,
+      cutoff,
+    });
+
+    if (incrementalPushes.length === 0) {
+      debugLogger.general('INFO', 'Pipeline 1: No new pushes to process');
+      return; // Nothing new, exit early
     }
 
-    const { updated, newOnes } = upsertPushes(sessionCache.recentPushes || [], changes);
-    sessionCache.recentPushes = updated;
-    sessionCache.lastUpdated = Date.now();
-
+    // Update cutoff timestamp
     const maxModified = Math.max(
       cutoff,
-      ...changes.map(p => (typeof p.modified === 'number' ? p.modified : 0))
+      ...incrementalPushes.map((p) => (typeof p.modified === 'number' ? p.modified : 0))
     );
+
     if (maxModified > cutoff) {
       sessionCache.lastModifiedCutoff = maxModified;
       await storageRepository.setLastModifiedCutoff(maxModified);
+
+      debugLogger.general('DEBUG', 'Pipeline 1: Updated cutoff', {
+        old: cutoff,
+        new: maxModified,
+      });
     }
 
-    // Notify only for truly new idens
-    for (const push of newOnes) {
-      debugLogger.general('INFO', 'Showing notification for new push', { pushIden: push.iden, pushType: push.type });
-      void showPushNotification(push, notificationDataStore).catch((error) => {
-        debugLogger.general(
-          "ERROR",
-          "Failed to show notification",
-          { pushIden: push.iden },
-          error,
-        );
+    // ========================================
+    // PIPELINE 2: Update Display Data
+    // ========================================
+    // Merge new pushes into display array using upsert
+
+    debugLogger.general('DEBUG', 'Pipeline 2: Updating display pushes');
+
+    const [updatedDisplayPushes, newPushes] = upsertPushes(
+      sessionCache.recentPushes ?? [],
+      incrementalPushes
+    );
+
+    sessionCache.recentPushes = updatedDisplayPushes;
+    sessionCache.lastUpdated = Date.now();
+
+    debugLogger.general('INFO', 'Pipeline 2: Display updated', {
+      totalDisplayPushes: updatedDisplayPushes.length,
+      newPushes: newPushes.length,
+    });
+
+    // ========================================
+    // Process New Pushes (Notifications & Auto-Open)
+    // ========================================
+    // Only notify and auto-open for truly NEW pushes (from newPushes array)
+
+    for (const push of newPushes) {
+      debugLogger.general('INFO', 'Processing new push', {
+        pushIden: push.iden,
+        pushType: push.type,
       });
 
-      // Auto-open links if setting is enabled
+      // Show notification
+      void showPushNotification(push, notificationDataStore).catch((error) => {
+        debugLogger.general('ERROR', 'Failed to show notification', {
+          pushIden: push.iden,
+        }, error);
+      });
+
+      // Auto-open links if enabled
       const autoOpenLinks = getAutoOpenLinks();
       if (autoOpenLinks && isLinkPush(push)) {
-        debugLogger.general("INFO", "Auto-opening link push", {
+        debugLogger.general('INFO', 'Auto-opening link push', {
           pushIden: push.iden,
           url: (push as LinkPush).url,
         });
 
         chrome.tabs
-          .create({
-            url: (push as LinkPush).url,
-            active: false, // Open in background to avoid disrupting user
-          })
+          .create({ url: (push as LinkPush).url, active: false })
           .catch((error) => {
-            debugLogger.general(
-              "ERROR",
-              "Failed to auto-open link",
-              {
-                url: (push as LinkPush).url,
-              },
-              error,
-            );
+            debugLogger.general('ERROR', 'Failed to auto-open link', {
+              url: (push as LinkPush).url,
+            }, error);
           });
       }
     }
 
-    // Notify popup
+    // Notify popup of updated data
     chrome.runtime
-      .sendMessage({ action: 'pushesUpdated', pushes: sessionCache.recentPushes })
+      .sendMessage({
+        action: 'pushesUpdated',
+        pushes: sessionCache.recentPushes,
+      })
       .catch(() => undefined);
 
   } catch (error) {
-    debugLogger.general('ERROR', 'Incremental refresh failed', { error });
-    // Keep health/failure accounting as today
+    debugLogger.general('ERROR', 'Incremental refresh failed', {}, error as Error);
     performanceMonitor.recordHealthCheckFailure();
   }
 }

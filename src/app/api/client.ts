@@ -2,6 +2,7 @@ import type { Chat, User, Device, Push, DevicesResponse, PushesResponse } from "
 import { debugLogger } from "../../lib/logging";
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
 import { fetchWithTimeout, retry } from "./http";
+import { checkPushTypeSupport, logUnsupportedPushType } from "../push-types";
 
 const API_BASE_URL = 'https://api.pushbullet.com/v2';
 const PUSHES_URL = `${API_BASE_URL}/pushes`;
@@ -15,6 +16,19 @@ let registrationPromise: Promise<{ deviceIden: string; needsUpdate: boolean }> |
 
 function authHeaders(apiKey: string): HeadersInit {
   return { 'Access-Token': apiKey };
+}
+
+export async function fetchUserInfoWithTimeout(apiKey: string): Promise<User> {
+  const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey) }, 5000);
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getUserInfoWithTimeoutRetry(apiKey: string): Promise<User> {
+  return retry(() => fetchUserInfoWithTimeout(apiKey), 1, 500); // 1 retry with 500ms backoff
 }
 
 export async function fetchUserInfo(apiKey: string): Promise<User> {
@@ -58,19 +72,6 @@ export async function fetchUserInfo(apiKey: string): Promise<User> {
   }
 }
 
-export async function fetchUserInfoWithTimeout(apiKey: string): Promise<User> {
-  const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey) }, 5000);
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => 'Unknown error');
-    throw new Error(`Failed to fetch user info: ${response.status} ${response.statusText} - ${errorText}`);
-  }
-  return response.json();
-}
-
-export async function getUserInfoWithTimeoutRetry(apiKey: string): Promise<User> {
-  return retry(() => fetchUserInfoWithTimeout(apiKey), 1, 500); // 1 retry with 500ms backoff
-}
-
 export async function fetchDevices(apiKey: string): Promise<Device[]> {
   const startTime = Date.now();
   debugLogger.api('INFO', 'Fetching devices', { url: DEVICES_URL, hasApiKey: !!apiKey, timestamp: new Date().toISOString() });
@@ -111,9 +112,12 @@ export async function fetchDevices(apiKey: string): Promise<Device[]> {
   }
 }
 
-export async function fetchRecentPushes(apiKey: string): Promise<Push[]> {
+export async function fetchRecentPushes(
+  apiKey: string,
+  limit: number = 20
+): Promise<Push[]> {
   const startTime = Date.now();
-  const url = `${PUSHES_URL}?limit=20`;
+  const url = `${PUSHES_URL}?limit=${limit}`;
   debugLogger.api('INFO', 'Fetching recent pushes', { url, hasApiKey: !!apiKey, timestamp: new Date().toISOString() });
 
   try {
@@ -133,13 +137,26 @@ export async function fetchRecentPushes(apiKey: string): Promise<Push[]> {
 
     const data: PushesResponse = await response.json();
     const filteredPushes = data.pushes.filter(push => {
+      // Check if dismissed
+      if (push.dismissed) {
+        return false; // Filter out dismissed pushes
+      }
+
+      // Check if push type is supported
+      const typeCheck = checkPushTypeSupport(push.type);
+      if (!typeCheck.supported) {
+        logUnsupportedPushType(push.type, push.iden || "unknown", "fetchRecentPushes");
+        return false;
+      }
+
+      // Check if push has displayable content
       const hasContent =
         ('title' in push && push.title) ||
         ('body' in push && push.body) ||
         ('url' in push && push.url) ||
         ('file_name' in push && push.file_name) ||
         ('file_url' in push && push.file_url);
-      return hasContent && !push.dismissed;
+      return hasContent;
     });
     debugLogger.api('INFO', 'Pushes fetched successfully', {
       url,
@@ -214,11 +231,61 @@ export async function fetchIncrementalPushes(
     if (page > 10) break;
   } while (cursor);
 
-  // Optional: filter to only displayable types to match background flow
-  const displayableTypes = new Set(['mirror', 'note', 'link', 'sms_changed', 'file']);
-  const filtered = all.filter(p => displayableTypes.has(p.type) && !p.dismissed);
+  // Filter to only supported types and log unsupported ones
+  const filtered = all.filter(p => {
+    // Check if dismissed
+    if (p.dismissed) {
+      return false;
+    }
+
+    // Check push type support
+    const typeCheck = checkPushTypeSupport(p.type);
+    if (!typeCheck.supported) {
+      logUnsupportedPushType(p.type, p.iden || "unknown", "fetchIncrementalPushes");
+      return false;
+    }
+
+    // Push is supported and not dismissed
+    return true;
+  });
 
   return filtered;
+}
+
+/**
+ * Fetch pushes specifically for display in the popup UI.
+ * This is separate from incremental fetches used for auto-opening links.
+ *
+ * @param apiKey - The Pushbullet API key
+ * @param limit - Number of pushes to fetch (default 50)
+ * @returns Array of Push objects for display
+ */
+export async function fetchDisplayPushes(
+  apiKey: string,
+  limit: number = 50
+): Promise<Push[]> {
+  debugLogger.api('INFO', 'Fetching display pushes', {
+    limit,
+    hasApiKey: !!apiKey,
+    timestamp: new Date().toISOString(),
+  });
+
+  try {
+    // Use the modified fetchRecentPushes with custom limit
+    const pushes = await fetchRecentPushes(apiKey, limit);
+
+    debugLogger.api('INFO', 'Display pushes fetched successfully', {
+      count: pushes.length,
+      limit,
+    });
+
+    return pushes;
+  } catch (error) {
+    debugLogger.api('ERROR', 'Failed to fetch display pushes', {
+      error: (error as Error).message,
+    });
+    throw error;
+  }
 }
 
 export async function ensureDeviceExists(apiKey: string, deviceIden: string): Promise<boolean> {

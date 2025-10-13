@@ -136,6 +136,16 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
   // Display pushes
   displayPushes(response.recentPushes);
 
+  // Get version from manifest
+  const manifest = chrome.runtime.getManifest();
+  const version = manifest.version;
+
+  // Update the "Send a Push" heading with version
+  const sendPushHeading = document.getElementById('send-push-heading');
+  if (sendPushHeading) {
+    sendPushHeading.innerHTML = `Send a Push <span class="version-text">(v.${version})</span>`;
+  }
+
   // Show main section
   showSection("main");
 

@@ -53,8 +53,8 @@ export async function orchestrateInitialization({
       debugLogger.general('INFO', 'Recent pushes fetched', { count: p.length });
     });
 
-  // 3) Start WebSocket immediately
-  const wsP = Promise.resolve().then(() => connectWs());
+    // 3) Start WebSocket immediately
+    const wsP = Promise.resolve().then(() => connectWs());
 
     // 4) Await devices/pushes + ws for functional readiness; user info may still be pending
     const results = await Promise.allSettled([devicesP, pushesP, wsP]);

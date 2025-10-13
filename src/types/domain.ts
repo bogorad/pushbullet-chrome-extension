@@ -147,8 +147,7 @@ export interface SessionCache {
   lastUpdated: number;
   autoOpenLinks: boolean;
   deviceNickname: string;
-  // NEW: server-driven cutoff for incremental sync
-  lastModifiedCutoff?: number; // max 'modified' seen
+  lastModifiedCutoff: number; // ← Tracks last timestamp for incremental fetches
 }
 
 export interface InitializationState {

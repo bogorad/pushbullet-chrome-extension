@@ -10,6 +10,27 @@
   }
 
   // src/debug-dashboard/index.ts
+  var LOG_LEVEL_HIERARCHY = {
+    DEBUG: ["DEBUG", "INFO", "WARN", "ERROR"],
+    // Show everything
+    INFO: ["INFO", "WARN", "ERROR"],
+    // Show INFO and above
+    WARN: ["WARN", "ERROR"],
+    // Show WARN and above
+    ERROR: ["ERROR"]
+    // Show only ERROR
+  };
+  function shouldShowLogByLevel(logLevel, filterLevel) {
+    if (!filterLevel || filterLevel === "") {
+      return true;
+    }
+    const allowedLevels = LOG_LEVEL_HIERARCHY[filterLevel];
+    if (!allowedLevels) {
+      console.warn(`Unknown filter level: ${filterLevel}, showing all logs`);
+      return true;
+    }
+    return allowedLevels.includes(logLevel);
+  }
   var refreshBtn = getElementById("refresh-btn");
   var exportJsonBtn = getElementById("export-json-btn");
   var exportTextBtn = getElementById("export-text-btn");
@@ -188,7 +209,9 @@
       filteredLogs = filteredLogs.filter((log) => log.category === categoryFilter);
     }
     if (levelFilter) {
-      filteredLogs = filteredLogs.filter((log) => log.level === levelFilter);
+      filteredLogs = filteredLogs.filter(
+        (log) => shouldShowLogByLevel(log.level, levelFilter)
+      );
     }
     if (filteredLogs.length === 0) {
       logsContainer.innerHTML = '<p class="loading">No logs match the current filters</p>';

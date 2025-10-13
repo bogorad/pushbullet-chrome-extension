@@ -19,6 +19,10 @@ import {
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
+import {
+  checkPushTypeSupport,
+  SUPPORTED_PUSH_TYPES,
+} from "../app/push-types";
 import { PushbulletCrypto } from "../lib/crypto";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 import { MessageAction } from "../types/domain";
@@ -226,20 +230,37 @@ globalEventBus.on("websocket:push", async (push: Push) => {
     }
   }
 
-  // --- FILTERING LOGIC: Only process displayable push types ---
-  const displayableTypes = ["mirror", "note", "link", "sms_changed"];
+  // --- FILTERING LOGIC: Only process supported push types ---
+  const typeCheck = checkPushTypeSupport(decryptedPush.type);
 
-  if (!displayableTypes.includes(decryptedPush.type)) {
-    // Log for debugging purposes and ignore the push
-    debugLogger.general("INFO", "Ignoring non-displayable push of type", {
-      pushType: decryptedPush.type,
-      pushIden: decryptedPush.iden,
-    });
+  if (!typeCheck.supported) {
+    // Log unsupported push types as WARNING for visibility
+    if (typeCheck.category === "known-unsupported") {
+      debugLogger.general("WARN", "Received known unsupported push type", {
+        pushType: decryptedPush.type,
+        pushIden: decryptedPush.iden,
+        category: typeCheck.category,
+        reason: "This push type is not supported by the extension",
+        supportedTypes: SUPPORTED_PUSH_TYPES,
+      });
+    } else if (typeCheck.category === "unknown") {
+      debugLogger.general("WARN", "Received unknown push type", {
+        pushType: decryptedPush.type,
+        pushIden: decryptedPush.iden,
+        category: typeCheck.category,
+        reason: "This is a new or unrecognized push type",
+        supportedTypes: SUPPORTED_PUSH_TYPES,
+        // Include full push data for investigation
+        fullPushData: decryptedPush,
+      });
+    }
+
+    // Exit early - don't process unsupported pushes
     return;
   }
 
-  // Log that we're processing a displayable push
-  debugLogger.general("INFO", "Processing displayable push of type", {
+  // If we reach here, the push is supported and should be processed
+  debugLogger.general("INFO", "Processing supported push type", {
     pushType: decryptedPush.type,
     pushIden: decryptedPush.iden,
   });
