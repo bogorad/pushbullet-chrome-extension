@@ -3571,6 +3571,7 @@
     await ensureConfigLoaded();
     performanceMonitor.recordPushReceived();
     let decryptedPush = push;
+    let decryptionFailed = false;
     if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
       try {
         const password = await storageRepository.getEncryptionPassword();
@@ -3591,21 +3592,32 @@
             completeData: decryptedPush
           });
         } else {
-          debugLogger.general(
-            "WARN",
-            "Cannot decrypt push - no encryption password set"
-          );
+          debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+          decryptionFailed = true;
         }
       } catch (error) {
         debugLogger.general(
           "ERROR",
           "Failed to decrypt push",
-          {
-            error: error.message
-          },
+          { error: error.message },
           error
         );
+        decryptionFailed = true;
       }
+    }
+    if (decryptionFailed) {
+      debugLogger.general("WARN", "Skipping encrypted push due to decryption failure", {
+        pushIden: push.iden,
+        hasEncryptionPassword: !!await storageRepository.getEncryptionPassword()
+      });
+      return;
+    }
+    if (!decryptedPush.type) {
+      debugLogger.general("ERROR", "Push has no type field after decryption", {
+        pushIden: decryptedPush.iden,
+        pushData: decryptedPush
+      });
+      return;
     }
     const typeCheck = checkPushTypeSupport(decryptedPush.type);
     if (!typeCheck.supported) {

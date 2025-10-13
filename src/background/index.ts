@@ -156,14 +156,15 @@ globalEventBus.on("websocket:tickle:device", async () => {
   }
 });
 
-globalEventBus.on("websocket:push", async (push: Push) => {
+globalEventBus.on("websocket:push", async (push: Push | any) => {
   // RACE CONDITION FIX: Ensure configuration is loaded before processing push
   await ensureConfigLoaded();
 
   // Track push received
   performanceMonitor.recordPushReceived();
 
-  let decryptedPush = push;
+  let decryptedPush: Push = push;
+  let decryptionFailed = false;
 
   // Check if push is encrypted
   if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
@@ -183,30 +184,47 @@ globalEventBus.on("websocket:push", async (push: Push) => {
         );
 
         decryptedPush = decrypted as Push;
+
         debugLogger.general("INFO", "Push decrypted successfully", {
           pushType: decryptedPush.type,
         });
 
-        // ADD THIS - Full dump of decrypted data
+        // ADD THIS - Full dump of decrypted data (for debugging)
         debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
           completeData: decryptedPush,
         });
       } else {
-        debugLogger.general(
-          "WARN",
-          "Cannot decrypt push - no encryption password set",
-        );
+        debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+        decryptionFailed = true;
       }
     } catch (error) {
       debugLogger.general(
         "ERROR",
         "Failed to decrypt push",
-        {
-          error: (error as Error).message,
-        },
-        error as Error,
+        { error: (error as Error).message },
+        error as Error
       );
+      decryptionFailed = true;
     }
+  }
+
+  // ✅ FIX: Skip type checking if decryption failed
+  // For encrypted pushes, we can't check type until after decryption
+  if (decryptionFailed) {
+    debugLogger.general("WARN", "Skipping encrypted push due to decryption failure", {
+      pushIden: push.iden,
+      hasEncryptionPassword: !!(await storageRepository.getEncryptionPassword()),
+    });
+    return; // Exit early - can't process without decrypting
+  }
+
+  // ✅ FIX: Verify type field exists after decryption
+  if (!decryptedPush.type) {
+    debugLogger.general("ERROR", "Push has no type field after decryption", {
+      pushIden: (decryptedPush as any).iden,
+      pushData: decryptedPush,
+    });
+    return;
   }
 
   // --- FILTERING LOGIC: Only process supported push types ---
