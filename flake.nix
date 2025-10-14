@@ -29,6 +29,7 @@
             esbuild # build
             prettier # format js/ts
             biome # format json
+            opencode-flake.packages.${pkgs.system}.default
           ];
 
           shell = "${pkgs.zsh}/bin/zsh";
