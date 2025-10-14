@@ -4,6 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    opencode-flake.url = "github:bogorad/opencode-flake";
   };
 
   outputs =
@@ -58,7 +59,7 @@
             # Set zsh as the shell
             export SHELL=${pkgs.zsh}/bin/zsh
             echo "Environment ready. Run 'vitest run' or 'npm test' to execute tests."
-            ${pkgs.opencode}/bin/opencode .
+            opencode .
             exit
           '';
         };
