@@ -337,6 +337,9 @@ globalEventBus.on("websocket:connected", async () => {
     recoveryTimings: recoveryTimings.slice(-20),
   });
 
+  // WAIT for state machine to be ready
+  await stateMachineReady;
+
   // Trigger state machine transition
   stateMachine.transition("WS_CONNECTED");
 
