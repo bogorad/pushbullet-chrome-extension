@@ -1294,7 +1294,7 @@
     "note",
     "link",
     "mirror",
-    "smschanged",
+    "sms_changed",
     "file"
   ];
   var KNOWN_UNSUPPORTED_TYPES = [

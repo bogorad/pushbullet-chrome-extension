@@ -12,7 +12,7 @@ export const SUPPORTED_PUSH_TYPES: readonly string[] = [
   "note",
   "link",
   "mirror",
-  "smschanged",
+  "sms_changed",
   "file",
 ] as const;
 
