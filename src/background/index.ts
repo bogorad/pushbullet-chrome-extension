@@ -18,7 +18,7 @@ import {
   resetSessionCache,
   handleInvalidCursorRecovery,
 } from "../app/session";
-import { fetchDevices, updateDeviceNickname } from "../app/api/client";
+import { fetchDevices, updateDeviceNickname, fetchRecentPushes } from "../app/api/client";
 import { ensureConfigLoaded } from "../app/reconnect";
 import { checkPushTypeSupport, SUPPORTED_PUSH_TYPES } from "../app/push-types";
 import { PushbulletCrypto } from "../lib/crypto";
@@ -687,62 +687,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === MessageAction.GET_SESSION_DATA) {
-    // SERVICE WORKER AMNESIA FIX: Check storage directly, not the in-memory variable
-    // After service worker restart, in-memory variables are null, but storage persists.
-    // This ensures we detect wake-ups reliably by using storage as the source of truth.
-    (async () => {
-      try {
-        // RACE CONDITION FIX: Ensure configuration is loaded before processing
-        await ensureConfigLoaded();
+    // Lazy-load recent pushes if not already loaded
+    const apiKey = getApiKey();
+    const shouldFetchPushes =
+      apiKey &&
+      (!sessionCache.recentPushes || sessionCache.recentPushes.length === 0);
 
-        // Check storage directly, not the in-memory variable
-        const storedApiKey = await storageRepository.getApiKey();
+    if (shouldFetchPushes) {
+      debugLogger.general("INFO", "Popup opened - fetching recent pushes on-demand");
 
-        // Detect wake-up: if we have a key in storage but the session is not loaded in memory
-        if (storedApiKey && !sessionCache.isAuthenticated) {
-          debugLogger.general(
-            "WARN",
-            "Service worker wake-up detected - reloading session from storage.",
-          );
-
-          // Await the full initialization process
-          await initializeSessionCache("onMessageWakeup", connectWebSocket, {
-            setApiKey,
-            setDeviceIden,
-            setAutoOpenLinks,
-            setNotificationTimeout,
-            setDeviceNickname,
+      // Fetch recent pushes before responding
+      fetchRecentPushes(apiKey)
+        .then((pushes) => {
+          sessionCache.recentPushes = pushes;
+          sessionCache.lastUpdated = Date.now();
+          debugLogger.general("INFO", "Recent pushes fetched on-demand", {
+            count: pushes.length
           });
-        }
 
-        // Now, respond with the (potentially restored) session data
-        sendResponse({
-          isAuthenticated: sessionCache.isAuthenticated,
-          userInfo: sessionCache.userInfo,
-          devices: sessionCache.devices,
-          recentPushes: sessionCache.recentPushes,
-          chats: sessionCache.chats || [], // ← ADD THIS
-          autoOpenLinks: getAutoOpenLinks(),
-          deviceNickname: getDeviceNickname(),
-          websocketConnected: websocketClient
-            ? websocketClient.isConnected()
-            : false,
-        });
-      } catch (error) {
-        debugLogger.general(
-          "ERROR",
-          "Error handling getSessionData after wake-up",
-          null,
-          error as Error,
-        );
-        sendResponse({
-          isAuthenticated: false,
-          error: (error as Error).message,
-        });
-      }
-    })();
+          // Send response with freshly fetched pushes
+          sendResponse({
+            isAuthenticated: !!apiKey,
+            userInfo: sessionCache.userInfo,
+            devices: sessionCache.devices,
+            recentPushes: sessionCache.recentPushes,
+            chats: sessionCache.chats || [],
+            autoOpenLinks: getAutoOpenLinks(),
+            deviceNickname: getDeviceNickname(),
+            websocketConnected: websocketClient
+              ? websocketClient.isConnected()
+              : false,
+          });
+        })
+        .catch((error) => {
+          debugLogger.general("ERROR", "Failed to fetch recent pushes on-demand", {
+            error: (error as Error).message,
+          });
 
-    return true; // Return true to indicate an asynchronous response.
+          // Send response with empty pushes array on error
+          sendResponse({
+            isAuthenticated: !!apiKey,
+            userInfo: sessionCache.userInfo,
+            devices: sessionCache.devices,
+            recentPushes: [],
+            chats: sessionCache.chats || [],
+            autoOpenLinks: getAutoOpenLinks(),
+            deviceNickname: getDeviceNickname(),
+            websocketConnected: websocketClient
+              ? websocketClient.isConnected()
+              : false,
+          });
+        });
+
+      // Return true to indicate async response
+      return true;
+    } else {
+      // Pushes already loaded - respond immediately with cached data
+      debugLogger.general("DEBUG", "Popup opened - using cached pushes", {
+        count: sessionCache.recentPushes?.length ?? 0,
+      });
+
+      sendResponse({
+        isAuthenticated: !!apiKey,
+        userInfo: sessionCache.userInfo,
+        devices: sessionCache.devices,
+        recentPushes: sessionCache.recentPushes,
+        chats: sessionCache.chats || [],
+        autoOpenLinks: getAutoOpenLinks(),
+        deviceNickname: getDeviceNickname(),
+        websocketConnected: websocketClient
+          ? websocketClient.isConnected()
+          : false,
+      });
+    }
   } else if (message.action === MessageAction.API_KEY_CHANGED) {
     // Update API key
     setApiKey(message.apiKey);

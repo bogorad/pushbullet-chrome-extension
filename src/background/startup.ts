@@ -1,5 +1,5 @@
 import { storageRepository } from '../infrastructure/storage/storage.repository';
-import { getUserInfoWithTimeoutRetry, fetchDevices, fetchRecentPushes } from '../app/api/client';
+import { getUserInfoWithTimeoutRetry, fetchDevices } from '../app/api/client';
 import { sessionCache } from '../app/session';
 import { debugLogger } from '../lib/logging';
 import { enqueuePostConnect } from '../realtime/postConnectQueue';
@@ -48,18 +48,15 @@ export async function orchestrateInitialization({
       debugLogger.general('INFO', 'Devices fetched', { count: d.length });
     });
 
-    const pushesP = fetchRecentPushes(apiKey).then(p => {
-      sessionCache.recentPushes = p;
-      debugLogger.general('INFO', 'Recent pushes fetched', { count: p.length });
-    });
+
 
     // 3) Start WebSocket immediately
     const wsP = Promise.resolve().then(() => connectWs());
 
-    // 4) Await devices/pushes + ws for functional readiness; user info may still be pending
-    const results = await Promise.allSettled([devicesP, pushesP, wsP]);
+    // 4) Await devices + ws for functional readiness; user info may still be pending
+    const results = await Promise.allSettled([devicesP, wsP]);
 
-    debugLogger.general('INFO', 'Functional ready: devices, pushes, ws initialized', {
+    debugLogger.general('INFO', 'Functional ready: devices, ws initialized', {
       trigger: trigger,
       results: results.map((r, i) => ({ index: i, status: r.status }))
     });
