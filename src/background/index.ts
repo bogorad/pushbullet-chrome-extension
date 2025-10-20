@@ -50,7 +50,6 @@ import {
   updatePopupConnectionState,
   pushLink,
   pushNote,
-  updateConnectionIcon,
 } from "./utils";
 import { autoOpenOfflineLinks } from "./links";
 import { orchestrateInitialization } from "./startup";
@@ -113,15 +112,15 @@ let websocketClient: WebSocketClient | null = null;
 let ranReconnectAutoOpen = false; // guard per reconnect [file:9]
 
 async function promoteToReadyIfConnected() {
-  if (!websocketClient?.isConnected?.()) return; // only when socket is truly open [file:9]
-  await stateMachineReady; // ensure machine is ready [file:9]
+  if (!websocketClient?.isConnectionHealthy?.()) return;
+  await stateMachineReady;
   const inRecovery =
     stateMachine.isInState(ServiceWorkerState.RECONNECTING) ||
-    stateMachine.isInState(ServiceWorkerState.DEGRADED); // check current state [file:9]
+    stateMachine.isInState(ServiceWorkerState.DEGRADED);
   if (inRecovery) {
-    stateMachine.transition("WS_CONNECTED"); // lift UI out of yellow [file:9]
-    void runPostConnect(); // run post-connect tasks [file:9]
-    void maybeRunReconnectAutoOpen(); // trigger offline link auto-open once [file:9]
+    stateMachine.transition("WS_CONNECTED");
+    void runPostConnect();
+    void maybeRunReconnectAutoOpen();
   }
 }
 
@@ -345,11 +344,12 @@ globalEventBus.on("websocket:connected", async () => {
   await stateMachineReady;
   stateMachine.transition("WS_CONNECTED");
   void runPostConnect();
+  void maybeRunReconnectAutoOpen();
 });
 
 globalEventBus.on("websocket:disconnected", async () => {
-  await stateMachineReady; // REQUIRED [file:9]
-  stateMachine.transition("WS_DISCONNECTED"); // REQUIRED [file:9]
+  await stateMachineReady;
+  stateMachine.transition("WS_DISCONNECTED");
 });
 
 globalEventBus.on("websocket:polling:check", () => {
@@ -368,8 +368,7 @@ globalEventBus.on("state:enter:reconnecting", () => {
   ranReconnectAutoOpen = false;
 });
 
-// MV3 LIFECYCLE TRACKING: Recovery timer for measuring WebSocket reconnection time
-let recoveryTimerStart: number = 0;
+
 
 // Initialize State Machine
 // ARCHITECTURAL CHANGE: Centralized lifecycle management
@@ -403,7 +402,6 @@ const stateMachineCallbacks = {
   },
   onShowError: (error: string) => {
     debugLogger.general("ERROR", "[StateMachine] Error state", { error });
-    updateConnectionIcon("disconnected");
   },
   onClearData: async () => {
     // Clear session cache to initial state
@@ -453,8 +451,7 @@ function connectWebSocket(): void {
     }
   }
 
-  // MV3 LIFECYCLE TRACKING: Start recovery timer
-  recoveryTimerStart = Date.now();
+
 
   // SECURITY FIX (H-02): Dispose existing socket before creating new one
   if (websocketClient) {
@@ -497,13 +494,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "keepalive") {
     // Minimal work to prevent termination
     debugLogger.general("DEBUG", "Keepalive heartbeat"); // existing [file:9]
-    if (websocketClient?.isConnected?.()) {
-      await stateMachineReady; // ensure machine [file:9]
+    if (websocketClient?.isConnectionHealthy?.()) {
+      await stateMachineReady;
       const notReady = !stateMachine.isInState(ServiceWorkerState.READY);
       if (notReady) {
-        stateMachine.transition("WS_CONNECTED"); // promote to READY [file:9]
-        void runPostConnect(); // run tasks [file:9]
-        void maybeRunReconnectAutoOpen(); // run auto-open once [file:9]
+        stateMachine.transition("WS_CONNECTED");
+        void runPostConnect();
+        void maybeRunReconnectAutoOpen();
       }
     }
 

@@ -710,13 +710,9 @@ export function checkPollingMode(): void {
  */
 export function stopPollingMode(): void {
   if (isPollingMode()) {
-    debugLogger.general(
-      "INFO",
-      "Stopping polling mode - WebSocket reconnected",
-    );
+    debugLogger.general("INFO", "Stopping polling mode - WebSocket reconnected");
     setPollingMode(false);
     chrome.alarms.clear("pollingFallback");
-    updateConnectionIcon("connected");
   }
 }
 

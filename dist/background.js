@@ -779,6 +779,259 @@
   };
   var globalEventBus = new EventBus();
 
+  // src/app/ws/client.ts
+  var WebSocketClient = class {
+    constructor(websocketUrl, getApiKey2) {
+      this.websocketUrl = websocketUrl;
+      this.getApiKey = getApiKey2;
+    }
+    static NOP_TIMEOUT = 6e4;
+    // 60 seconds
+    socket = null;
+    reconnectAttempts = 0;
+    reconnectTimeout = null;
+    lastNopAt = 0;
+    /**
+     * Get current WebSocket instance
+     */
+    getSocket() {
+      return this.socket;
+    }
+    /**
+     * Get current ready state
+     */
+    getReadyState() {
+      return this.socket?.readyState ?? WebSocket.CLOSED;
+    }
+    /**
+     * Check if WebSocket is connected
+     */
+    isConnected() {
+      return this.socket !== null && this.socket.readyState === 1 /* OPEN */;
+    }
+    /**
+     * Connect to WebSocket
+     */
+    connect() {
+      try {
+        const apiKey2 = this.getApiKey();
+        if (!apiKey2) {
+          debugLogger.websocket("WARN", "connectWebSocket called without apiKey");
+          return;
+        }
+        if (this.socket && this.socket.readyState === 1 /* OPEN */) {
+          debugLogger.websocket("DEBUG", "WebSocket already open");
+          return;
+        }
+        const url = this.websocketUrl + apiKey2;
+        debugLogger.websocket("INFO", "WebSocket URL construction debug", {
+          baseUrl: this.websocketUrl,
+          apiKeyLength: apiKey2.length,
+          apiKeyPrefix: apiKey2.substring(0, 8) + "...",
+          finalUrlLength: url.length,
+          urlPattern: this.websocketUrl + "***"
+        });
+        debugLogger.websocket("INFO", "Connecting to WebSocket", {
+          url: this.websocketUrl + "***",
+          reconnectAttempts: this.reconnectAttempts,
+          currentSocketState: this.socket ? this.socket.readyState : "no_existing_socket",
+          apiKeyPresent: !!apiKey2
+        });
+        this.reconnectAttempts = 0;
+        debugLogger.websocket("DEBUG", "About to create WebSocket object", {
+          url: this.websocketUrl + "***",
+          currentSocketExists: !!this.socket,
+          currentSocketState: this.socket ? this.socket.readyState : "null"
+        });
+        try {
+          this.socket = new WebSocket(url);
+          debugLogger.websocket(
+            "DEBUG",
+            "WebSocket object created successfully",
+            {
+              url: this.websocketUrl + "***",
+              readyState: this.socket.readyState,
+              urlLength: url.length
+            }
+          );
+        } catch (createError) {
+          debugLogger.websocket("ERROR", "Failed to create WebSocket object", {
+            url: this.websocketUrl + "***",
+            error: createError instanceof Error ? createError.message : String(createError),
+            errorType: createError?.constructor?.name,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          this.socket = null;
+          throw createError;
+        }
+        debugLogger.websocket("DEBUG", "Setting up WebSocket event handlers", {
+          url: this.websocketUrl + "***",
+          readyState: this.socket.readyState,
+          socketExists: !!this.socket
+        });
+        this.socket.onopen = () => {
+          debugLogger.websocket("INFO", "WebSocket connection established", {
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          this.lastNopAt = Date.now();
+          performanceMonitor.recordWebSocketConnection(true);
+          wsStateMonitor.startMonitoring();
+          globalEventBus.emit("websocket:polling:stop");
+          try {
+            clearErrorBadge();
+          } catch {
+          }
+          globalEventBus.emit("websocket:connected");
+          globalEventBus.emit("websocket:state", "connected");
+        };
+        this.socket.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          globalEventBus.emit("websocket:message", msg);
+          if (msg.type === "nop") {
+            this.lastNopAt = Date.now();
+            debugLogger.websocket("DEBUG", "Server nop received", { timestamp: new Date(this.lastNopAt).toISOString() });
+          }
+          if (msg.type === "tickle") {
+            if (msg.subtype === "push") {
+              globalEventBus.emit("websocket:tickle:push");
+            } else if (msg.subtype === "device") {
+              globalEventBus.emit("websocket:tickle:device");
+            }
+          }
+          if (msg.type === "push") {
+            if ("push" in msg && msg.push) {
+              globalEventBus.emit("websocket:push", msg.push);
+            } else {
+              debugLogger.websocket(
+                "WARN",
+                "Push message received without push payload"
+              );
+            }
+          }
+        };
+        this.socket.onerror = (error) => {
+          const currentSocket = this.socket;
+          const socketExists = !!currentSocket;
+          const socketState = socketExists ? currentSocket.readyState : "no_socket";
+          const isConnecting = socketExists ? currentSocket.readyState === 0 /* CONNECTING */ : false;
+          const isConnected = socketExists ? currentSocket.readyState === 1 /* OPEN */ : false;
+          const errorInfo = {
+            type: error.type || "unknown",
+            target: error.target ? "WebSocket" : "unknown",
+            readyState: socketState,
+            socketExists,
+            url: this.websocketUrl,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            reconnectAttempts: this.reconnectAttempts,
+            // Additional debugging info
+            isConnecting,
+            isConnected,
+            errorEventDetails: {
+              timeStamp: error.timeStamp,
+              bubbles: error.bubbles,
+              cancelable: error.cancelable,
+              currentTarget: error.currentTarget ? "WebSocket" : "unknown"
+            }
+          };
+          debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
+          const websocketError = new Error(
+            `WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`
+          );
+          websocketError.name = "WebSocketError";
+          globalErrorTracker.trackError(
+            websocketError,
+            {
+              category: "WEBSOCKET",
+              message: "WebSocket error occurred",
+              data: errorInfo
+            },
+            "WEBSOCKET"
+          );
+        };
+        this.socket.onclose = (event) => {
+          const closeInfo = {
+            code: event.code,
+            reason: event.reason || "No reason provided",
+            wasClean: event.wasClean
+          };
+          debugLogger.websocket("WARN", "WebSocket connection closed", {
+            ...closeInfo,
+            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+            reconnectAttempts: this.reconnectAttempts
+          });
+          globalEventBus.emit("websocket:disconnected", {
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean
+          });
+          globalEventBus.emit("websocket:state", "disconnected");
+          if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
+            debugLogger.websocket(
+              "ERROR",
+              "Permanent WebSocket error - stopping reconnection attempts",
+              closeInfo
+            );
+            try {
+              showPermanentWebSocketError(closeInfo);
+            } catch {
+            }
+            return;
+          }
+        };
+      } catch (error) {
+        debugLogger.websocket(
+          "ERROR",
+          "Failed to create WebSocket connection",
+          {
+            url: this.websocketUrl + "***",
+            hasApiKey: !!this.getApiKey()
+          },
+          error
+        );
+      }
+    }
+    /**
+     * Disconnect WebSocket
+     */
+    disconnect() {
+      if (this.socket) {
+        try {
+          debugLogger.websocket("INFO", "Disconnecting WebSocket", {
+            readyState: this.socket.readyState
+          });
+          this.socket.close();
+          this.socket = null;
+          wsStateMonitor.stopMonitoring();
+        } catch (error) {
+          debugLogger.websocket(
+            "ERROR",
+            "Error disconnecting WebSocket",
+            null,
+            error
+          );
+        }
+      }
+    }
+    /**
+     * Get reconnect attempts count
+     */
+    getReconnectAttempts() {
+      return this.reconnectAttempts;
+    }
+    /**
+     * Reset reconnect attempts
+     */
+    resetReconnectAttempts() {
+      this.reconnectAttempts = 0;
+    }
+    isConnectionHealthy() {
+      const NOP_TIMEOUT_MS = 6e4;
+      if (this.socket?.readyState !== 1 /* OPEN */) return false;
+      const age = Date.now() - this.lastNopAt;
+      return age >= 0 && age <= NOP_TIMEOUT_MS;
+    }
+  };
+
   // src/infrastructure/storage/storage.repository.ts
   var ChromeStorageRepository = class {
     /**
@@ -1797,7 +2050,7 @@
           }
           chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 1 });
           debugLogger.general("DEBUG", "WebSocket health check alarm created", {
-            interval: "5 minutes"
+            interval: "1 minutes"
           });
         } else {
           debugLogger.general(
@@ -1902,59 +2155,6 @@
     }
   }
 
-  // src/background/state.ts
-  var API_BASE_URL2 = "https://api.pushbullet.com/v2";
-  var PUSHES_URL2 = `${API_BASE_URL2}/pushes`;
-  var DEVICES_URL2 = `${API_BASE_URL2}/devices`;
-  var USER_INFO_URL2 = `${API_BASE_URL2}/users/me`;
-  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
-  var apiKey = null;
-  var deviceIden = null;
-  var deviceNickname = "Chrome";
-  var autoOpenLinks = true;
-  var notificationTimeout = 1e4;
-  var websocketClient = null;
-  var pollingMode = false;
-  function getApiKey() {
-    return apiKey;
-  }
-  function setApiKey(key) {
-    apiKey = key;
-  }
-  function getDeviceIden() {
-    return deviceIden;
-  }
-  function setDeviceIden(iden) {
-    deviceIden = iden;
-  }
-  function getDeviceNickname() {
-    return deviceNickname;
-  }
-  function setDeviceNickname(nickname) {
-    deviceNickname = nickname;
-  }
-  function getAutoOpenLinks() {
-    return autoOpenLinks;
-  }
-  function setAutoOpenLinks(value) {
-    autoOpenLinks = value;
-  }
-  function getNotificationTimeout() {
-    return notificationTimeout;
-  }
-  function setNotificationTimeout(timeout) {
-    notificationTimeout = timeout;
-  }
-  function setWebSocketClient(client) {
-    websocketClient = client;
-  }
-  function isPollingMode() {
-    return pollingMode;
-  }
-  function setPollingMode(mode) {
-    pollingMode = mode;
-  }
-
   // src/app/reconnect/index.ts
   async function ensureConfigLoaded(stateSetters, stateGetters) {
     try {
@@ -2036,6 +2236,167 @@
         console.warn("Failed to log ensureConfigLoaded error:", error);
       }
     }
+  }
+
+  // src/lib/crypto/index.ts
+  var PushbulletCrypto = class {
+    /**
+     * Generate encryption/decryption key from password
+     * @param password - User's encryption password
+     * @param userIden - User's iden (used as salt)
+     * @returns Derived key for AES-GCM
+     */
+    static async deriveKey(password, userIden) {
+      if (!globalThis.crypto || !crypto.subtle) {
+        throw new Error("Web Crypto API unavailable - requires HTTPS or localhost");
+      }
+      const encoder = new TextEncoder();
+      const passwordBytes = encoder.encode(password);
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        passwordBytes,
+        { name: "PBKDF2" },
+        false,
+        ["deriveBits", "deriveKey"]
+      );
+      const salt = encoder.encode(userIden);
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt,
+          iterations: 3e4,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
+      return key;
+    }
+    /**
+     * Decrypt an encrypted message
+     * @param encodedMessage - Base64 encoded encrypted message
+     * @param key - Decryption key
+     * @returns Decrypted message object
+     */
+    static async decryptMessage(encodedMessage, key) {
+      try {
+        const encryptedData = this.base64ToBytes(encodedMessage);
+        const version = encryptedData[0];
+        if (version !== 49) {
+          throw new Error(`Unsupported encryption version: ${version}`);
+        }
+        const tag = encryptedData.slice(1, 17);
+        const iv = encryptedData.slice(17, 29);
+        const ciphertext = encryptedData.slice(29);
+        const combined = new Uint8Array(ciphertext.length + tag.length);
+        combined.set(ciphertext);
+        combined.set(tag, ciphertext.length);
+        const decrypted = await crypto.subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv,
+            tagLength: 128
+            // 16 bytes = 128 bits
+          },
+          key,
+          combined
+        );
+        const decoder = new TextDecoder();
+        const decryptedText = decoder.decode(decrypted);
+        return JSON.parse(decryptedText);
+      } catch {
+        console.error("Decryption error - check encryption password");
+        throw new Error("Failed to decrypt message. Check your encryption password.");
+      }
+    }
+    /**
+     * Convert base64 string to Uint8Array
+     * @param base64 - Base64 encoded string
+     * @returns Decoded bytes
+     */
+    static base64ToBytes(base64) {
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+    /**
+     * Decrypt a Pushbullet encrypted push
+     * @param encryptedPush - Push object with 'encrypted' and 'ciphertext' fields
+     * @param password - User's encryption password
+     * @param userIden - User's iden
+     * @returns Decrypted push data
+     */
+    static async decryptPush(encryptedPush, password, userIden) {
+      if (!encryptedPush.encrypted || !encryptedPush.ciphertext) {
+        throw new Error("Push is not encrypted");
+      }
+      const key = await this.deriveKey(password, userIden);
+      const decryptedData = await this.decryptMessage(encryptedPush.ciphertext, key);
+      return {
+        ...encryptedPush,
+        ...decryptedData,
+        encrypted: false
+        // Mark as decrypted
+      };
+    }
+  };
+
+  // src/background/state.ts
+  var API_BASE_URL2 = "https://api.pushbullet.com/v2";
+  var PUSHES_URL2 = `${API_BASE_URL2}/pushes`;
+  var DEVICES_URL2 = `${API_BASE_URL2}/devices`;
+  var USER_INFO_URL2 = `${API_BASE_URL2}/users/me`;
+  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
+  var apiKey = null;
+  var deviceIden = null;
+  var deviceNickname = "Chrome";
+  var autoOpenLinks = true;
+  var notificationTimeout = 1e4;
+  var websocketClient = null;
+  var pollingMode = false;
+  function getApiKey() {
+    return apiKey;
+  }
+  function setApiKey(key) {
+    apiKey = key;
+  }
+  function getDeviceIden() {
+    return deviceIden;
+  }
+  function setDeviceIden(iden) {
+    deviceIden = iden;
+  }
+  function getDeviceNickname() {
+    return deviceNickname;
+  }
+  function setDeviceNickname(nickname) {
+    deviceNickname = nickname;
+  }
+  function getAutoOpenLinks() {
+    return autoOpenLinks;
+  }
+  function setAutoOpenLinks(value) {
+    autoOpenLinks = value;
+  }
+  function getNotificationTimeout() {
+    return notificationTimeout;
+  }
+  function setNotificationTimeout(timeout) {
+    notificationTimeout = timeout;
+  }
+  function setWebSocketClient(client) {
+    websocketClient = client;
+  }
+  function isPollingMode() {
+    return pollingMode;
+  }
+  function setPollingMode(mode) {
+    pollingMode = mode;
   }
 
   // src/background/utils.ts
@@ -2498,13 +2859,9 @@
   }
   function stopPollingMode() {
     if (isPollingMode()) {
-      debugLogger.general(
-        "INFO",
-        "Stopping polling mode - WebSocket reconnected"
-      );
+      debugLogger.general("INFO", "Stopping polling mode - WebSocket reconnected");
       setPollingMode(false);
       chrome.alarms.clear("pollingFallback");
-      updateConnectionIcon("connected");
     }
   }
   async function performPollingFetch() {
@@ -2630,399 +2987,6 @@
       );
     }
   }
-
-  // src/app/ws/client.ts
-  var WebSocketClient = class _WebSocketClient {
-    constructor(websocketUrl, getApiKey2) {
-      this.websocketUrl = websocketUrl;
-      this.getApiKey = getApiKey2;
-    }
-    static NOP_TIMEOUT = 6e4;
-    // 60 seconds
-    socket = null;
-    reconnectAttempts = 0;
-    reconnectTimeout = null;
-    lastNopReceived = 0;
-    /**
-     * Get current WebSocket instance
-     */
-    getSocket() {
-      return this.socket;
-    }
-    /**
-     * Get current ready state
-     */
-    getReadyState() {
-      return this.socket?.readyState ?? WebSocket.CLOSED;
-    }
-    /**
-     * Check if WebSocket is connected
-     */
-    isConnected() {
-      return this.socket !== null && this.socket.readyState === 1 /* OPEN */;
-    }
-    /**
-     * Connect to WebSocket
-     */
-    connect() {
-      try {
-        const apiKey2 = this.getApiKey();
-        if (!apiKey2) {
-          debugLogger.websocket("WARN", "connectWebSocket called without apiKey");
-          return;
-        }
-        if (this.socket && this.socket.readyState === 1 /* OPEN */) {
-          debugLogger.websocket("DEBUG", "WebSocket already open");
-          return;
-        }
-        const url = this.websocketUrl + apiKey2;
-        debugLogger.websocket("INFO", "WebSocket URL construction debug", {
-          baseUrl: this.websocketUrl,
-          apiKeyLength: apiKey2.length,
-          apiKeyPrefix: apiKey2.substring(0, 8) + "...",
-          finalUrlLength: url.length,
-          urlPattern: this.websocketUrl + "***"
-        });
-        debugLogger.websocket("INFO", "Connecting to WebSocket", {
-          url: this.websocketUrl + "***",
-          reconnectAttempts: this.reconnectAttempts,
-          currentSocketState: this.socket ? this.socket.readyState : "no_existing_socket",
-          apiKeyPresent: !!apiKey2
-        });
-        this.reconnectAttempts = 0;
-        debugLogger.websocket("DEBUG", "About to create WebSocket object", {
-          url: this.websocketUrl + "***",
-          currentSocketExists: !!this.socket,
-          currentSocketState: this.socket ? this.socket.readyState : "null"
-        });
-        try {
-          this.socket = new WebSocket(url);
-          debugLogger.websocket(
-            "DEBUG",
-            "WebSocket object created successfully",
-            {
-              url: this.websocketUrl + "***",
-              readyState: this.socket.readyState,
-              urlLength: url.length
-            }
-          );
-        } catch (createError) {
-          debugLogger.websocket("ERROR", "Failed to create WebSocket object", {
-            url: this.websocketUrl + "***",
-            error: createError instanceof Error ? createError.message : String(createError),
-            errorType: createError?.constructor?.name,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          this.socket = null;
-          throw createError;
-        }
-        debugLogger.websocket("DEBUG", "Setting up WebSocket event handlers", {
-          url: this.websocketUrl + "***",
-          readyState: this.socket.readyState,
-          socketExists: !!this.socket
-        });
-        this.socket.onopen = () => {
-          debugLogger.websocket("INFO", "WebSocket connection established", {
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          updateConnectionIcon("connected");
-          this.lastNopReceived = Date.now();
-          performanceMonitor.recordWebSocketConnection(true);
-          wsStateMonitor.startMonitoring();
-          globalEventBus.emit("websocket:polling:stop");
-          try {
-            clearErrorBadge();
-          } catch {
-          }
-          if (this.reconnectTimeout) {
-            clearTimeout(this.reconnectTimeout);
-            this.reconnectTimeout = null;
-          }
-          globalEventBus.emit("websocket:connected");
-          globalEventBus.emit("websocket:state", "connected");
-        };
-        this.socket.onmessage = async (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            debugLogger.websocket("DEBUG", "WebSocket message received", {
-              type: data.type,
-              subtype: "subtype" in data ? data.subtype : void 0,
-              hasPush: "push" in data ? !!data.push : false
-            });
-            switch (data.type) {
-              case "tickle":
-                if (data.subtype === "push") {
-                  globalEventBus.emit("websocket:tickle:push");
-                } else if (data.subtype === "device") {
-                  globalEventBus.emit("websocket:tickle:device");
-                }
-                break;
-              case "push":
-                if ("push" in data && data.push) {
-                  globalEventBus.emit("websocket:push", data.push);
-                } else {
-                  debugLogger.websocket(
-                    "WARN",
-                    "Push message received without push payload"
-                  );
-                }
-                break;
-              case "nop":
-                this.lastNopReceived = Date.now();
-                debugLogger.websocket("DEBUG", "Server nop received", {
-                  timestamp: (/* @__PURE__ */ new Date()).toISOString()
-                });
-                break;
-              // Note: 'ping' and 'pong' are WebSocket frame types, not message types
-              // They should not appear in the message data, but we handle them defensively
-              default:
-                debugLogger.websocket(
-                  "WARN",
-                  "Unknown WebSocket message type received",
-                  {
-                    type: data.type
-                  }
-                );
-                break;
-            }
-          } catch (error) {
-            debugLogger.websocket(
-              "ERROR",
-              "Failed to process WebSocket message",
-              null,
-              error
-            );
-          }
-        };
-        this.socket.onerror = (error) => {
-          const currentSocket = this.socket;
-          const socketExists = !!currentSocket;
-          const socketState = socketExists ? currentSocket.readyState : "no_socket";
-          const isConnecting = socketExists ? currentSocket.readyState === 0 /* CONNECTING */ : false;
-          const isConnected = socketExists ? currentSocket.readyState === 1 /* OPEN */ : false;
-          const errorInfo = {
-            type: error.type || "unknown",
-            target: error.target ? "WebSocket" : "unknown",
-            readyState: socketState,
-            socketExists,
-            url: this.websocketUrl,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            reconnectAttempts: this.reconnectAttempts,
-            // Additional debugging info
-            isConnecting,
-            isConnected,
-            errorEventDetails: {
-              timeStamp: error.timeStamp,
-              bubbles: error.bubbles,
-              cancelable: error.cancelable,
-              currentTarget: error.currentTarget ? "WebSocket" : "unknown"
-            }
-          };
-          debugLogger.websocket("ERROR", "WebSocket error occurred", errorInfo);
-          const websocketError = new Error(
-            `WebSocket connection error: ${errorInfo.type} (socket: ${socketExists ? "exists" : "null"}, state: ${socketState})`
-          );
-          websocketError.name = "WebSocketError";
-          globalErrorTracker.trackError(
-            websocketError,
-            {
-              category: "WEBSOCKET",
-              message: "WebSocket error occurred",
-              data: errorInfo
-            },
-            "WEBSOCKET"
-          );
-        };
-        this.socket.onclose = (event) => {
-          const closeInfo = {
-            code: event.code,
-            reason: event.reason || "No reason provided",
-            wasClean: event.wasClean
-          };
-          debugLogger.websocket("WARN", "WebSocket connection closed", {
-            ...closeInfo,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            reconnectAttempts: this.reconnectAttempts
-          });
-          globalEventBus.emit("websocket:disconnected", {
-            code: event.code,
-            reason: event.reason,
-            wasClean: event.wasClean
-          });
-          globalEventBus.emit("websocket:state", "disconnected");
-          if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
-            debugLogger.websocket(
-              "ERROR",
-              "Permanent WebSocket error - stopping reconnection attempts",
-              closeInfo
-            );
-            try {
-              showPermanentWebSocketError(closeInfo);
-            } catch {
-            }
-            return;
-          }
-        };
-      } catch (error) {
-        debugLogger.websocket(
-          "ERROR",
-          "Failed to create WebSocket connection",
-          {
-            url: this.websocketUrl + "***",
-            hasApiKey: !!this.getApiKey()
-          },
-          error
-        );
-      }
-    }
-    /**
-     * Disconnect WebSocket
-     */
-    disconnect() {
-      if (this.socket) {
-        try {
-          debugLogger.websocket("INFO", "Disconnecting WebSocket", {
-            readyState: this.socket.readyState
-          });
-          this.socket.close();
-          this.socket = null;
-          wsStateMonitor.stopMonitoring();
-        } catch (error) {
-          debugLogger.websocket(
-            "ERROR",
-            "Error disconnecting WebSocket",
-            null,
-            error
-          );
-        }
-      }
-    }
-    /**
-     * Get reconnect attempts count
-     */
-    getReconnectAttempts() {
-      return this.reconnectAttempts;
-    }
-    /**
-     * Reset reconnect attempts
-     */
-    resetReconnectAttempts() {
-      this.reconnectAttempts = 0;
-    }
-    isConnectionHealthy() {
-      if (!this.isConnected()) return false;
-      const timeSinceLastNop = Date.now() - this.lastNopReceived;
-      return timeSinceLastNop < _WebSocketClient.NOP_TIMEOUT;
-    }
-  };
-
-  // src/lib/crypto/index.ts
-  var PushbulletCrypto = class {
-    /**
-     * Generate encryption/decryption key from password
-     * @param password - User's encryption password
-     * @param userIden - User's iden (used as salt)
-     * @returns Derived key for AES-GCM
-     */
-    static async deriveKey(password, userIden) {
-      if (!globalThis.crypto || !crypto.subtle) {
-        throw new Error("Web Crypto API unavailable - requires HTTPS or localhost");
-      }
-      const encoder = new TextEncoder();
-      const passwordBytes = encoder.encode(password);
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw",
-        passwordBytes,
-        { name: "PBKDF2" },
-        false,
-        ["deriveBits", "deriveKey"]
-      );
-      const salt = encoder.encode(userIden);
-      const key = await crypto.subtle.deriveKey(
-        {
-          name: "PBKDF2",
-          salt,
-          iterations: 3e4,
-          hash: "SHA-256"
-        },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["decrypt"]
-      );
-      return key;
-    }
-    /**
-     * Decrypt an encrypted message
-     * @param encodedMessage - Base64 encoded encrypted message
-     * @param key - Decryption key
-     * @returns Decrypted message object
-     */
-    static async decryptMessage(encodedMessage, key) {
-      try {
-        const encryptedData = this.base64ToBytes(encodedMessage);
-        const version = encryptedData[0];
-        if (version !== 49) {
-          throw new Error(`Unsupported encryption version: ${version}`);
-        }
-        const tag = encryptedData.slice(1, 17);
-        const iv = encryptedData.slice(17, 29);
-        const ciphertext = encryptedData.slice(29);
-        const combined = new Uint8Array(ciphertext.length + tag.length);
-        combined.set(ciphertext);
-        combined.set(tag, ciphertext.length);
-        const decrypted = await crypto.subtle.decrypt(
-          {
-            name: "AES-GCM",
-            iv,
-            tagLength: 128
-            // 16 bytes = 128 bits
-          },
-          key,
-          combined
-        );
-        const decoder = new TextDecoder();
-        const decryptedText = decoder.decode(decrypted);
-        return JSON.parse(decryptedText);
-      } catch {
-        console.error("Decryption error - check encryption password");
-        throw new Error("Failed to decrypt message. Check your encryption password.");
-      }
-    }
-    /**
-     * Convert base64 string to Uint8Array
-     * @param base64 - Base64 encoded string
-     * @returns Decoded bytes
-     */
-    static base64ToBytes(base64) {
-      const binaryString = atob(base64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
-    }
-    /**
-     * Decrypt a Pushbullet encrypted push
-     * @param encryptedPush - Push object with 'encrypted' and 'ciphertext' fields
-     * @param password - User's encryption password
-     * @param userIden - User's iden
-     * @returns Decrypted push data
-     */
-    static async decryptPush(encryptedPush, password, userIden) {
-      if (!encryptedPush.encrypted || !encryptedPush.ciphertext) {
-        throw new Error("Push is not encrypted");
-      }
-      const key = await this.deriveKey(password, userIden);
-      const decryptedData = await this.decryptMessage(encryptedPush.ciphertext, key);
-      return {
-        ...encryptedPush,
-        ...decryptedData,
-        encrypted: false
-        // Mark as decrypted
-      };
-    }
-  };
 
   // src/background/state-machine.ts
   var ServiceWorkerState = /* @__PURE__ */ ((ServiceWorkerState2) => {
@@ -3539,7 +3503,7 @@
   var websocketClient2 = null;
   var ranReconnectAutoOpen = false;
   async function promoteToReadyIfConnected() {
-    if (!websocketClient2?.isConnected?.()) return;
+    if (!websocketClient2?.isConnectionHealthy?.()) return;
     await stateMachineReady;
     const inRecovery = stateMachine.isInState("reconnecting" /* RECONNECTING */) || stateMachine.isInState("degraded" /* DEGRADED */);
     if (inRecovery) {
@@ -3716,6 +3680,7 @@
     await stateMachineReady;
     stateMachine.transition("WS_CONNECTED");
     void runPostConnect();
+    void maybeRunReconnectAutoOpen();
   });
   globalEventBus.on("websocket:disconnected", async () => {
     await stateMachineReady;
@@ -3733,7 +3698,6 @@
   globalEventBus.on("state:enter:reconnecting", () => {
     ranReconnectAutoOpen = false;
   });
-  var recoveryTimerStart = 0;
   var stateMachine;
   var stateMachineCallbacks = {
     onInitialize: async (data) => {
@@ -3756,7 +3720,6 @@
     },
     onShowError: (error) => {
       debugLogger.general("ERROR", "[StateMachine] Error state", { error });
-      updateConnectionIcon("disconnected");
     },
     onClearData: async () => {
       resetSessionCache();
@@ -3794,7 +3757,6 @@
         return;
       }
     }
-    recoveryTimerStart = Date.now();
     if (websocketClient2) {
       debugLogger.websocket(
         "INFO",
@@ -3818,7 +3780,7 @@
     }
     if (alarm.name === "keepalive") {
       debugLogger.general("DEBUG", "Keepalive heartbeat");
-      if (websocketClient2?.isConnected?.()) {
+      if (websocketClient2?.isConnectionHealthy?.()) {
         await stateMachineReady;
         const notReady = !stateMachine.isInState("ready" /* READY */);
         if (notReady) {

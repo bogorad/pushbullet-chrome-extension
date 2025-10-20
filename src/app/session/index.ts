@@ -322,7 +322,7 @@ export async function initializeSessionCache(
         // Start periodic health check
         chrome.alarms.create("websocketHealthCheck", { periodInMinutes: 1 });
         debugLogger.general("DEBUG", "WebSocket health check alarm created", {
-          interval: "5 minutes",
+          interval: "1 minutes",
         });
       } else {
         debugLogger.general(

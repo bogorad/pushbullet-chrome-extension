@@ -5,7 +5,6 @@ import type { WebSocketMessage } from "../../types/domain";
 import { WS_READY_STATE } from "../../types/domain";
 import { clearErrorBadge, showPermanentWebSocketError } from "../notifications";
 import { globalEventBus } from "../../lib/events/event-bus";
-import { updateConnectionIcon } from "../../background/utils";
 
 export interface CloseInfo {
   code: number;
@@ -38,7 +37,7 @@ export class WebSocketClient {
   private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  private lastNopReceived: number = 0;
+  private lastNopAt: number = 0;
 
   constructor(
     private websocketUrl: string,
@@ -150,10 +149,7 @@ export class WebSocketClient {
            timestamp: new Date().toISOString(),
          });
 
-         // Set badge to green immediately when WebSocket connects
-         updateConnectionIcon("connected");
-
-         this.lastNopReceived = Date.now();
+         this.lastNopAt = Date.now();
          performanceMonitor.recordWebSocketConnection(true);
          wsStateMonitor.startMonitoring();
 
@@ -166,79 +162,38 @@ export class WebSocketClient {
           // noop
         }
 
-        if (this.reconnectTimeout) {
-          clearTimeout(this.reconnectTimeout);
-          this.reconnectTimeout = null;
-        }
-
         // Emit connected event
         globalEventBus.emit("websocket:connected");
 
         // Emit state change for popup
         globalEventBus.emit("websocket:state", "connected");
-      };
+       };
 
-      this.socket.onmessage = async (event) => {
-        try {
-          const data: WebSocketMessage = JSON.parse(event.data);
-          debugLogger.websocket("DEBUG", "WebSocket message received", {
-            type: data.type,
-            subtype: "subtype" in data ? data.subtype : undefined,
-            hasPush: "push" in data ? !!data.push : false,
-          });
-
-          switch (data.type) {
-          case "tickle":
-            if (data.subtype === "push") {
-              // Emit tickle:push event
-              globalEventBus.emit("websocket:tickle:push");
-            } else if (data.subtype === "device") {
-              // Emit tickle:device event
-              globalEventBus.emit("websocket:tickle:device");
-            }
-            break;
-
-          case "push":
-            if ("push" in data && data.push) {
-              // Emit push event with push data
-              globalEventBus.emit("websocket:push", data.push);
-            } else {
-              debugLogger.websocket(
-                "WARN",
-                "Push message received without push payload",
-              );
-            }
-            break;
-
-          case "nop":
-            this.lastNopReceived = Date.now();
-            debugLogger.websocket("DEBUG", "Server nop received", {
-              timestamp: new Date().toISOString(),
-            });
-            break;
-
-            // Note: 'ping' and 'pong' are WebSocket frame types, not message types
-            // They should not appear in the message data, but we handle them defensively
-
-          default:
-            debugLogger.websocket(
-              "WARN",
-              "Unknown WebSocket message type received",
-              {
-                type: (data as any).type,
-              },
-            );
-            break;
-          }
-        } catch (error) {
-          debugLogger.websocket(
-            "ERROR",
-            "Failed to process WebSocket message",
-            null,
-            error as Error,
-          );
-        }
-      };
+       this.socket.onmessage = (ev) => {
+         const msg = JSON.parse(ev.data);
+         globalEventBus.emit("websocket:message", msg);
+         if (msg.type === "nop") {
+           this.lastNopAt = Date.now();
+           debugLogger.websocket("DEBUG", "Server nop received", { timestamp: new Date(this.lastNopAt).toISOString() });
+         }
+         if (msg.type === "tickle") {
+           if (msg.subtype === "push") {
+             globalEventBus.emit("websocket:tickle:push");
+           } else if (msg.subtype === "device") {
+             globalEventBus.emit("websocket:tickle:device");
+           }
+         }
+         if (msg.type === "push") {
+           if ("push" in msg && msg.push) {
+             globalEventBus.emit("websocket:push", msg.push);
+           } else {
+             debugLogger.websocket(
+               "WARN",
+               "Push message received without push payload",
+             );
+           }
+         }
+       };
 
       this.socket.onerror = (error) => {
         // WebSocket error events are generic Event objects, not Error instances
@@ -391,9 +346,9 @@ export class WebSocketClient {
   }
 
   public isConnectionHealthy(): boolean {
-    if (!this.isConnected()) return false;
-    
-    const timeSinceLastNop = Date.now() - this.lastNopReceived;
-    return timeSinceLastNop < WebSocketClient.NOP_TIMEOUT; // 60 seconds
+    const NOP_TIMEOUT_MS = 60000; // 60s window
+    if (this.socket?.readyState !== WS_READY_STATE.OPEN) return false; // must be OPEN
+    const age = Date.now() - this.lastNopAt;
+    return age >= 0 && age <= NOP_TIMEOUT_MS; // recent nop seen
   }
 }
