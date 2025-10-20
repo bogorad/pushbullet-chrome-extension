@@ -4,6 +4,7 @@ import { sessionCache } from '../app/session';
 import { debugLogger } from '../lib/logging';
 import { enqueuePostConnect } from '../realtime/postConnectQueue';
 import { startCriticalKeepalive, stopCriticalKeepalive } from './keepalive';
+import { setApiKey } from './state';
 import type { User } from '../types/domain';
 
 
@@ -24,6 +25,9 @@ export async function orchestrateInitialization({
       debugLogger.general('WARN', 'No API key available, skipping initialization');
       return;
     }
+
+    // CRITICAL: hydrate in-memory state before anything uses getApiKey()
+    setApiKey(apiKey);
 
     debugLogger.general('INFO', 'Starting orchestrated initialization', { trigger });
 

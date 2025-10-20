@@ -129,12 +129,23 @@ export async function initializeSessionCache(
   // If the session is already authenticated (e.g., loaded from IndexedDB),
   // then there is no work to do here.
   if (sessionCache.isAuthenticated) {
-    debugLogger.general("INFO", "Session already loaded, skipping network initialization.");
-    // We must still connect the WebSocket.
-    if (connectWebSocketFn) {
-      connectWebSocketFn();
+    const hasData =
+      sessionCache.userInfo !== null && (sessionCache.devices?.length ?? 0) > 0;
+
+    if (!hasData) {
+      debugLogger.general(
+        "WARN",
+        "Authenticated flag set but session data missing — forcing re-initialization",
+      );
+      sessionCache.isAuthenticated = false;
+    } else {
+      debugLogger.general(
+        "INFO",
+        "Session already loaded with data, skipping network initialization.",
+      );
+      if (connectWebSocketFn) connectWebSocketFn();
+      return null;
     }
-    return null;
   }
 
   // Create and store the initialization promise

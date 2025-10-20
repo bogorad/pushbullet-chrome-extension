@@ -35,6 +35,7 @@ import {
   setDeviceNickname,
   getAutoOpenLinks,
   setAutoOpenLinks,
+  getNotificationTimeout,
   setNotificationTimeout,
   setWebSocketClient,
   WEBSOCKET_URL,
@@ -108,31 +109,45 @@ export function getNotificationStore(): Map<string, Push> {
 // Initialize WebSocket client
 let websocketClient: WebSocketClient | null = null;
 
+// READY promotion safety-net guard
+let ranReconnectAutoOpen = false; // guard per reconnect [file:9]
+
+async function promoteToReadyIfConnected() {
+  if (!websocketClient?.isConnected?.()) return; // only when socket is truly open [file:9]
+  await stateMachineReady; // ensure machine is ready [file:9]
+  const inRecovery =
+    stateMachine.isInState(ServiceWorkerState.RECONNECTING) ||
+    stateMachine.isInState(ServiceWorkerState.DEGRADED); // check current state [file:9]
+  if (inRecovery) {
+    stateMachine.transition("WS_CONNECTED"); // lift UI out of yellow [file:9]
+    void runPostConnect(); // run post-connect tasks [file:9]
+    void maybeRunReconnectAutoOpen(); // trigger offline link auto-open once [file:9]
+  }
+}
+
+async function maybeRunReconnectAutoOpen() {
+  if (ranReconnectAutoOpen) return; // idempotent per reconnect [file:9]
+  ranReconnectAutoOpen = true; // set guard [file:9]
+  const apiKey = getApiKey(); // must exist now [file:9]
+  if (!apiKey) return; // safety [file:9]
+  const storedCutoff = (await storageRepository.getLastModifiedCutoff()) ?? 0; // fetch persisted cutoff [file:9]
+  const sessionCutoff = sessionCache.lastModifiedCutoff ?? storedCutoff; // choose best cutoff [file:9]
+  try {
+    await autoOpenOfflineLinks(apiKey, sessionCutoff); // open missed link pushes up to cap [file:9]
+  } catch (e) {
+    debugLogger.general("ERROR", "Auto-open on reconnect failed", {
+      error: String(e),
+    }); // log errors [file:9]
+  }
+}
+
 // Register WebSocket event listeners ONCE at module load
 // These should NOT be removed/re-registered on each connect
 globalEventBus.on("websocket:tickle:push", async () => {
   try {
     await refreshPushes(notificationDataStore);
-  } catch (error) {
-    // NEW: Check if it's an invalid cursor error
-    if ((error as Error).name === "InvalidCursorError") {
-      debugLogger.general(
-        "WARN",
-        "Caught invalid cursor error - triggering recovery",
-      );
-      const apiKey = getApiKey();
-      if (apiKey) {
-        await handleInvalidCursorRecovery(apiKey, connectWebSocket);
-      }
-    } else {
-      // Re-throw other errors
-      debugLogger.general(
-        "ERROR",
-        "Error refreshing pushes",
-        null,
-        error as Error,
-      );
-    }
+  } finally {
+    await promoteToReadyIfConnected();
   }
 });
 
@@ -316,59 +331,25 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
         );
       });
   }
+
+  await promoteToReadyIfConnected();
+});
+
+// If you already emit a generic event for all WS messages, use it:
+globalEventBus.on("websocket:message", async () => {
+  await promoteToReadyIfConnected(); // READY promotion safety-net [file:9]
 });
 
 globalEventBus.on("websocket:connected", async () => {
-  debugLogger.websocket(
-    "INFO",
-    "WebSocket connected - checking for offline links to open",
-  );
-
-  // MV3 LIFECYCLE TRACKING: Calculate and store recovery time
-  const recoveryTime = Date.now() - recoveryTimerStart;
-  debugLogger.performance("INFO", "WebSocket recovery time", {
-    duration: recoveryTime,
-  });
-  const { recoveryTimings = [] } =
-    await chrome.storage.local.get("recoveryTimings");
-  recoveryTimings.push(recoveryTime);
-  // Keep only the last 20 timings for averaging
-  await chrome.storage.local.set({
-    recoveryTimings: recoveryTimings.slice(-20),
-  });
-
-  // WAIT for state machine to be ready
+  debugLogger.websocket("INFO", "WebSocket connected - post-connect tasks starting");
   await stateMachineReady;
-
-  // Trigger state machine transition
   stateMachine.transition("WS_CONNECTED");
-
-  // Run post-connect tasks
   void runPostConnect();
-
-  // Auto-open offline links if enabled
-  try {
-    const apiKey = getApiKey();
-    if (!apiKey) {
-      debugLogger.general("WARN", "No API key for auto-open links");
-      return;
-    }
-
-    const sessionCutoff =
-      sessionCache.lastModifiedCutoff ||
-      (await storageRepository.getLastModifiedCutoff()) ||
-      0;
-    await autoOpenOfflineLinks(apiKey, sessionCutoff);
-  } catch (e) {
-    debugLogger.general("ERROR", "Auto-open on reconnect failed", {
-      error: (e as Error).message,
-    });
-  }
 });
 
-globalEventBus.on("websocket:disconnected", () => {
-  // Trigger state machine transition
-  stateMachine.transition("WS_DISCONNECTED");
+globalEventBus.on("websocket:disconnected", async () => {
+  await stateMachineReady; // REQUIRED [file:9]
+  stateMachine.transition("WS_DISCONNECTED"); // REQUIRED [file:9]
 });
 
 globalEventBus.on("websocket:polling:check", () => {
@@ -381,6 +362,10 @@ globalEventBus.on("websocket:polling:stop", () => {
 
 globalEventBus.on("websocket:state", (state: string) => {
   updatePopupConnectionState(state);
+});
+
+globalEventBus.on("state:enter:reconnecting", () => {
+  ranReconnectAutoOpen = false;
 });
 
 // MV3 LIFECYCLE TRACKING: Recovery timer for measuring WebSocket reconnection time
@@ -511,13 +496,37 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   if (alarm.name === "keepalive") {
     // Minimal work to prevent termination
-    debugLogger.general("DEBUG", "Keepalive heartbeat");
+    debugLogger.general("DEBUG", "Keepalive heartbeat"); // existing [file:9]
+    if (websocketClient?.isConnected?.()) {
+      await stateMachineReady; // ensure machine [file:9]
+      const notReady = !stateMachine.isInState(ServiceWorkerState.READY);
+      if (notReady) {
+        stateMachine.transition("WS_CONNECTED"); // promote to READY [file:9]
+        void runPostConnect(); // run tasks [file:9]
+        void maybeRunReconnectAutoOpen(); // run auto-open once [file:9]
+      }
+    }
 
     // Verify critical state integrity
     const apiKey = getApiKey();
     if (!apiKey) {
       debugLogger.general("WARN", "Keepalive: API key missing, reloading");
-      await ensureConfigLoaded();
+      await ensureConfigLoaded(
+        {
+          setApiKey,
+          setDeviceIden,
+          setAutoOpenLinks,
+          setDeviceNickname,
+          setNotificationTimeout,
+        },
+        {
+          getApiKey,
+          getDeviceIden,
+          getAutoOpenLinks,
+          getDeviceNickname,
+          getNotificationTimeout,
+        },
+      );
     }
     return;
   }
@@ -564,6 +573,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         );
         // Tell the state machine to start the reconnect process.
         await stateMachine.transition("ATTEMPT_RECONNECT");
+        ranReconnectAutoOpen = false; // reset guard here [file:9]
       }
     } else {
       // If we are not in DEGRADED, do the normal health check.
@@ -690,79 +700,113 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === MessageAction.GET_SESSION_DATA) {
-    // Lazy-load recent pushes if not already loaded
-    const apiKey = getApiKey();
-    const shouldFetchPushes =
-      apiKey &&
-      (!sessionCache.recentPushes || sessionCache.recentPushes.length === 0);
+    (async () => {
+      try {
+        // STEP 1: Load config from storage (handles service worker restarts)
+        await ensureConfigLoaded(
+          {
+            setApiKey,
+            setDeviceIden,
+            setAutoOpenLinks,
+            setDeviceNickname,
+            setNotificationTimeout,
+          },
+          {
+            getApiKey,
+            getDeviceIden,
+            getAutoOpenLinks,
+            getDeviceNickname,
+            getNotificationTimeout,
+          },
+        );
 
-    if (shouldFetchPushes) {
-      debugLogger.general("INFO", "Popup opened - fetching recent pushes on-demand");
+        // STEP 2: Get API key after config is loaded
+        const apiKey = getApiKey();
 
-      // Fetch recent pushes before responding
-      fetchRecentPushes(apiKey)
-        .then((pushes) => {
+        // STEP 3: CRITICAL - Detect service worker wake-up
+        // If we have an API key in storage but session cache is empty, we need to re-initialize
+        const isWakeUp = apiKey && !sessionCache.isAuthenticated;
+
+        if (isWakeUp) {
+          debugLogger.general(
+            "WARN",
+            "Service worker wake-up detected - reinitializing session cache",
+          );
+
+          // Re-initialize the entire session (will populate userInfo, devices, etc.)
+          await initializeSessionCache("onMessageWakeup", connectWebSocket, {
+            setApiKey,
+            setDeviceIden,
+            setAutoOpenLinks,
+            setNotificationTimeout,
+            setDeviceNickname,
+          });
+
+          debugLogger.general("INFO", "Session re-initialized after wake-up", {
+            hasUserInfo: !!sessionCache.userInfo,
+            deviceCount: sessionCache.devices.length,
+            pushCount: sessionCache.recentPushes?.length ?? 0,
+          });
+        }
+
+        // STEP 4: Now check if we need to lazy-load recent pushes
+        // (This only applies if we didn't just do a full re-initialization)
+        const shouldFetchPushes =
+          !isWakeUp &&
+          apiKey &&
+          (!sessionCache.recentPushes || sessionCache.recentPushes.length === 0);
+
+        if (shouldFetchPushes) {
+          debugLogger.general(
+            "INFO",
+            "Popup opened - fetching recent pushes on-demand",
+          );
+
+          const pushes = await fetchRecentPushes(apiKey);
           sessionCache.recentPushes = pushes;
           sessionCache.lastUpdated = Date.now();
+
           debugLogger.general("INFO", "Recent pushes fetched on-demand", {
-            count: pushes.length
+            count: pushes.length,
           });
+        } else if (!isWakeUp) {
+          debugLogger.general("DEBUG", "Popup opened - using cached pushes", {
+            count: sessionCache.recentPushes?.length ?? 0,
+          });
+        }
 
-          // Send response with freshly fetched pushes
-          sendResponse({
-            isAuthenticated: !!apiKey,
-            userInfo: sessionCache.userInfo,
-            devices: sessionCache.devices,
-            recentPushes: sessionCache.recentPushes,
-            chats: sessionCache.chats || [],
-            autoOpenLinks: getAutoOpenLinks(),
-            deviceNickname: getDeviceNickname(),
-            websocketConnected: websocketClient
-              ? websocketClient.isConnected()
-              : false,
-          });
-        })
-        .catch((error) => {
-          debugLogger.general("ERROR", "Failed to fetch recent pushes on-demand", {
-            error: (error as Error).message,
-          });
-
-          // Send response with empty pushes array on error
-          sendResponse({
-            isAuthenticated: !!apiKey,
-            userInfo: sessionCache.userInfo,
-            devices: sessionCache.devices,
-            recentPushes: [],
-            chats: sessionCache.chats || [],
-            autoOpenLinks: getAutoOpenLinks(),
-            deviceNickname: getDeviceNickname(),
-            websocketConnected: websocketClient
-              ? websocketClient.isConnected()
-              : false,
-          });
+        // STEP 5: Send response with session data
+        sendResponse({
+          isAuthenticated: !!apiKey,
+          userInfo: sessionCache.userInfo,
+          devices: sessionCache.devices,
+          recentPushes: sessionCache.recentPushes,
+          chats: sessionCache.chats,
+          autoOpenLinks: getAutoOpenLinks(),
+          deviceNickname: getDeviceNickname(),
+          websocketConnected: websocketClient
+            ? websocketClient.isConnected()
+            : false,
+        });
+      } catch (error) {
+        debugLogger.general("ERROR", "Failed to handle GETSESSIONDATA", {
+          error: (error as Error).message,
         });
 
-      // Return true to indicate async response
-      return true;
-    } else {
-      // Pushes already loaded - respond immediately with cached data
-      debugLogger.general("DEBUG", "Popup opened - using cached pushes", {
-        count: sessionCache.recentPushes?.length ?? 0,
-      });
+        sendResponse({
+          isAuthenticated: false,
+          userInfo: null,
+          devices: [],
+          recentPushes: [],
+          chats: [],
+          autoOpenLinks: false,
+          deviceNickname: "",
+          websocketConnected: false,
+        });
+      }
+    })();
 
-      sendResponse({
-        isAuthenticated: !!apiKey,
-        userInfo: sessionCache.userInfo,
-        devices: sessionCache.devices,
-        recentPushes: sessionCache.recentPushes,
-        chats: sessionCache.chats || [],
-        autoOpenLinks: getAutoOpenLinks(),
-        deviceNickname: getDeviceNickname(),
-        websocketConnected: websocketClient
-          ? websocketClient.isConnected()
-          : false,
-      });
-    }
+    return true; // Keep channel open for async response
   } else if (message.action === MessageAction.API_KEY_CHANGED) {
     // Update API key
     setApiKey(message.apiKey);

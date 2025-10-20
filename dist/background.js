@@ -1672,11 +1672,21 @@
       return initPromise;
     }
     if (sessionCache.isAuthenticated) {
-      debugLogger.general("INFO", "Session already loaded, skipping network initialization.");
-      if (connectWebSocketFn) {
-        connectWebSocketFn();
+      const hasData = sessionCache.userInfo !== null && (sessionCache.devices?.length ?? 0) > 0;
+      if (!hasData) {
+        debugLogger.general(
+          "WARN",
+          "Authenticated flag set but session data missing \u2014 forcing re-initialization"
+        );
+        sessionCache.isAuthenticated = false;
+      } else {
+        debugLogger.general(
+          "INFO",
+          "Session already loaded with data, skipping network initialization."
+        );
+        if (connectWebSocketFn) connectWebSocketFn();
+        return null;
       }
-      return null;
     }
     initPromise = (async () => {
       startCriticalKeepalive();
@@ -1928,6 +1938,9 @@
   }
   function setAutoOpenLinks(value) {
     autoOpenLinks = value;
+  }
+  function getNotificationTimeout() {
+    return notificationTimeout;
   }
   function setNotificationTimeout(timeout) {
     notificationTimeout = timeout;
@@ -3411,6 +3424,7 @@
         debugLogger.general("WARN", "No API key available, skipping initialization");
         return;
       }
+      setApiKey(apiKey2);
       debugLogger.general("INFO", "Starting orchestrated initialization", { trigger });
       const cachedUser = await storageRepository.getUserInfoCache();
       if (cachedUser) {
@@ -3428,13 +3442,9 @@
         sessionCache.devices = d;
         debugLogger.general("INFO", "Devices fetched", { count: d.length });
       });
-      const pushesP = fetchRecentPushes(apiKey2).then((p) => {
-        sessionCache.recentPushes = p;
-        debugLogger.general("INFO", "Recent pushes fetched", { count: p.length });
-      });
       const wsP = Promise.resolve().then(() => connectWs());
-      const results = await Promise.allSettled([devicesP, pushesP, wsP]);
-      debugLogger.general("INFO", "Functional ready: devices, pushes, ws initialized", {
+      const results = await Promise.allSettled([devicesP, wsP]);
+      debugLogger.general("INFO", "Functional ready: devices, ws initialized", {
         trigger,
         results: results.map((r, i) => ({ index: i, status: r.status }))
       });
@@ -3527,27 +3537,37 @@
     return notificationDataStore;
   }
   var websocketClient2 = null;
+  var ranReconnectAutoOpen = false;
+  async function promoteToReadyIfConnected() {
+    if (!websocketClient2?.isConnected?.()) return;
+    await stateMachineReady;
+    const inRecovery = stateMachine.isInState("reconnecting" /* RECONNECTING */) || stateMachine.isInState("degraded" /* DEGRADED */);
+    if (inRecovery) {
+      stateMachine.transition("WS_CONNECTED");
+      void runPostConnect();
+      void maybeRunReconnectAutoOpen();
+    }
+  }
+  async function maybeRunReconnectAutoOpen() {
+    if (ranReconnectAutoOpen) return;
+    ranReconnectAutoOpen = true;
+    const apiKey2 = getApiKey();
+    if (!apiKey2) return;
+    const storedCutoff = await storageRepository.getLastModifiedCutoff() ?? 0;
+    const sessionCutoff = sessionCache.lastModifiedCutoff ?? storedCutoff;
+    try {
+      await autoOpenOfflineLinks(apiKey2, sessionCutoff);
+    } catch (e) {
+      debugLogger.general("ERROR", "Auto-open on reconnect failed", {
+        error: String(e)
+      });
+    }
+  }
   globalEventBus.on("websocket:tickle:push", async () => {
     try {
       await refreshPushes(notificationDataStore);
-    } catch (error) {
-      if (error.name === "InvalidCursorError") {
-        debugLogger.general(
-          "WARN",
-          "Caught invalid cursor error - triggering recovery"
-        );
-        const apiKey2 = getApiKey();
-        if (apiKey2) {
-          await handleInvalidCursorRecovery(apiKey2, connectWebSocket);
-        }
-      } else {
-        debugLogger.general(
-          "ERROR",
-          "Error refreshing pushes",
-          null,
-          error
-        );
-      }
+    } finally {
+      await promoteToReadyIfConnected();
     }
   });
   globalEventBus.on("websocket:tickle:device", async () => {
@@ -3686,38 +3706,19 @@
         );
       });
     }
+    await promoteToReadyIfConnected();
+  });
+  globalEventBus.on("websocket:message", async () => {
+    await promoteToReadyIfConnected();
   });
   globalEventBus.on("websocket:connected", async () => {
-    debugLogger.websocket(
-      "INFO",
-      "WebSocket connected - checking for offline links to open"
-    );
-    const recoveryTime = Date.now() - recoveryTimerStart;
-    debugLogger.performance("INFO", "WebSocket recovery time", {
-      duration: recoveryTime
-    });
-    const { recoveryTimings = [] } = await chrome.storage.local.get("recoveryTimings");
-    recoveryTimings.push(recoveryTime);
-    await chrome.storage.local.set({
-      recoveryTimings: recoveryTimings.slice(-20)
-    });
+    debugLogger.websocket("INFO", "WebSocket connected - post-connect tasks starting");
+    await stateMachineReady;
     stateMachine.transition("WS_CONNECTED");
     void runPostConnect();
-    try {
-      const apiKey2 = getApiKey();
-      if (!apiKey2) {
-        debugLogger.general("WARN", "No API key for auto-open links");
-        return;
-      }
-      const sessionCutoff = sessionCache.lastModifiedCutoff || await storageRepository.getLastModifiedCutoff() || 0;
-      await autoOpenOfflineLinks(apiKey2, sessionCutoff);
-    } catch (e) {
-      debugLogger.general("ERROR", "Auto-open on reconnect failed", {
-        error: e.message
-      });
-    }
   });
-  globalEventBus.on("websocket:disconnected", () => {
+  globalEventBus.on("websocket:disconnected", async () => {
+    await stateMachineReady;
     stateMachine.transition("WS_DISCONNECTED");
   });
   globalEventBus.on("websocket:polling:check", () => {
@@ -3728,6 +3729,9 @@
   });
   globalEventBus.on("websocket:state", (state) => {
     updatePopupConnectionState(state);
+  });
+  globalEventBus.on("state:enter:reconnecting", () => {
+    ranReconnectAutoOpen = false;
   });
   var recoveryTimerStart = 0;
   var stateMachine;
@@ -3814,10 +3818,34 @@
     }
     if (alarm.name === "keepalive") {
       debugLogger.general("DEBUG", "Keepalive heartbeat");
+      if (websocketClient2?.isConnected?.()) {
+        await stateMachineReady;
+        const notReady = !stateMachine.isInState("ready" /* READY */);
+        if (notReady) {
+          stateMachine.transition("WS_CONNECTED");
+          void runPostConnect();
+          void maybeRunReconnectAutoOpen();
+        }
+      }
       const apiKey2 = getApiKey();
       if (!apiKey2) {
         debugLogger.general("WARN", "Keepalive: API key missing, reloading");
-        await ensureConfigLoaded();
+        await ensureConfigLoaded(
+          {
+            setApiKey,
+            setDeviceIden,
+            setAutoOpenLinks,
+            setDeviceNickname,
+            setNotificationTimeout
+          },
+          {
+            getApiKey,
+            getDeviceIden,
+            getAutoOpenLinks,
+            getDeviceNickname,
+            getNotificationTimeout
+          }
+        );
       }
       return;
     }
@@ -3848,6 +3876,7 @@
             "Health check found us in DEGRADED state. Attempting to reconnect."
           );
           await stateMachine.transition("ATTEMPT_RECONNECT");
+          ranReconnectAutoOpen = false;
         }
       } else {
         performWebSocketHealthCheck(websocketClient2, connectWebSocket);
@@ -3950,12 +3979,28 @@
     if (message.action === "getSessionData" /* GET_SESSION_DATA */) {
       (async () => {
         try {
-          await ensureConfigLoaded();
-          const storedApiKey = await storageRepository.getApiKey();
-          if (storedApiKey && !sessionCache.isAuthenticated) {
+          await ensureConfigLoaded(
+            {
+              setApiKey,
+              setDeviceIden,
+              setAutoOpenLinks,
+              setDeviceNickname,
+              setNotificationTimeout
+            },
+            {
+              getApiKey,
+              getDeviceIden,
+              getAutoOpenLinks,
+              getDeviceNickname,
+              getNotificationTimeout
+            }
+          );
+          const apiKey2 = getApiKey();
+          const isWakeUp = apiKey2 && !sessionCache.isAuthenticated;
+          if (isWakeUp) {
             debugLogger.general(
               "WARN",
-              "Service worker wake-up detected - reloading session from storage."
+              "Service worker wake-up detected - reinitializing session cache"
             );
             await initializeSessionCache("onMessageWakeup", connectWebSocket, {
               setApiKey,
@@ -3964,28 +4009,52 @@
               setNotificationTimeout,
               setDeviceNickname
             });
+            debugLogger.general("INFO", "Session re-initialized after wake-up", {
+              hasUserInfo: !!sessionCache.userInfo,
+              deviceCount: sessionCache.devices.length,
+              pushCount: sessionCache.recentPushes?.length ?? 0
+            });
+          }
+          const shouldFetchPushes = !isWakeUp && apiKey2 && (!sessionCache.recentPushes || sessionCache.recentPushes.length === 0);
+          if (shouldFetchPushes) {
+            debugLogger.general(
+              "INFO",
+              "Popup opened - fetching recent pushes on-demand"
+            );
+            const pushes = await fetchRecentPushes(apiKey2);
+            sessionCache.recentPushes = pushes;
+            sessionCache.lastUpdated = Date.now();
+            debugLogger.general("INFO", "Recent pushes fetched on-demand", {
+              count: pushes.length
+            });
+          } else if (!isWakeUp) {
+            debugLogger.general("DEBUG", "Popup opened - using cached pushes", {
+              count: sessionCache.recentPushes?.length ?? 0
+            });
           }
           sendResponse({
-            isAuthenticated: sessionCache.isAuthenticated,
+            isAuthenticated: !!apiKey2,
             userInfo: sessionCache.userInfo,
             devices: sessionCache.devices,
             recentPushes: sessionCache.recentPushes,
-            chats: sessionCache.chats || [],
-            // ← ADD THIS
+            chats: sessionCache.chats,
             autoOpenLinks: getAutoOpenLinks(),
             deviceNickname: getDeviceNickname(),
             websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
           });
         } catch (error) {
-          debugLogger.general(
-            "ERROR",
-            "Error handling getSessionData after wake-up",
-            null,
-            error
-          );
+          debugLogger.general("ERROR", "Failed to handle GETSESSIONDATA", {
+            error: error.message
+          });
           sendResponse({
             isAuthenticated: false,
-            error: error.message
+            userInfo: null,
+            devices: [],
+            recentPushes: [],
+            chats: [],
+            autoOpenLinks: false,
+            deviceNickname: "",
+            websocketConnected: false
           });
         }
       })();
