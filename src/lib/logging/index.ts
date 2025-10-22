@@ -409,7 +409,6 @@ export class DebugConfigManager {
 }
 
 export const debugConfigManager = new DebugConfigManager();
-void debugConfigManager.loadConfig();
 
 export class GlobalErrorTracker {
   private errors: Array<{

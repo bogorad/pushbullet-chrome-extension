@@ -229,7 +229,7 @@ export async function refreshPushes(
       sessionCache.lastModifiedCutoff = maxModified;
       await setLastModifiedCutoffSafe(maxModified);
 
-      debugLogger.general('INFO', 'Updated cutoff via safe setter', {
+      debugLogger.general('INFO', 'Pipeline 1 Updated cutoff via safe setter', {
         old: cutoff,
         new: maxModified,
       });
@@ -276,18 +276,29 @@ export async function refreshPushes(
         }, error);
       });
 
-      // Auto-open links if enabled and under cap
-      if (openedThisRun < cap) {
-        const opened = await maybeAutoOpenLinkWithDismiss(push);
-        if (opened) {
-          openedThisRun += 1;
-          if (openedThisRun === cap) {
-            debugLogger.general('WARN', 'Auto-open links capped', {
-              opened: openedThisRun,
-              total: newPushes.length,
-              cap,
-            });
-          }
+      // Auto-open links if enabled
+      // Pre-check: if threshold already reached, log once and skip further opens
+      if (openedThisRun >= cap) {
+        debugLogger.general('WARN', 'Auto-open links capped', {
+          opened: openedThisRun,
+          total: newPushes.length,
+          cap,
+        });
+        continue; // No more auto-open attempts this run
+      }
+
+      const opened = await maybeAutoOpenLinkWithDismiss(push);
+      if (opened) {
+        openedThisRun += 1;
+
+        // Post-check: if we just hit threshold, log now
+        if (openedThisRun >= cap) {
+          debugLogger.general('WARN', 'Auto-open links capped', {
+            opened: openedThisRun,
+            total: newPushes.length,
+            cap,
+          });
+          // Do not attempt further opens in this run; loop continues but pre-check will skip them
         }
       }
     }

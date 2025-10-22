@@ -82,8 +82,7 @@ export function ensureDebugConfigLoadedOnce(): Promise<void> {
   return loadDebugConfigOnce;
 }
 
-// Load debug configuration
-ensureDebugConfigLoadedOnce();
+
 
 // Store notification data for detail view
 // SECURITY FIX (M-06): Limit store size to prevent memory leak
@@ -707,6 +706,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === MessageAction.GET_SESSION_DATA) {
     (async () => {
       try {
+        // Ensure debug config is loaded
+        await ensureDebugConfigLoadedOnce();
         // STEP 1: Load config from storage (handles service worker restarts)
         await ensureConfigLoaded(
           {
@@ -891,6 +892,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === MessageAction.REFRESH_SESSION) {
     // RACE CONDITION FIX: Ensure configuration is loaded before processing
     (async () => {
+      await ensureDebugConfigLoadedOnce();
       await ensureConfigLoaded();
 
       const apiKey = getApiKey();
@@ -975,6 +977,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === MessageAction.UPDATE_DEVICE_NICKNAME) {
     // RACE CONDITION FIX: Ensure configuration is loaded before processing
     (async () => {
+      await ensureDebugConfigLoadedOnce();
       await ensureConfigLoaded();
 
       const apiKey = getApiKey();
@@ -1121,6 +1124,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // STATE MACHINE HYDRATION: Ensure state machine is ready before using it
     (async () => {
+      await ensureDebugConfigLoadedOnce();
       await stateMachineReady;
 
       const logData = debugLogger.exportLogs();
@@ -1174,6 +1178,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // SERVICE WORKER AMNESIA FIX: Ensure configuration is loaded before attempting to send push
     (async () => {
       try {
+        await ensureDebugConfigLoadedOnce();
         // Ensure core configuration is loaded from storage if service worker just woke up
         await ensureConfigLoaded();
 

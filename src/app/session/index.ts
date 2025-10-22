@@ -112,7 +112,7 @@ export async function setLastModifiedCutoffSafe(next: number): Promise<void> {
   }
   await storageRepository.setLastModifiedCutoff(next);
   sessionCache.lastModifiedCutoff = next;
-  debugLogger.general('INFO', 'Updated cutoff via safe setter', { old: current ?? null, new: next });
+  debugLogger.general('INFO', 'Pipeline 1 Updated cutoff via safe setter', { old: current ?? null, new: next });
 }
 
 // UNSAFE: only for explicit logout or invalid-cursor recovery

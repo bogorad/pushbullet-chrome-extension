@@ -332,7 +332,6 @@
     }
   };
   var debugConfigManager = new DebugConfigManager();
-  void debugConfigManager.loadConfig();
   var GlobalErrorTracker = class {
     errors = [];
     errorCounts = /* @__PURE__ */ new Map();
@@ -1930,7 +1929,7 @@
       const newCutoff = await computeMaxModified(pushes2);
       if (newCutoff > 0) {
         await setLastModifiedCutoffSafe(newCutoff);
-        debugLogger.general("INFO", "Pipeline 1 Seed complete. Updated lastModifiedCutoff via safe setter.", { newCutoff });
+        debugLogger.general("INFO", "Pipeline 1 Updated cutoff via safe setter", { old: storedCutoff ?? null, new: newCutoff });
       } else {
         debugLogger.general("WARN", "Pipeline 1 Seed returned no items; leaving cutoff unchanged.");
       }
@@ -2007,7 +2006,7 @@
     }
     await storageRepository.setLastModifiedCutoff(next);
     sessionCache.lastModifiedCutoff = next;
-    debugLogger.general("INFO", "Updated cutoff via safe setter", { old: current ?? null, new: next });
+    debugLogger.general("INFO", "Pipeline 1 Updated cutoff via safe setter", { old: current ?? null, new: next });
   }
   async function setLastModifiedCutoffUnsafeForRecovery(next) {
     await storageRepository.setLastModifiedCutoff(next);
@@ -2811,7 +2810,7 @@
       if (maxModified > cutoff) {
         sessionCache.lastModifiedCutoff = maxModified;
         await setLastModifiedCutoffSafe(maxModified);
-        debugLogger.general("INFO", "Updated cutoff via safe setter", {
+        debugLogger.general("INFO", "Pipeline 1 Updated cutoff via safe setter", {
           old: cutoff,
           new: maxModified
         });
@@ -2839,17 +2838,23 @@
             pushIden: push.iden
           }, error);
         });
-        if (openedThisRun < cap) {
-          const opened = await maybeAutoOpenLinkWithDismiss(push);
-          if (opened) {
-            openedThisRun += 1;
-            if (openedThisRun === cap) {
-              debugLogger.general("WARN", "Auto-open links capped", {
-                opened: openedThisRun,
-                total: newPushes.length,
-                cap
-              });
-            }
+        if (openedThisRun >= cap) {
+          debugLogger.general("WARN", "Auto-open links capped", {
+            opened: openedThisRun,
+            total: newPushes.length,
+            cap
+          });
+          continue;
+        }
+        const opened = await maybeAutoOpenLinkWithDismiss(push);
+        if (opened) {
+          openedThisRun += 1;
+          if (openedThisRun >= cap) {
+            debugLogger.general("WARN", "Auto-open links capped", {
+              opened: openedThisRun,
+              total: newPushes.length,
+              cap
+            });
           }
         }
       }
@@ -3710,7 +3715,6 @@
     }
     return loadDebugConfigOnce;
   }
-  ensureDebugConfigLoadedOnce();
   var notificationDataStore = /* @__PURE__ */ new Map();
   var MAX_NOTIFICATION_STORE_SIZE = 100;
   function addToNotificationStore(id, push) {
@@ -4155,6 +4159,7 @@
     if (message.action === "getSessionData" /* GET_SESSION_DATA */) {
       (async () => {
         try {
+          await ensureDebugConfigLoadedOnce();
           await ensureConfigLoaded(
             {
               setApiKey,
@@ -4286,6 +4291,7 @@
       return true;
     } else if (message.action === "refreshSession" /* REFRESH_SESSION */) {
       (async () => {
+        await ensureDebugConfigLoadedOnce();
         await ensureConfigLoaded();
         const apiKey2 = getApiKey();
         if (apiKey2) {
@@ -4354,6 +4360,7 @@
       return true;
     } else if (message.action === "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */) {
       (async () => {
+        await ensureDebugConfigLoadedOnce();
         await ensureConfigLoaded();
         const apiKey2 = getApiKey();
         const deviceIden2 = getDeviceIden();
@@ -4466,6 +4473,7 @@
     } else if (message.action === "exportDebugData" /* EXPORT_DEBUG_DATA */) {
       debugLogger.general("INFO", "Exporting full debug data");
       (async () => {
+        await ensureDebugConfigLoadedOnce();
         await stateMachineReady;
         const logData = debugLogger.exportLogs();
         const errorSummary = globalErrorTracker.getErrorSummary();
@@ -4508,6 +4516,7 @@
     } else if (message.action === "sendPush" /* SEND_PUSH */) {
       (async () => {
         try {
+          await ensureDebugConfigLoadedOnce();
           await ensureConfigLoaded();
           const apiKey2 = getApiKey();
           if (!apiKey2) {
