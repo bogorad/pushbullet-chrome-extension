@@ -13,44 +13,10 @@
 - `vitest run path/to/test.ts` - Run single test file
 
 ## Code Style Guidelines
-
-### Formatting
-- 2-space indentation
-- Single quotes for strings (avoid escaping when possible)
-- Semicolons always required
-- Target ES2022, modules with bundler resolution
-
-### TypeScript
-- Strict mode enabled (`noImplicitAny`, `noUncheckedIndexedAccess`)
-- Explicit types preferred over `any`
-- Interface definitions for complex objects
-- Async/await for asynchronous operations
-
-### Imports & Organization
-- Group imports: stdlib → third-party → local modules
-- Use relative imports for local modules
-- Barrel exports (`index.ts`) for clean module boundaries
-
-### Naming Conventions
-- camelCase for variables/functions
-- PascalCase for classes/interfaces/types
-- SCREAMING_SNAKE_CASE for constants
-- Prefix unused parameters with `_`
-
-### Error Handling
-- Try/catch blocks for async operations
-- Centralized error logging via debugLogger
-- Graceful degradation for non-critical failures
-- Event-driven error tracking
-
-### Architecture Patterns
-- Repository pattern for data persistence
-- Event bus for cross-component communication
-- State machine for service worker lifecycle
-- Single-flight pattern for resource loading
-
-### Security
-- Input sanitization for user data
-- CSP compliance for XSS prevention
-- Message validation for extension messaging
-- No sensitive data in logs
+- **Formatting**: 2-space indentation, single quotes, semicolons required, ES2022 target
+- **TypeScript**: Strict mode, explicit types over `any`, interfaces for complex objects, async/await
+- **Imports**: Group stdlib → third-party → local modules, relative imports, barrel exports
+- **Naming**: camelCase variables/functions, PascalCase types, SCREAMING_SNAKE_CASE constants, `_` prefix unused params
+- **Error Handling**: Try/catch for async ops, centralized logging, graceful degradation, event-driven tracking
+- **Architecture**: Repository pattern, event bus, state machine, single-flight pattern
+- **Security**: Input sanitization, CSP compliance, message validation, no sensitive data in logs

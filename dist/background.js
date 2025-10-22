@@ -3453,7 +3453,10 @@
       const instance = new _ServiceWorkerStateMachine(callbacks);
       try {
         const { lastKnownState } = await chrome.storage.local.get("lastKnownState");
-        if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
+        if (lastKnownState === "error" /* ERROR */) {
+          debugLogger.general("WARN", "[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization.");
+          instance.currentState = "idle" /* IDLE */;
+        } else if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
           instance.currentState = lastKnownState;
           debugLogger.general("INFO", "[StateMachine] Hydrated state from storage", {
             restoredState: instance.currentState
@@ -3657,6 +3660,17 @@
           break;
         case "error" /* ERROR */:
           updateConnectionIcon("disconnected");
+          try {
+            await chrome.storage.local.set({
+              lastError: {
+                timestamp: Date.now(),
+                message: data?.error || "Unknown error",
+                previousState
+              }
+            });
+          } catch (e) {
+            debugLogger.storage("ERROR", "Failed to store error context", null, e);
+          }
           if (this.callbacks.onShowError) {
             this.callbacks.onShowError("Service worker encountered an error");
           }
@@ -4893,6 +4907,9 @@
   });
   async function bootstrap(trigger) {
     debugLogger.general("INFO", "Bootstrap start", { trigger });
+    await stateMachineReady;
+    const apiKey2 = getApiKey();
+    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
     void orchestrateInitialization(trigger, connectWebSocket);
   }
   chrome.runtime.onStartup.addListener(async () => {

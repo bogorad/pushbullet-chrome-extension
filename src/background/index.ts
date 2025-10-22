@@ -1370,7 +1370,16 @@ async function bootstrap(
   trigger: "startup" | "install" | "wakeup",
 ): Promise<void> {
   debugLogger.general("INFO", "Bootstrap start", { trigger });
-  // Start session initialization right away
+
+  // --- START MODIFICATION ---
+  // Ensure the state machine is ready, then trigger the STARTUP event
+  await stateMachineReady;
+  const apiKey = getApiKey(); // Use the getter from your state management
+  await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
+  // --- END MODIFICATION ---
+
+  // The orchestrateInitialization is now primarily driven by the state machine's
+  // onInitialize callback, but we can keep this for redundancy if desired.
   void orchestrateInitialization(trigger, connectWebSocket);
 }
 

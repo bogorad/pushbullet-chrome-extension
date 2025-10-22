@@ -95,12 +95,20 @@ export class ServiceWorkerStateMachine {
     try {
       const { lastKnownState } = await chrome.storage.local.get('lastKnownState');
 
-      if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
+      // --- START MODIFICATION ---
+      // If the last known state was a terminal error, do not restore it.
+      // Instead, revert to IDLE to allow a fresh initialization attempt.
+      if (lastKnownState === ServiceWorkerState.ERROR) {
+        debugLogger.general('WARN', '[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization.');
+        instance.currentState = ServiceWorkerState.IDLE;
+      } else if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
         instance.currentState = lastKnownState as ServiceWorkerState;
         debugLogger.general('INFO', '[StateMachine] Hydrated state from storage', {
           restoredState: instance.currentState
         });
-      } else {
+      }
+      // --- END MODIFICATION ---
+      else {
         debugLogger.general('INFO', '[StateMachine] No valid state in storage, using default', {
           initialState: instance.currentState
         });
@@ -368,6 +376,20 @@ export class ServiceWorkerStateMachine {
     case ServiceWorkerState.ERROR:
       // Update icon to red (disconnected)
       updateConnectionIcon('disconnected');
+
+      // Store error context for debugging
+      try {
+        await chrome.storage.local.set({
+          lastError: {
+            timestamp: Date.now(),
+            message: data?.error || 'Unknown error',
+            previousState: previousState
+          }
+        });
+      } catch (e) {
+        debugLogger.storage('ERROR', 'Failed to store error context', null, e as Error);
+      }
+
       // Show error notification
       if (this.callbacks.onShowError) {
         this.callbacks.onShowError('Service worker encountered an error');
