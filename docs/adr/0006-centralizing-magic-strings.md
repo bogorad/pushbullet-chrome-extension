@@ -1,130 +1,82 @@
-# ADR 0006: Centralizing Magic Strings with Enums and Constants
+# ADR 0006: Cache-First Startup and Session Hydration
 
-## Status
+**Status:** Accepted
 
-Accepted
+**Date:** 2025-10-22
 
-## Context
+**Context:**
 
-The codebase currently uses "magic strings" (hardcoded string literals) for critical, repeated values. This is prevalent in several areas:
+The previous architecture (ADR-0005) initiated a full network-based initialization on every service worker startup. Log analysis revealed two critical performance issues:
 
-1.  **Chrome Message Actions**: Actions like `'getSessionData'`, `'apiKeyChanged'`, and `'sendPush'` are defined as raw strings in both the sender (`popup.ts`) and the receiver (`background.ts`).
-2.  **Push Types**: Push types such as `'sms_changed'`, `'mirror'`, and `'note'` are used as strings in filtering logic (`background.ts`) and notification handlers (`utils.ts`).
-3.  **Storage Keys**: Keys for `chrome.storage` like `'apiKey'` and `'deviceRegistrationInProgress'` are hardcoded in multiple locations.
+1.  **Slow Popup Opening:** When the service worker was terminated due to inactivity, opening the popup would trigger a full, blocking re-initialization, taking 2-3 seconds and making the UI feel unresponsive.
+2.  **Startup Race Condition:** A browser startup could trigger a slow background initialization. If the user opened the popup during this time, a second, concurrent initialization would be triggered, leading to redundant API calls and unpredictable state.
 
-This practice introduces several problems:
+We need a startup mechanism that prioritizes instant UI responsiveness and prevents redundant initialization processes.
 
-- **Typo-Prone**: A simple typo in a string literal (e.g., `'getSessiongData'`) will not be caught by the TypeScript compiler and will lead to silent failures that are difficult to debug.
-- **Difficult to Refactor**: If an action name or key needs to be changed, a developer must perform a project-wide, case-sensitive search-and-replace, which is risky and error-prone.
-- **No Single Source of Truth**: The set of all possible values is not defined in one place, making it hard to know what actions or types are available without searching the entire codebase.
-- **Poor Developer Experience**: There is no IDE autocompletion for these literal values.
+**Decision:**
 
-**Example (Message Actions):**
+We will adopt a **"cache-first" hydration strategy** for all initialization triggers, managed by a **singleton promise** to prevent race conditions.
 
-```typescript
-// src/popup/index.ts
-chrome.runtime.sendMessage({ action: 'getSessionData' }, ...);
+1.  **Unified Initialization Entry Point:** All events that require session initialization (e.g., `onStartup`, `onInstalled`, `getSessionData` from the popup) will call a single function: `orchestrateInitialization`.
 
-// src/background/index.ts
-if (message.action === 'getSessionData') {
-  // ... handle it
-}
-```
+2.  **Singleton Promise Wrapper:** The `orchestrateInitialization` function will be wrapped with a singleton promise (`initPromise`).
+    - The first call to this function creates and registers a global promise.
+    - Subsequent calls while the first is in progress will not start a new process but will instead `await` the completion of the existing promise.
+    - The promise is always cleared in a `finally` block to ensure the system can recover from errors.
 
-## Decision
+3.  **Cache-First Hydration Logic:** Inside `orchestrateInitialization`, the following sequence will occur:
+    - **Step 1: Load from Cache.** Attempt to load the full `SessionCache` object from IndexedDB.
+    - **Step 2: Check Freshness.** Check the `cachedAt` timestamp of the loaded cache. If it is within a defined Time-To-Live (TTL, e.g., 5 minutes), the cache is considered "fresh."
+    - **Step 3a (Fast Path):** If the cache is fresh, instantly hydrate the in-memory `sessionCache` with the data from IndexedDB. The function then returns immediately, unblocking the UI. A non-blocking, "fire-and-forget" background refresh (`refreshSessionInBackground`) is initiated to update the cache silently.
+    - **Step 3b (Slow Path):** If the cache is missing, stale, or invalid, proceed with the original full network initialization (fetching user, devices, pushes, etc.).
+    - **Step 4 (Slow Path):** After the network fetch is complete, save the newly populated `sessionCache` back to IndexedDB with an updated `cachedAt` timestamp.
 
-We will eliminate magic strings by centralizing them into TypeScript `enums` and `const` objects, located in `src/types/domain.ts`. This creates a single, type-safe source of truth.
+**Consequences:**
 
-### 1. For Chrome Message Actions
+- **Pros:**
+  - **Massive Performance Gain:** Popup opening time for active users (with a fresh cache) will decrease from several seconds to under 100ms.
+  - **Reduced API Load:** The number of API calls will be drastically reduced, as network fetches are only performed when the cache is stale or during a background refresh.
+  - **Race Condition Eliminated:** The singleton promise ensures that no matter how many events fire, only one initialization process will run at a time.
+  - **Improved User Experience:** The extension will feel significantly more responsive and reliable. The UI is no longer blocked by network latency.
+- **Cons:**
+  - **Data Latency:** Users might briefly see data that is up to 5 minutes old. This is an acceptable trade-off for the massive performance gain. The background refresh mechanism mitigates this by updating the data shortly after the UI is displayed.
+  - **Increased Complexity:** The startup logic is now more complex, involving cache validation and two distinct paths (fast/slow).
 
-We will create a `MessageAction` enum.
+**Diagram of New Flow:**
 
-**Implementation (`src/types/domain.ts`):**
-
-```typescript
-export enum MessageAction {
-  GET_SESSION_DATA = "getSessionData",
-  API_KEY_CHANGED = "apiKeyChanged",
-  LOGOUT = "logout",
-  SEND_PUSH = "sendPush",
-  REFRESH_SESSION = "refreshSession",
-  SETTINGS_CHANGED = "settingsChanged",
-  UPDATE_DEVICE_NICKNAME = "updateDeviceNickname",
-  // ... and all others
-}
-```
-
-**Usage:**
-
-```typescript
-// Before
-chrome.runtime.sendMessage({ action: "getSessionData" });
-
-// After
-import { MessageAction } from "../types/domain";
-chrome.runtime.sendMessage({ action: MessageAction.GET_SESSION_DATA });
-```
-
-### 2. For Push Types
-
-We will create a `PushType` enum.
-
-**Implementation (`src/types/domain.ts`):**
-
-```typescript
-export enum PushType {
-  NOTE = "note",
-  LINK = "link",
-  FILE = "file",
-  MIRROR = "mirror",
-  DISMISSAL = "dismissal",
-  SMS_CHANGED = "sms_changed",
-}
-```
-
-**Usage:**
-
-```typescript
-// Before
-const displayableTypes = ['mirror', 'note', 'link', 'sms_changed'];
-if (push.type === 'sms_changed') { ... }
-
-// After
-import { PushType } from '../types/domain';
-const displayableTypes = [PushType.MIRROR, PushType.NOTE, PushType.LINK, PushType.SMS_CHANGED];
-if (push.type === PushType.SMS_CHANGED) { ... }
-```
-
-### 3. For Storage Keys
-
-We will create a `const` object for storage keys. An enum is also possible, but a simple const object is lighter and sufficient.
-
-**Implementation (`src/types/domain.ts`):**
-
-```typescript
-export const StorageKeys = {
-  API_KEY: "apiKey",
-  DEVICE_IDEN: "deviceIden",
-  DEVICE_NICKNAME: "deviceNickname",
-  ENCRYPTION_PASSWORD: "encryptionPassword",
-  // ... and all others
-} as const;
-```
-
-## Consequences
-
-### Pros
-
-- **Type Safety**: The TypeScript compiler will now throw an error if a typo is made, eliminating a major source of silent bugs.
-- **IDE Autocompletion**: Developers will get autocompletion suggestions (e.g., `MessageAction.`), improving speed and accuracy.
-- **Single Source of Truth**: All possible values are defined in one place (`src/types/domain.ts`), making the system self-documenting.
-- **Safe Refactoring**: Renaming an enum member in an IDE will automatically and safely update all its usages across the entire project.
-
-### Cons
-
-- **Initial Refactoring Effort**: There is an upfront cost to find and replace all existing magic strings throughout the codebase.
-- **Slightly More Verbose**: The code becomes slightly more verbose (e.g., `MessageAction.GET_SESSION_DATA` vs. `'getSessionData'`), but this is a worthwhile trade-off for the massive increase in safety and maintainability.
-
-### Neutral
-
-- **Establishes a Convention**: This decision establishes a clear pattern that all developers must follow for new actions, types, or keys, promoting long-term consistency.
+                               +---------------------------+
+                               |   Initialization Trigger  |
+                               | (Startup, Popup Open, etc.)|
+                               +-------------+-------------+
+                                             |
+                                             v
+                               +---------------------------+
+                               | orchestrateInitialization()|
+                               +-------------+-------------+
+                                             |
+                                             v
+                                 +-----------------------+
+                                 | Is Init Promise Set?  |
+                                 +-----------+-----------+
+                                             |
+                                     /---------------\
+                                    | YES             | NO
+                                    v                 v
+                         +-----------------+   +----------------------+
+                         | await existing  |   | setInitPromise()     |
+                         | promise         |   +----------------------+
+                         +-----------------+               |
+                                                           v
+                                               +-----------------------+
+                                               | Load Cache from DB    |
+                                               +-----------+-----------+
+                                                           |
+                                                   /---------------\
+                                                  | YES             | NO (Stale/Missing)
+                                                  v                 v
+                                       +-----------------+   +----------------------+
+                                       | HYDRATE (FAST)  |   | NETWORK INIT (SLOW)  |
+                                       | - Use cache     |   | - Fetch from API     |
+                                       | - Return        |   | - Save to DB         |
+                                       | - Start bg sync |   +----------------------+
+                                       +-----------------+
