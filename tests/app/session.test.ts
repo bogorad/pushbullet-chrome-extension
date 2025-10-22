@@ -24,9 +24,11 @@ vi.mock('../../src/lib/logging', () => ({
 
 vi.mock('../../src/app/api/client', () => ({
   fetchUserInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@example.com' }),
-  fetchDevices: vi.fn().mockResolvedValue([]),
+  fetchDevices: vi.fn().mockResolvedValue([{ iden: 'device1' }]),
   fetchRecentPushes: vi.fn().mockResolvedValue([]),
   fetchIncrementalPushes: vi.fn().mockResolvedValue([]),
+  fetchDisplayPushes: vi.fn().mockResolvedValue([]),
+  fetchChats: vi.fn().mockResolvedValue([]),
   registerDevice: vi.fn().mockResolvedValue({ iden: 'device123' })
 }));
 
@@ -38,7 +40,7 @@ vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
     getDeviceNickname: vi.fn().mockResolvedValue('Test Chrome'),
     getAutoOpenLinks: vi.fn().mockResolvedValue(true),
     getNotificationTimeout: vi.fn().mockResolvedValue(5000),
-    getLastModifiedCutoff: vi.fn().mockResolvedValue(null),
+    getLastModifiedCutoff: vi.fn().mockResolvedValue(1),
     setApiKey: vi.fn().mockResolvedValue(undefined),
     setDeviceIden: vi.fn().mockResolvedValue(undefined),
     setDeviceNickname: vi.fn().mockResolvedValue(undefined),

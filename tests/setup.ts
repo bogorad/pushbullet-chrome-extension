@@ -16,6 +16,7 @@ const createChromeMock = () => {
   return {
     runtime: {
       sendMessage: vi.fn(),
+      getManifest: vi.fn(() => ({ version: '1.3.42' })),
       onMessage: {
         addListener: vi.fn((callback: any) => listeners.onMessage.push(callback)),
         removeListener: vi.fn((callback: any) => {

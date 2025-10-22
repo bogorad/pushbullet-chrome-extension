@@ -241,6 +241,36 @@ export function getInitPromise(): Promise<string | null> | null {
   return initPromise;
 }
 
+/**
+ * Set the global initialization promise
+ * This should only be called by orchestrateInitialization to coordinate all init attempts
+ * @param promise - The initialization promise to set, or null to clear
+ */
+export function setInitPromise(promise: Promise<string | null> | null): void {
+  initPromise = promise;
+
+  debugLogger.general('DEBUG', "Global init promise updated", {
+    isSet: !!promise,
+    previouslySet: initPromise !== promise && initPromise !== null,
+  });
+}
+
+/**
+ * Clear the global initialization promise
+ * This should be called when initialization completes or fails
+ * Always called in a finally block to ensure cleanup
+ */
+export function clearInitPromise(): void {
+  const wasSet = initPromise !== null;
+  initPromise = null;
+
+  if (wasSet) {
+    debugLogger.general('DEBUG', "Global init promise cleared", {
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 // NO DECRYPTION - API key is stored in plain text in chrome.storage.sync
 // The crypto module is ONLY for decrypting E2EE push messages, NOT the API key!
 
@@ -380,7 +410,7 @@ export async function initializeSessionCache(
           // Update sessionCache.lastModifiedCutoff from storage
           const updatedCutoff = await storageRepository.getLastModifiedCutoff();
           sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
-          return null; // Do not proceed to processing
+          // Continue with initialization even on seed run
         }
 
         // Update sessionCache.lastModifiedCutoff from storage
@@ -517,13 +547,13 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
 
        const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyParam);
 
-       if (isSeedRun) {
-         debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
-         // Update sessionCache.lastModifiedCutoff from storage
-         const updatedCutoff = await storageRepository.getLastModifiedCutoff();
-         sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
-         return; // Do not proceed to processing
-       }
+        if (isSeedRun) {
+          debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
+          // Update sessionCache.lastModifiedCutoff from storage
+          const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+          sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
+          // Continue with initialization even on seed run
+        }
 
       // Update sessionCache.lastModifiedCutoff from storage
       const updatedCutoff = await storageRepository.getLastModifiedCutoff();

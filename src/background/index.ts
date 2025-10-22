@@ -17,6 +17,7 @@ import {
   refreshSessionCache,
   resetSessionCache,
   handleInvalidCursorRecovery,
+  getInitPromise,
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname, fetchRecentPushes } from "../app/api/client";
 import { installDiagnosticsMessageHandler } from "./diagnostics";
@@ -734,25 +735,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const isWakeUp = apiKey && !sessionCache.isAuthenticated;
 
         if (isWakeUp) {
-          debugLogger.general(
-            "WARN",
-            "Service worker wake-up detected - reinitializing session cache",
+          debugLogger.general('INFO',
+            "Service worker wake-up detected - checking for cached data",
+            { timestamp: new Date().toISOString() },
           );
 
-          // Re-initialize the entire session (will populate userInfo, devices, etc.)
-          await initializeSessionCache("onMessageWakeup", connectWebSocket, {
-            setApiKey,
-            setDeviceIden,
-            setAutoOpenLinks,
-            setNotificationTimeout,
-            setDeviceNickname,
-          });
+          // *** CRITICAL: Check if an init is already running ***
+          const existingInit = getInitPromise();
 
-          debugLogger.general("INFO", "Session re-initialized after wake-up", {
-            hasUserInfo: !!sessionCache.userInfo,
-            deviceCount: sessionCache.devices.length,
-            pushCount: sessionCache.recentPushes?.length ?? 0,
-          });
+          if (existingInit) {
+            debugLogger.general('INFO',
+              "Initialization already in progress (likely from startup), awaiting completion",
+              { source: "getSessionData" },
+            );
+
+            try {
+              await existingInit;
+              debugLogger.general('INFO', "Awaited startup initialization successfully");
+            } catch (error) {
+              debugLogger.general('ERROR',
+                "Startup initialization failed, popup will retry",
+                null,
+                error as Error,
+              );
+              // Fall through to call orchestrateInitialization below
+            }
+          }
+
+          // *** USE ORCHESTRATE INITIALIZATION (has IndexedDB hydration) ***
+          if (!sessionCache.isAuthenticated) {
+            await orchestrateInitialization("popup-open", connectWebSocket);
+          }
         }
 
         // STEP 4: Now check if we need to lazy-load recent pushes
