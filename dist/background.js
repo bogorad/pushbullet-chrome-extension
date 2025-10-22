@@ -1929,7 +1929,11 @@
       const newCutoff = await computeMaxModified(pushes2);
       if (newCutoff > 0) {
         await setLastModifiedCutoffSafe(newCutoff);
-        debugLogger.general("INFO", "Pipeline 1 Updated cutoff via safe setter", { old: storedCutoff ?? null, new: newCutoff });
+        debugLogger.general(
+          "INFO",
+          "Pipeline 1 Seed complete. Updated lastModifiedCutoff via safe setter.",
+          { newCutoff }
+        );
       } else {
         debugLogger.general("WARN", "Pipeline 1 Seed returned no items; leaving cutoff unchanged.");
       }
