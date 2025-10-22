@@ -1371,12 +1371,47 @@ async function bootstrap(
 ): Promise<void> {
   debugLogger.general("INFO", "Bootstrap start", { trigger });
 
-  // --- START MODIFICATION ---
-  // Ensure the state machine is ready, then trigger the STARTUP event
+  // --- CRITICAL FIX START ---
+  // Ensure configuration is loaded BEFORE checking for API key
+  // The STARTUP event needs accurate hasApiKey state
+  try {
+    await ensureConfigLoaded(
+      {
+        setApiKey,
+        setDeviceIden,
+        setAutoOpenLinks,
+        setDeviceNickname,
+        setNotificationTimeout,
+      },
+      {
+        getApiKey,
+        getDeviceIden,
+        getAutoOpenLinks,
+        getDeviceNickname,
+        getNotificationTimeout,
+      },
+    );
+    debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
+  } catch (error) {
+    debugLogger.general(
+      "ERROR",
+      "Failed to load config before STARTUP",
+      null,
+      error as Error,
+    );
+  }
+
+  // Now we can safely get the API key
   await stateMachineReady;
-  const apiKey = getApiKey(); // Use the getter from your state management
-  await stateMachine.transition('STARTUP', { hasApiKey: !!apiKey });
-  // --- END MODIFICATION ---
+  const apiKey = getApiKey();
+
+  debugLogger.general("DEBUG", "Triggering STARTUP event", {
+    hasApiKey: !!apiKey,
+    apiKeyLength: apiKey?.length || 0,
+  });
+
+  await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
+  // --- CRITICAL FIX END ---
 
   // The orchestrateInitialization is now primarily driven by the state machine's
   // onInitialize callback, but we can keep this for redundancy if desired.

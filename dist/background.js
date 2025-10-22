@@ -3454,7 +3454,19 @@
       try {
         const { lastKnownState } = await chrome.storage.local.get("lastKnownState");
         if (lastKnownState === "error" /* ERROR */) {
-          debugLogger.general("WARN", "[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization.");
+          debugLogger.general(
+            "WARN",
+            "[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization."
+          );
+          instance.currentState = "idle" /* IDLE */;
+        } else if (lastKnownState === "reconnecting" /* RECONNECTING */ || lastKnownState === "degraded" /* DEGRADED */) {
+          debugLogger.general(
+            "INFO",
+            "[StateMachine] Hydrated to transient state. Resetting to IDLE to re-establish connection.",
+            {
+              staleState: lastKnownState
+            }
+          );
           instance.currentState = "idle" /* IDLE */;
         } else if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
           instance.currentState = lastKnownState;
@@ -3638,6 +3650,12 @@
           break;
         case "ready" /* READY */:
           updateConnectionIcon("connected");
+          try {
+            await chrome.storage.local.remove("lastError");
+            debugLogger.storage("DEBUG", "Cleared lastError on successful recovery");
+          } catch (e) {
+            debugLogger.storage("WARN", "Failed to clear lastError", null, e);
+          }
           if (previousState === "degraded" /* DEGRADED */ && this.callbacks.onStopPolling) {
             this.callbacks.onStopPolling();
           }
@@ -4907,8 +4925,38 @@
   });
   async function bootstrap(trigger) {
     debugLogger.general("INFO", "Bootstrap start", { trigger });
+    try {
+      await ensureConfigLoaded(
+        {
+          setApiKey,
+          setDeviceIden,
+          setAutoOpenLinks,
+          setDeviceNickname,
+          setNotificationTimeout
+        },
+        {
+          getApiKey,
+          getDeviceIden,
+          getAutoOpenLinks,
+          getDeviceNickname,
+          getNotificationTimeout
+        }
+      );
+      debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
+    } catch (error) {
+      debugLogger.general(
+        "ERROR",
+        "Failed to load config before STARTUP",
+        null,
+        error
+      );
+    }
     await stateMachineReady;
     const apiKey2 = getApiKey();
+    debugLogger.general("DEBUG", "Triggering STARTUP event", {
+      hasApiKey: !!apiKey2,
+      apiKeyLength: apiKey2?.length || 0
+    });
     await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
     void orchestrateInitialization(trigger, connectWebSocket);
   }

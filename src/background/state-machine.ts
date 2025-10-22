@@ -96,15 +96,34 @@ export class ServiceWorkerStateMachine {
       const { lastKnownState } = await chrome.storage.local.get('lastKnownState');
 
       // --- START MODIFICATION ---
-      // If the last known state was a terminal error, do not restore it.
-      // Instead, revert to IDLE to allow a fresh initialization attempt.
+      // Clear terminal and transient states on extension reload
+      // These states imply active connections that no longer exist after reload
       if (lastKnownState === ServiceWorkerState.ERROR) {
-        debugLogger.general('WARN', '[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization.');
+        debugLogger.general(
+          "WARN",
+          "[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization.",
+        );
         instance.currentState = ServiceWorkerState.IDLE;
-      } else if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
+      } else if (
+        lastKnownState === ServiceWorkerState.RECONNECTING ||
+        lastKnownState === ServiceWorkerState.DEGRADED
+      ) {
+        // These states imply active connection attempts that are now stale after reload
+        debugLogger.general(
+          "INFO",
+          "[StateMachine] Hydrated to transient state. Resetting to IDLE to re-establish connection.",
+          {
+            staleState: lastKnownState,
+          },
+        );
+        instance.currentState = ServiceWorkerState.IDLE;
+      } else if (
+        lastKnownState &&
+        Object.values(ServiceWorkerState).includes(lastKnownState)
+      ) {
         instance.currentState = lastKnownState as ServiceWorkerState;
-        debugLogger.general('INFO', '[StateMachine] Hydrated state from storage', {
-          restoredState: instance.currentState
+        debugLogger.general("INFO", "[StateMachine] Hydrated state from storage", {
+          restoredState: instance.currentState,
         });
       }
       // --- END MODIFICATION ---
@@ -343,6 +362,15 @@ export class ServiceWorkerStateMachine {
 
     case ServiceWorkerState.READY:
       updateConnectionIcon("connected");
+
+      // Clear any stored error context when successfully reaching READY state
+      try {
+        await chrome.storage.local.remove('lastError');
+        debugLogger.storage('DEBUG', 'Cleared lastError on successful recovery');
+      } catch (e) {
+        debugLogger.storage('WARN', 'Failed to clear lastError', null, e as Error);
+      }
+
       // Stop polling if we were in DEGRADED mode
       if (previousState === ServiceWorkerState.DEGRADED && this.callbacks.onStopPolling) {
         this.callbacks.onStopPolling();
