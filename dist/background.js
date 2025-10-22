@@ -1839,7 +1839,8 @@
       const db = await openDb();
       const transaction = db.transaction(STORE_NAME, "readwrite");
       const store = transaction.objectStore(STORE_NAME);
-      store.put(session, CACHE_KEY);
+      const timestampedSession = { ...session, cachedAt: Date.now() };
+      store.put(timestampedSession, CACHE_KEY);
       await new Promise((resolve) => transaction.oncomplete = resolve);
       debugLogger.storage("DEBUG", "Session cache saved to IndexedDB");
     } catch (error) {
@@ -1849,6 +1850,36 @@
         null,
         error
       );
+    }
+  }
+  async function loadSessionCache() {
+    try {
+      const db = await openDb();
+      const transaction = db.transaction(STORE_NAME, "readonly");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(CACHE_KEY);
+      return new Promise((resolve) => {
+        request.onsuccess = () => {
+          debugLogger.storage("DEBUG", "Session cache loaded from IndexedDB", {
+            found: !!request.result
+          });
+          resolve(request.result || null);
+        };
+        request.onerror = () => {
+          debugLogger.storage("ERROR", "Failed to load session from IndexedDB", {
+            error: request.error
+          });
+          resolve(null);
+        };
+      });
+    } catch (error) {
+      debugLogger.storage(
+        "ERROR",
+        "Failed to open IndexedDB for loading",
+        null,
+        error
+      );
+      return null;
     }
   }
   async function clearSessionCache() {
@@ -1962,9 +1993,31 @@
     lastUpdated: 0,
     autoOpenLinks: true,
     deviceNickname: "Chrome",
-    lastModifiedCutoff: 0
+    lastModifiedCutoff: 0,
     // ← ADD: Initialize to 0
+    cachedAt: 0
+    // No cache initially
   };
+  var CACHE_TTL_MS = 5 * 60 * 1e3;
+  function isCacheFresh(cachedSession) {
+    if (!cachedSession) {
+      return false;
+    }
+    if (!cachedSession.isAuthenticated) {
+      return false;
+    }
+    if (!cachedSession.cachedAt) {
+      return false;
+    }
+    const cacheAge = Date.now() - cachedSession.cachedAt;
+    const isFresh = cacheAge < CACHE_TTL_MS;
+    debugLogger.general("DEBUG", "Cache freshness check", {
+      cacheAge: `${Math.round(cacheAge / 1e3)}s`,
+      ttl: `${CACHE_TTL_MS / 1e3}s`,
+      isFresh
+    });
+    return isFresh;
+  }
   function resetSessionCache() {
     sessionCache.userInfo = null;
     sessionCache.devices = [];
@@ -1975,6 +2028,57 @@
     sessionCache.autoOpenLinks = true;
     sessionCache.deviceNickname = "Chrome";
     sessionCache.lastModifiedCutoff = 0;
+    sessionCache.cachedAt = 0;
+  }
+  async function refreshSessionInBackground(apiKey2) {
+    debugLogger.general("INFO", "Starting background cache refresh");
+    try {
+      const [userInfo, devices, displayPushes, chats] = await Promise.all([
+        fetchUserInfo(apiKey2).catch((e) => {
+          debugLogger.api("WARN", "Background user fetch failed", { error: String(e) });
+          return sessionCache.userInfo;
+        }),
+        fetchDevices(apiKey2).catch((e) => {
+          debugLogger.api("WARN", "Background devices fetch failed", { error: String(e) });
+          return sessionCache.devices;
+        }),
+        fetchDisplayPushes(apiKey2, 50).catch((e) => {
+          debugLogger.api("WARN", "Background pushes fetch failed", { error: String(e) });
+          return sessionCache.recentPushes;
+        }),
+        fetchChats(apiKey2).catch((e) => {
+          debugLogger.api("WARN", "Background chats fetch failed", { error: String(e) });
+          return sessionCache.chats;
+        })
+      ]);
+      sessionCache.userInfo = userInfo;
+      sessionCache.devices = devices;
+      sessionCache.recentPushes = displayPushes;
+      sessionCache.chats = chats;
+      sessionCache.lastUpdated = Date.now();
+      await saveSessionCache(sessionCache);
+      debugLogger.general("INFO", "Background cache refresh completed", {
+        deviceCount: devices.length,
+        pushCount: displayPushes.length,
+        chatCount: chats.length
+      });
+      chrome.runtime.sendMessage({
+        action: "SESSION_DATA_UPDATED",
+        userInfo,
+        devices,
+        recentPushes: displayPushes,
+        chats
+      }).catch(() => {
+        debugLogger.general("DEBUG", "Popup not available for background update notification");
+      });
+    } catch (error) {
+      debugLogger.general(
+        "ERROR",
+        "Background cache refresh failed",
+        null,
+        error
+      );
+    }
   }
   async function handleInvalidCursorRecovery(apiKey2, connectWebSocketFn) {
     debugLogger.general("WARN", "Invalid cursor detected - starting recovery process");
@@ -2022,6 +2126,9 @@
     debugLogger.general("INFO", "Cutoff: set to 0 due to invalid-cursor recovery.");
   }
   var initPromise = null;
+  function getInitPromise() {
+    return initPromise;
+  }
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
     if (initPromise) {
       debugLogger.general(
@@ -3579,27 +3686,28 @@
     }
   };
 
-  // src/realtime/postConnectQueue.ts
-  var queue = [];
-  function enqueuePostConnect(task) {
-    queue.push(task);
-  }
-  async function runPostConnect() {
-    while (queue.length) {
-      const t = queue.shift();
+  // src/background/startup.ts
+  async function orchestrateInitialization(trigger, connectWs) {
+    startCriticalKeepalive();
+    const existingInit = getInitPromise();
+    if (existingInit) {
+      debugLogger.general(
+        "INFO",
+        "Initialization already in progress, awaiting existing promise",
+        { trigger, source: "orchestrateInitialization" }
+      );
       try {
-        await t();
-      } catch {
+        await existingInit;
+        debugLogger.general("INFO", "Existing initialization completed", { trigger });
+        return;
+      } catch (error) {
+        debugLogger.general(
+          "WARN",
+          "Existing initialization failed, will retry",
+          { trigger, error: error.message }
+        );
       }
     }
-  }
-
-  // src/background/startup.ts
-  async function orchestrateInitialization({
-    trigger,
-    connectWs
-  }) {
-    startCriticalKeepalive();
     try {
       await ensureDebugConfigLoadedOnce();
       const apiKey2 = await storageRepository.getApiKey();
@@ -3610,17 +3718,42 @@
       setApiKey(apiKey2);
       await hydrateCutoff();
       debugLogger.general("INFO", "Starting orchestrated initialization", { trigger });
+      const cachedSession = await loadSessionCache();
+      if (cachedSession && isCacheFresh(cachedSession)) {
+        debugLogger.general("INFO", "Hydrating session from IndexedDB cache", {
+          cacheAge: `${Math.round((Date.now() - cachedSession.cachedAt) / 1e3)}s`,
+          deviceCount: cachedSession.devices.length,
+          pushCount: cachedSession.recentPushes.length
+        });
+        Object.assign(sessionCache, cachedSession);
+        connectWs();
+        void refreshSessionInBackground(apiKey2);
+        debugLogger.general(
+          "INFO",
+          "Initialization completed using cache (background refresh queued)",
+          { trigger }
+        );
+        return;
+      }
+      debugLogger.general("INFO", "Cache stale or missing, performing full network init", {
+        hasCachedSession: !!cachedSession,
+        cacheAge: cachedSession?.cachedAt ? `${Math.round((Date.now() - cachedSession.cachedAt) / 1e3)}s` : "N/A"
+      });
       const cachedUser = await storageRepository.getUserInfoCache();
       if (cachedUser) {
         sessionCache.userInfo = cachedUser;
-        debugLogger.general("INFO", "Loaded user info from cache");
+        debugLogger.general("INFO", "Loaded stale user info from legacy cache");
       }
       const userP = getUserInfoWithTimeoutRetry(apiKey2).then(async (u) => {
         sessionCache.userInfo = u;
         await storageRepository.setUserInfoCache(u);
         debugLogger.general("INFO", "User info fetched and cached");
       }).catch((e) => {
-        debugLogger.api("WARN", "users/me timed out or failed; using cache if present", { error: String(e) });
+        debugLogger.api(
+          "WARN",
+          "users/me timed out or failed; using cache if present",
+          { error: String(e) }
+        );
       });
       const devicesP = fetchDevices(apiKey2).then((d) => {
         sessionCache.devices = d;
@@ -3628,16 +3761,38 @@
       });
       const wsP = Promise.resolve().then(() => connectWs());
       const results = await Promise.allSettled([devicesP, wsP]);
-      debugLogger.general("INFO", "Functional ready: devices, ws initialized", {
+      debugLogger.general("INFO", "Functional ready: devices + ws initialized", {
         trigger,
         results: results.map((r, i) => ({ index: i, status: r.status }))
       });
+      try {
+        sessionCache.isAuthenticated = true;
+        sessionCache.lastUpdated = Date.now();
+        await saveSessionCache(sessionCache);
+        debugLogger.general(
+          "INFO",
+          "Session cache saved to IndexedDB after network init",
+          {
+            deviceCount: sessionCache.devices.length,
+            pushCount: sessionCache.recentPushes.length,
+            chatCount: sessionCache.chats.length,
+            cachedAt: sessionCache.cachedAt
+            // Will be set by saveSessionCache
+          }
+        );
+      } catch (error) {
+        debugLogger.general(
+          "WARN",
+          "Failed to save session cache to IndexedDB",
+          null,
+          error
+        );
+      }
+      debugLogger.general("INFO", "Background service worker initialized", {
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      });
       await userP.catch(() => {
       });
-      enqueuePostConnect(async () => {
-        debugLogger.general("INFO", "Running post-connect task: device registration and chats");
-      });
-      debugLogger.general("INFO", "Orchestrated initialization complete", { trigger });
     } catch (error) {
       debugLogger.general("ERROR", "Orchestrated initialization failed", {
         trigger,
@@ -3646,6 +3801,18 @@
       throw error;
     } finally {
       stopCriticalKeepalive();
+    }
+  }
+
+  // src/realtime/postConnectQueue.ts
+  var queue = [];
+  async function runPostConnect() {
+    while (queue.length) {
+      const t = queue.shift();
+      try {
+        await t();
+      } catch {
+      }
     }
   }
 
@@ -4662,7 +4829,7 @@
   });
   async function bootstrap(trigger) {
     debugLogger.general("INFO", "Bootstrap start", { trigger });
-    void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
+    void orchestrateInitialization(trigger, connectWebSocket);
   }
   chrome.runtime.onStartup.addListener(async () => {
     await ensureDebugConfigLoadedOnce();

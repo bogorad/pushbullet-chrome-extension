@@ -148,6 +148,7 @@ export interface SessionCache {
   autoOpenLinks: boolean;
   deviceNickname: string;
   lastModifiedCutoff: number; // ← Tracks last timestamp for incremental fetches
+  cachedAt: number; // Timestamp when cache was saved to IndexedDB
 }
 
 export interface InitializationState {

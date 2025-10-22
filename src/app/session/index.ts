@@ -26,7 +26,45 @@ export const sessionCache: SessionCache = {
   autoOpenLinks: true,
   deviceNickname: "Chrome",
   lastModifiedCutoff: 0,  // ← ADD: Initialize to 0
+  cachedAt: 0, // No cache initially
 };
+
+/**
+ * Cache Time-To-Live (TTL) in milliseconds
+ * 5 minutes = 300,000 milliseconds
+ * Cache older than this will be considered stale
+ */
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Check if cached session data is fresh enough to use
+ * @param cachedSession - Session loaded from IndexedDB
+ * @returns true if cache is fresh, false if stale or invalid
+ */
+function isCacheFresh(cachedSession: SessionCache | null): boolean {
+  if (!cachedSession) {
+    return false; // No cache
+  }
+
+  if (!cachedSession.isAuthenticated) {
+    return false; // Not authenticated in cache
+  }
+
+  if (!cachedSession.cachedAt) {
+    return false; // Cache has no timestamp (old format)
+  }
+
+  const cacheAge = Date.now() - cachedSession.cachedAt;
+  const isFresh = cacheAge < CACHE_TTL_MS;
+
+  debugLogger.general('DEBUG', "Cache freshness check", {
+    cacheAge: `${Math.round(cacheAge / 1000)}s`,
+    ttl: `${CACHE_TTL_MS / 1000}s`,
+    isFresh,
+  });
+
+  return isFresh;
+}
 
 /**
  * Reset the session cache to its initial, unauthenticated state.
@@ -42,6 +80,73 @@ export function resetSessionCache(): void {
   sessionCache.autoOpenLinks = true;
   sessionCache.deviceNickname = "Chrome";
   sessionCache.lastModifiedCutoff = 0;  // ← ADD: Reset cutoff on logout
+  sessionCache.cachedAt = 0;
+}
+
+/**
+ * Refresh session cache in the background without blocking the UI
+ * This runs AFTER the popup has already displayed cached data
+ * @param apiKey - API key for network requests
+ */
+async function refreshSessionInBackground(apiKey: string): Promise<void> {
+  debugLogger.general('INFO', "Starting background cache refresh");
+
+  try {
+    // Fetch fresh data from API
+    const [userInfo, devices, displayPushes, chats] = await Promise.all([
+      fetchUserInfo(apiKey).catch((e) => {
+        debugLogger.api('WARN', "Background user fetch failed", { error: String(e) });
+        return sessionCache.userInfo; // Keep existing
+      }),
+      fetchDevices(apiKey).catch((e) => {
+        debugLogger.api('WARN', "Background devices fetch failed", { error: String(e) });
+        return sessionCache.devices; // Keep existing
+      }),
+      fetchDisplayPushes(apiKey, 50).catch((e) => {
+        debugLogger.api('WARN', "Background pushes fetch failed", { error: String(e) });
+        return sessionCache.recentPushes; // Keep existing
+      }),
+      fetchChats(apiKey).catch((e) => {
+        debugLogger.api('WARN', "Background chats fetch failed", { error: String(e) });
+        return sessionCache.chats; // Keep existing
+      }),
+    ]);
+
+    // Update in-memory cache
+    sessionCache.userInfo = userInfo;
+    sessionCache.devices = devices;
+    sessionCache.recentPushes = displayPushes;
+    sessionCache.chats = chats;
+    sessionCache.lastUpdated = Date.now();
+
+    // Save updated cache back to IndexedDB
+    await saveSessionCache(sessionCache);
+
+    debugLogger.general('INFO', "Background cache refresh completed", {
+      deviceCount: devices.length,
+      pushCount: displayPushes.length,
+      chatCount: chats.length,
+    });
+
+    // Notify popup that data has been updated
+    chrome.runtime.sendMessage({
+      action: "SESSION_DATA_UPDATED",
+      userInfo,
+      devices,
+      recentPushes: displayPushes,
+      chats,
+    }).catch(() => {
+      // Popup might be closed, that's okay
+      debugLogger.general('DEBUG', "Popup not available for background update notification");
+    });
+
+  } catch (error) {
+    debugLogger.general('ERROR',
+      "Background cache refresh failed",
+      null,
+      error as Error,
+    );
+  }
 }
 
 /**
@@ -49,11 +154,6 @@ export function resetSessionCache(): void {
  *
  * This function is called when the API returns an invalid_cursor error.
  * It clears all local state and triggers a fresh bootstrap.
- *
- * Steps:
- * 1. Clear the corrupted cursor from storage
- * 2. Reset session cache to empty
- * 3. Trigger full re-initialization
  */
 export async function handleInvalidCursorRecovery(
   apiKey: string,
@@ -483,3 +583,7 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
     throw error;
   }
 }
+
+// *** ADD THESE 2 EXPORTS ***
+export { isCacheFresh };
+export { refreshSessionInBackground };

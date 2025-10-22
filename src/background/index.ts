@@ -1358,7 +1358,7 @@ async function bootstrap(
 ): Promise<void> {
   debugLogger.general("INFO", "Bootstrap start", { trigger });
   // Start session initialization right away
-  void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
+  void orchestrateInitialization(trigger, connectWebSocket);
 }
 
 chrome.runtime.onStartup.addListener(async () => {

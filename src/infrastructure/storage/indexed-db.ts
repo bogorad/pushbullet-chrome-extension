@@ -51,7 +51,11 @@ export async function saveSessionCache(session: SessionCache): Promise<void> {
     const db = await openDb();
     const transaction = db.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
-    store.put(session, CACHE_KEY);
+
+    // *** ADD THESE 2 LINES BEFORE store.put ***
+    const timestampedSession = { ...session, cachedAt: Date.now() };
+    store.put(timestampedSession, CACHE_KEY);
+
     await new Promise((resolve) => (transaction.oncomplete = resolve));
     debugLogger.storage("DEBUG", "Session cache saved to IndexedDB");
   } catch (error) {
