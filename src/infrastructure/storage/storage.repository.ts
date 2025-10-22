@@ -61,6 +61,8 @@ export interface StorageRepository {
   setAutoOpenLinksOnReconnect(value: boolean): Promise<void>;
   getMaxAutoOpenPerReconnect(): Promise<number>;
   setMaxAutoOpenPerReconnect(value: number): Promise<void>;
+  getDismissAfterAutoOpen(): Promise<boolean>;
+  setDismissAfterAutoOpen(value: boolean): Promise<void>;
 
   // User Info Cache
   getUserInfoCache(): Promise<any | null>;
@@ -69,6 +71,14 @@ export interface StorageRepository {
   // Bulk Operations
   clear(): Promise<void>;
   remove(keys: string[]): Promise<void>;
+
+  // Diagnostics
+  getAutoOpenDebugSnapshot(): Promise<{
+    lastAutoOpenCutoff: number;
+    lastModifiedCutoff: number;
+    mruCount: number;
+    maxOpenedCreated: number;
+  }>;
 }
 
 /**
@@ -235,6 +245,9 @@ export class ChromeStorageRepository implements StorageRepository {
    * Set Last Modified Cutoff in local storage
    */
   async setLastModifiedCutoff(value: number): Promise<void> {
+    if (value === 0) {
+      console.warn('Storage: Setting lastModifiedCutoff to 0 - ensure this is via unsafe setter');
+    }
     await chrome.storage.local.set({ lastModifiedCutoff: value });
   }
 
@@ -295,6 +308,21 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   /**
+   * Get Dismiss After Auto Open setting from local storage
+   */
+  async getDismissAfterAutoOpen(): Promise<boolean> {
+    const result = await chrome.storage.local.get(['dismissAfterAutoOpen']);
+    return Boolean(result.dismissAfterAutoOpen);
+  }
+
+  /**
+   * Set Dismiss After Auto Open setting in local storage
+   */
+  async setDismissAfterAutoOpen(value: boolean): Promise<void> {
+    await chrome.storage.local.set({ dismissAfterAutoOpen: value });
+  }
+
+  /**
    * Get User Info Cache from local storage
    */
   async getUserInfoCache(): Promise<any | null> {
@@ -328,6 +356,34 @@ export class ChromeStorageRepository implements StorageRepository {
       chrome.storage.sync.remove(keys),
       chrome.storage.local.remove(keys)
     ]);
+  }
+
+  /**
+   * Get Auto Open Debug Snapshot for diagnostics
+   */
+  async getAutoOpenDebugSnapshot(): Promise<{
+    lastAutoOpenCutoff: number;
+    lastModifiedCutoff: number;
+    mruCount: number;
+    maxOpenedCreated: number;
+  }> {
+    const { lastAutoOpenCutoff = 0 } =
+      await chrome.storage.local.get('lastAutoOpenCutoff');
+    const { lastModifiedCutoff = 0 } =
+      await chrome.storage.local.get('lastModifiedCutoff');
+    const raw = await chrome.storage.local.get('openedPushMRU');
+    const mru = raw.openedPushMRU as
+      | { idens?: string[]; maxOpenedCreated?: number }
+      | undefined;
+    return {
+      lastAutoOpenCutoff:
+        typeof lastAutoOpenCutoff === 'number' ? lastAutoOpenCutoff : 0,
+      lastModifiedCutoff:
+        typeof lastModifiedCutoff === 'number' ? lastModifiedCutoff : 0,
+      mruCount: Array.isArray(mru?.idens) ? mru!.idens!.length : 0,
+      maxOpenedCreated:
+        typeof mru?.maxOpenedCreated === 'number' ? mru!.maxOpenedCreated! : 0,
+    };
   }
 }
 

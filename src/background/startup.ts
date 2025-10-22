@@ -1,10 +1,11 @@
 import { storageRepository } from '../infrastructure/storage/storage.repository';
 import { getUserInfoWithTimeoutRetry, fetchDevices } from '../app/api/client';
-import { sessionCache } from '../app/session';
+import { sessionCache, hydrateCutoff } from '../app/session';
 import { debugLogger } from '../lib/logging';
 import { enqueuePostConnect } from '../realtime/postConnectQueue';
 import { startCriticalKeepalive, stopCriticalKeepalive } from './keepalive';
 import { setApiKey } from './state';
+import { ensureDebugConfigLoadedOnce } from './index';
 import type { User } from '../types/domain';
 
 
@@ -20,6 +21,8 @@ export async function orchestrateInitialization({
   startCriticalKeepalive();
 
   try {
+    await ensureDebugConfigLoadedOnce();
+
     const apiKey = await storageRepository.getApiKey();
     if (!apiKey) {
       debugLogger.general('WARN', 'No API key available, skipping initialization');
@@ -28,6 +31,7 @@ export async function orchestrateInitialization({
 
     // CRITICAL: hydrate in-memory state before anything uses getApiKey()
     setApiKey(apiKey);
+    await hydrateCutoff();
 
     debugLogger.general('INFO', 'Starting orchestrated initialization', { trigger });
 

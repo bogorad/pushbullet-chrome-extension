@@ -13,6 +13,7 @@ import {
 import { storageRepository } from "../../infrastructure/storage/storage.repository";
 import { saveSessionCache } from "../../infrastructure/storage/indexed-db";
 import { startCriticalKeepalive, stopCriticalKeepalive } from "../../background/keepalive";
+import { refreshPushesIncremental } from "./pipeline";
 
 // Session cache state
 export const sessionCache: SessionCache = {
@@ -63,7 +64,7 @@ export async function handleInvalidCursorRecovery(
   try {
     // Step 1: Clear cursor from storage
     debugLogger.general('INFO', 'Clearing invalid cursor from storage');
-    await storageRepository.removeLastModifiedCutoff();
+    await handleInvalidCursorRecoveryReset();
 
     // Step 2: Reset session cache
     debugLogger.general('INFO', 'Resetting session cache');
@@ -82,6 +83,48 @@ export async function handleInvalidCursorRecovery(
     debugLogger.general('ERROR', 'Failed to recover from invalid cursor', null, error as Error);
     throw error;
   }
+}
+
+export async function hydrateCutoff(): Promise<void> {
+  const cutoff = await storageRepository.getLastModifiedCutoff();
+  sessionCache.lastModifiedCutoff = typeof cutoff === 'number' ? cutoff : 0;
+  debugLogger.general('DEBUG', `Session: Hydrated lastModifiedCutoff=${sessionCache.lastModifiedCutoff}`);
+}
+
+
+
+// Explicit reset flows only:
+export async function handleLogoutReset(): Promise<void> {
+  await storageRepository.setLastModifiedCutoff(0); // allowed here
+  debugLogger.general('INFO', 'Cutoff: set to 0 due to explicit logout.');
+}
+
+// SAFE: for normal advancement; rejects 0 and non-increasing values
+export async function setLastModifiedCutoffSafe(next: number): Promise<void> {
+  const current = await storageRepository.getLastModifiedCutoff();
+  if (!Number.isFinite(next) || next <= 0) {
+    debugLogger.general('WARN', 'CutoffSafe: refusing non-positive or invalid value', { next });
+    return;
+  }
+  if (current && next <= current) {
+    debugLogger.general('DEBUG', 'CutoffSafe: unchanged or non-increasing', { current, next });
+    return;
+  }
+  await storageRepository.setLastModifiedCutoff(next);
+  sessionCache.lastModifiedCutoff = next;
+  debugLogger.general('INFO', 'Updated cutoff via safe setter', { old: current ?? null, new: next });
+}
+
+// UNSAFE: only for explicit logout or invalid-cursor recovery
+export async function setLastModifiedCutoffUnsafeForRecovery(next: number): Promise<void> {
+  await storageRepository.setLastModifiedCutoff(next);
+  sessionCache.lastModifiedCutoff = next;
+  debugLogger.general('INFO', 'Cutoff set UNSAFE due to explicit recovery/logout', { new: next });
+}
+
+export async function handleInvalidCursorRecoveryReset(): Promise<void> {
+  await setLastModifiedCutoffUnsafeForRecovery(0); // allowed here
+  debugLogger.general('INFO', 'Cutoff: set to 0 due to invalid-cursor recovery.');
 }
 
 
@@ -230,39 +273,19 @@ export async function initializeSessionCache(
 
         debugLogger.general('INFO', 'Pipeline 1: Fetching incremental pushes for auto-open');
 
-        const storedCutoff = await storageRepository.getLastModifiedCutoff();
-        sessionCache.lastModifiedCutoff = storedCutoff ?? 0;
+        const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyValue);
 
-        let incrementalPushes: Push[] = [];
-
-        if (storedCutoff && storedCutoff > 0) {
-          // We have a cutoff timestamp - fetch only new pushes
-          incrementalPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
-
-          debugLogger.general('INFO', 'Pipeline 1: Incremental fetch complete', {
-            count: incrementalPushes.length,
-            cutoff: storedCutoff,
-          });
-        } else {
-          // First run - no cutoff yet, use regular fetch to seed
-          incrementalPushes = await fetchRecentPushes(apiKeyValue, 20);
-
-          debugLogger.general('INFO', 'Pipeline 1: First run, seeding cutoff', {
-            count: incrementalPushes.length,
-          });
+        if (isSeedRun) {
+          debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
+          // Update sessionCache.lastModifiedCutoff from storage
+          const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+          sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
+          return null; // Do not proceed to processing
         }
 
-        // Update the cutoff timestamp with the latest push we've seen
-        const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
-        if (maxModified > sessionCache.lastModifiedCutoff) {
-          sessionCache.lastModifiedCutoff = maxModified;
-          await storageRepository.setLastModifiedCutoff(maxModified);
-
-          debugLogger.general('DEBUG', 'Pipeline 1: Updated cutoff', {
-            old: storedCutoff ?? 0,
-            new: maxModified,
-          });
-        }
+        // Update sessionCache.lastModifiedCutoff from storage
+        const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+        sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
 
         // ========================================
         // PIPELINE 2: Display History Pipeline
@@ -392,21 +415,19 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
       // ========================================
       debugLogger.general('DEBUG', 'Pipeline 1: Refreshing incremental pushes');
 
-      const storedCutoff = await storageRepository.getLastModifiedCutoff();
-      let incrementalPushes: Push[] = [];
+       const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyParam);
 
-      if (storedCutoff && storedCutoff > 0) {
-        incrementalPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
-      } else {
-        incrementalPushes = await fetchRecentPushes(apiKeyParam, 20);
-      }
+       if (isSeedRun) {
+         debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
+         // Update sessionCache.lastModifiedCutoff from storage
+         const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+         sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
+         return; // Do not proceed to processing
+       }
 
-      // Update cutoff
-      const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
-      if (maxModified > (sessionCache.lastModifiedCutoff ?? 0)) {
-        sessionCache.lastModifiedCutoff = maxModified;
-        await storageRepository.setLastModifiedCutoff(maxModified);
-      }
+      // Update sessionCache.lastModifiedCutoff from storage
+      const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+      sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
 
       // ========================================
       // PIPELINE 2: Display History Pipeline (Refresh)

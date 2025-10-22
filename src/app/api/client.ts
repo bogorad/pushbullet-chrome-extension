@@ -561,4 +561,17 @@ export async function fetchChats(apiKey: string): Promise<Chat[]> {
   }
 }
 
+export async function dismissPush(iden: string, apiKey: string): Promise<void> {
+  const url = `https://api.pushbullet.com/v2/pushes/${encodeURIComponent(iden)}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(apiKey),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ dismissed: true }),
+  });
+  if (!response.ok) throw new Error(`Dismiss failed: ${response.status}`);
+}
+
 

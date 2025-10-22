@@ -1172,6 +1172,9 @@
      * Set Last Modified Cutoff in local storage
      */
     async setLastModifiedCutoff(value) {
+      if (value === 0) {
+        console.warn("Storage: Setting lastModifiedCutoff to 0 - ensure this is via unsafe setter");
+      }
       await chrome.storage.local.set({ lastModifiedCutoff: value });
     }
     /**
@@ -1224,6 +1227,19 @@
       await chrome.storage.local.set({ maxAutoOpenPerReconnect: value });
     }
     /**
+     * Get Dismiss After Auto Open setting from local storage
+     */
+    async getDismissAfterAutoOpen() {
+      const result = await chrome.storage.local.get(["dismissAfterAutoOpen"]);
+      return Boolean(result.dismissAfterAutoOpen);
+    }
+    /**
+     * Set Dismiss After Auto Open setting in local storage
+     */
+    async setDismissAfterAutoOpen(value) {
+      await chrome.storage.local.set({ dismissAfterAutoOpen: value });
+    }
+    /**
      * Get User Info Cache from local storage
      */
     async getUserInfoCache() {
@@ -1254,6 +1270,21 @@
         chrome.storage.sync.remove(keys),
         chrome.storage.local.remove(keys)
       ]);
+    }
+    /**
+     * Get Auto Open Debug Snapshot for diagnostics
+     */
+    async getAutoOpenDebugSnapshot() {
+      const { lastAutoOpenCutoff = 0 } = await chrome.storage.local.get("lastAutoOpenCutoff");
+      const { lastModifiedCutoff = 0 } = await chrome.storage.local.get("lastModifiedCutoff");
+      const raw = await chrome.storage.local.get("openedPushMRU");
+      const mru = raw.openedPushMRU;
+      return {
+        lastAutoOpenCutoff: typeof lastAutoOpenCutoff === "number" ? lastAutoOpenCutoff : 0,
+        lastModifiedCutoff: typeof lastModifiedCutoff === "number" ? lastModifiedCutoff : 0,
+        mruCount: Array.isArray(mru?.idens) ? mru.idens.length : 0,
+        maxOpenedCreated: typeof mru?.maxOpenedCreated === "number" ? mru.maxOpenedCreated : 0
+      };
     }
   };
   var storageRepository = new ChromeStorageRepository();
@@ -1762,6 +1793,18 @@
       throw error;
     }
   }
+  async function dismissPush(iden, apiKey2) {
+    const url = `https://api.pushbullet.com/v2/pushes/${encodeURIComponent(iden)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...authHeaders(apiKey2),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ dismissed: true })
+    });
+    if (!response.ok) throw new Error(`Dismiss failed: ${response.status}`);
+  }
 
   // src/infrastructure/storage/indexed-db.ts
   var DB_NAME = "PushbulletState";
@@ -1869,6 +1912,42 @@
     return false;
   }
 
+  // src/app/session/pipeline.ts
+  async function computeMaxModified(pushes) {
+    let maxModified = 0;
+    for (const p of pushes) {
+      const m = typeof p.modified === "number" ? p.modified : 0;
+      if (m > maxModified) maxModified = m;
+    }
+    return maxModified;
+  }
+  async function refreshPushesIncremental(apiKey2) {
+    const storedCutoff = await storageRepository.getLastModifiedCutoff();
+    const isSeedRun = !storedCutoff || storedCutoff === 0;
+    if (isSeedRun) {
+      debugLogger.general("INFO", "Pipeline 1 First run cutoff missing/0. Seeding cutoff only; skipping side effects.");
+      const pushes2 = await fetchIncrementalPushes(apiKey2, null, 100);
+      const newCutoff = await computeMaxModified(pushes2);
+      if (newCutoff > 0) {
+        await setLastModifiedCutoffSafe(newCutoff);
+        debugLogger.general("INFO", "Pipeline 1 Seed complete. Updated lastModifiedCutoff via safe setter.", { newCutoff });
+      } else {
+        debugLogger.general("WARN", "Pipeline 1 Seed returned no items; leaving cutoff unchanged.");
+      }
+      return { pushes: [], isSeedRun: true };
+    }
+    const pushes = await fetchIncrementalPushes(apiKey2, storedCutoff, 100);
+    const maxModified = await computeMaxModified(pushes);
+    if (maxModified > storedCutoff) {
+      await setLastModifiedCutoffSafe(maxModified);
+      debugLogger.general("DEBUG", "Pipeline 1 Updated cutoff via safe setter", {
+        old: storedCutoff,
+        new: maxModified
+      });
+    }
+    return { pushes, isSeedRun: false };
+  }
+
   // src/app/session/index.ts
   var sessionCache = {
     userInfo: null,
@@ -1898,7 +1977,7 @@
     debugLogger.general("WARN", "Invalid cursor detected - starting recovery process");
     try {
       debugLogger.general("INFO", "Clearing invalid cursor from storage");
-      await storageRepository.removeLastModifiedCutoff();
+      await handleInvalidCursorRecoveryReset();
       debugLogger.general("INFO", "Resetting session cache");
       sessionCache.lastModifiedCutoff = 0;
       sessionCache.recentPushes = [];
@@ -1910,6 +1989,34 @@
       debugLogger.general("ERROR", "Failed to recover from invalid cursor", null, error);
       throw error;
     }
+  }
+  async function hydrateCutoff() {
+    const cutoff = await storageRepository.getLastModifiedCutoff();
+    sessionCache.lastModifiedCutoff = typeof cutoff === "number" ? cutoff : 0;
+    debugLogger.general("DEBUG", `Session: Hydrated lastModifiedCutoff=${sessionCache.lastModifiedCutoff}`);
+  }
+  async function setLastModifiedCutoffSafe(next) {
+    const current = await storageRepository.getLastModifiedCutoff();
+    if (!Number.isFinite(next) || next <= 0) {
+      debugLogger.general("WARN", "CutoffSafe: refusing non-positive or invalid value", { next });
+      return;
+    }
+    if (current && next <= current) {
+      debugLogger.general("DEBUG", "CutoffSafe: unchanged or non-increasing", { current, next });
+      return;
+    }
+    await storageRepository.setLastModifiedCutoff(next);
+    sessionCache.lastModifiedCutoff = next;
+    debugLogger.general("INFO", "Updated cutoff via safe setter", { old: current ?? null, new: next });
+  }
+  async function setLastModifiedCutoffUnsafeForRecovery(next) {
+    await storageRepository.setLastModifiedCutoff(next);
+    sessionCache.lastModifiedCutoff = next;
+    debugLogger.general("INFO", "Cutoff set UNSAFE due to explicit recovery/logout", { new: next });
+  }
+  async function handleInvalidCursorRecoveryReset() {
+    await setLastModifiedCutoffUnsafeForRecovery(0);
+    debugLogger.general("INFO", "Cutoff: set to 0 due to invalid-cursor recovery.");
   }
   var initPromise = null;
   async function initializeSessionCache(source = "unknown", connectWebSocketFn, stateSetters) {
@@ -1993,30 +2100,15 @@
           const devices = await fetchDevices(apiKeyValue);
           sessionCache.devices = devices;
           debugLogger.general("INFO", "Pipeline 1: Fetching incremental pushes for auto-open");
-          const storedCutoff = await storageRepository.getLastModifiedCutoff();
-          sessionCache.lastModifiedCutoff = storedCutoff ?? 0;
-          let incrementalPushes = [];
-          if (storedCutoff && storedCutoff > 0) {
-            incrementalPushes = await fetchIncrementalPushes(apiKeyValue, storedCutoff, 100);
-            debugLogger.general("INFO", "Pipeline 1: Incremental fetch complete", {
-              count: incrementalPushes.length,
-              cutoff: storedCutoff
-            });
-          } else {
-            incrementalPushes = await fetchRecentPushes(apiKeyValue, 20);
-            debugLogger.general("INFO", "Pipeline 1: First run, seeding cutoff", {
-              count: incrementalPushes.length
-            });
+          const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyValue);
+          if (isSeedRun) {
+            debugLogger.general("INFO", "Seed run: cutoff initialized; skipping processing and auto-open.");
+            const updatedCutoff2 = await storageRepository.getLastModifiedCutoff();
+            sessionCache.lastModifiedCutoff = updatedCutoff2 ?? 0;
+            return null;
           }
-          const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
-          if (maxModified > sessionCache.lastModifiedCutoff) {
-            sessionCache.lastModifiedCutoff = maxModified;
-            await storageRepository.setLastModifiedCutoff(maxModified);
-            debugLogger.general("DEBUG", "Pipeline 1: Updated cutoff", {
-              old: storedCutoff ?? 0,
-              new: maxModified
-            });
-          }
+          const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+          sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
           debugLogger.general("INFO", "Pipeline 2: Fetching display pushes for UI");
           const displayPushes = await fetchDisplayPushes(apiKeyValue, 50);
           debugLogger.general("INFO", "Pipeline 2: Display fetch complete", {
@@ -2100,18 +2192,15 @@
         const devices = await fetchDevices(apiKeyParam);
         sessionCache.devices = devices;
         debugLogger.general("DEBUG", "Pipeline 1: Refreshing incremental pushes");
-        const storedCutoff = await storageRepository.getLastModifiedCutoff();
-        let incrementalPushes = [];
-        if (storedCutoff && storedCutoff > 0) {
-          incrementalPushes = await fetchIncrementalPushes(apiKeyParam, storedCutoff, 100);
-        } else {
-          incrementalPushes = await fetchRecentPushes(apiKeyParam, 20);
+        const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyParam);
+        if (isSeedRun) {
+          debugLogger.general("INFO", "Seed run: cutoff initialized; skipping processing and auto-open.");
+          const updatedCutoff2 = await storageRepository.getLastModifiedCutoff();
+          sessionCache.lastModifiedCutoff = updatedCutoff2 ?? 0;
+          return;
         }
-        const maxModified = incrementalPushes.reduce((m, p) => Math.max(m, p.modified ?? 0), 0);
-        if (maxModified > (sessionCache.lastModifiedCutoff ?? 0)) {
-          sessionCache.lastModifiedCutoff = maxModified;
-          await storageRepository.setLastModifiedCutoff(maxModified);
-        }
+        const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+        sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
         debugLogger.general("DEBUG", "Pipeline 2: Refreshing display pushes");
         const displayPushes = await fetchDisplayPushes(apiKeyParam, 50);
         sessionCache.recentPushes = displayPushes;
@@ -2153,6 +2242,65 @@
       );
       throw error;
     }
+  }
+
+  // src/infrastructure/storage/opened-mru.repository.ts
+  var OPENED_MRU_KEY = "openedPushMRU";
+  var MRU_CAP = 500;
+  async function loadMRU() {
+    const raw = await chrome.storage.local.get(OPENED_MRU_KEY);
+    const mru = raw[OPENED_MRU_KEY];
+    return mru ?? { idens: [], maxOpenedCreated: 0 };
+  }
+  async function saveMRU(mru) {
+    await chrome.storage.local.set({ [OPENED_MRU_KEY]: mru });
+  }
+  async function hasOpenedIden(iden) {
+    const mru = await loadMRU();
+    return mru.idens.includes(iden);
+  }
+  async function markOpened(iden, created) {
+    const mru = await loadMRU();
+    if (!mru.idens.includes(iden)) {
+      mru.idens.unshift(iden);
+      if (mru.idens.length > MRU_CAP) mru.idens.length = MRU_CAP;
+    }
+    if (Number.isFinite(created) && created > mru.maxOpenedCreated) {
+      mru.maxOpenedCreated = created;
+    }
+    await saveMRU(mru);
+    debugLogger.general("DEBUG", `MRU: marked opened iden=${iden}, maxOpenedCreated=${mru.maxOpenedCreated}`);
+  }
+  async function getMaxOpenedCreated() {
+    const mru = await loadMRU();
+    return mru.maxOpenedCreated || 0;
+  }
+  async function clearOpenedMRU() {
+    await chrome.storage.local.set({
+      [OPENED_MRU_KEY]: { idens: [], maxOpenedCreated: 0 }
+    });
+  }
+
+  // src/background/diagnostics.ts
+  var DEV_ENABLED = true;
+  function installDiagnosticsMessageHandler() {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!DEV_ENABLED) return;
+      (async () => {
+        if (msg?.type === "diag:dump-autoopen") {
+          const snap = await storageRepository.getAutoOpenDebugSnapshot();
+          debugLogger.general("INFO", "DIAG auto-open snapshot", snap);
+          sendResponse({ ok: true, snap });
+        } else if (msg?.type === "diag:clear-mru") {
+          await clearOpenedMRU();
+          debugLogger.general("WARN", "DIAG MRU cleared by developer action");
+          const snap = await storageRepository.getAutoOpenDebugSnapshot();
+          debugLogger.general("INFO", "DIAG auto-open snapshot (post-clear)", snap);
+          sendResponse({ ok: true, snap });
+        }
+      })();
+      return true;
+    });
   }
 
   // src/app/reconnect/index.ts
@@ -2399,6 +2547,158 @@
     pollingMode = mode;
   }
 
+  // src/background/links.ts
+  function isLinkPush2(p) {
+    return p.type === "link" && typeof p.url === "string" && p.url.length > 0 && typeof p.iden === "string";
+  }
+  async function openTab(url) {
+    if (!url || typeof url !== "string") {
+      debugLogger.general("WARN", "Invalid URL (empty or non-string)", { url });
+      throw new Error("Invalid URL");
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      debugLogger.general("WARN", "Invalid URL (parse failed)", { url });
+      throw new Error("Invalid URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      debugLogger.general("WARN", "Invalid URL (protocol rejected)", {
+        url,
+        protocol: parsed.protocol
+      });
+      throw new Error("Invalid protocol");
+    }
+    try {
+      await chrome.tabs.create({ url, active: false });
+      debugLogger.general("DEBUG", "Tab created successfully", { url });
+    } catch {
+      debugLogger.general("WARN", "Tab creation failed, trying window fallback", {
+        url
+      });
+      await chrome.windows.create({ url, focused: false });
+      debugLogger.general("INFO", "Window created as fallback", { url });
+    }
+  }
+  async function autoOpenOfflineLinks(apiKey2, sessionCutoff) {
+    const enabled = await storageRepository.getAutoOpenLinksOnReconnect();
+    if (!enabled) {
+      debugLogger.websocket("DEBUG", "Auto-open offline links disabled");
+      return;
+    }
+    const safetyCap = await storageRepository.getMaxAutoOpenPerReconnect();
+    const lastAuto = await storageRepository.getLastAutoOpenCutoff() || 0;
+    const modifiedAfter = Math.max(lastAuto, sessionCutoff || 0);
+    debugLogger.websocket(
+      "INFO",
+      "Auto-open links: fetching incremental changes",
+      { modifiedAfter }
+    );
+    const changes = await fetchIncrementalPushes(apiKey2, modifiedAfter, 100);
+    const maxOpenedCreated = await getMaxOpenedCreated();
+    const candidates = changes.filter(isLinkPush2).filter((p) => {
+      const created = typeof p.created === "number" ? p.created : 0;
+      return created > lastAuto && created > maxOpenedCreated;
+    }).sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
+    if (candidates.length === 0) {
+      debugLogger.websocket("INFO", "Auto-open links: no new link pushes to open");
+      return;
+    }
+    debugLogger.websocket("INFO", "Auto-opening link pushes", {
+      count: candidates.length,
+      total: candidates.length
+    });
+    const openedCreated = [];
+    let openedThisRun = 0;
+    for (const p of candidates) {
+      if (openedThisRun >= safetyCap) {
+        debugLogger.websocket("WARN", "Auto-open links capped", {
+          opened: openedThisRun,
+          total: candidates.length,
+          cap: safetyCap
+        });
+        break;
+      }
+      if (await hasOpenedIden(p.iden)) {
+        debugLogger.websocket("DEBUG", "Auto-open skip (MRU)", { iden: p.iden });
+        continue;
+      }
+      try {
+        await openTab(p.url);
+        await markOpened(p.iden, p.created ?? 0);
+        debugLogger.websocket("DEBUG", "MRU marked opened", {
+          iden: p.iden,
+          created: p.created ?? 0
+        });
+        openedThisRun += 1;
+        openedCreated.push(p.created ?? 0);
+      } catch {
+        debugLogger.websocket("WARN", "Auto-open failed", { iden: p.iden, url: p.url });
+      }
+    }
+    const maxCreated = Math.max(lastAuto, ...openedCreated, 0);
+    if (maxCreated > lastAuto) {
+      await storageRepository.setLastAutoOpenCutoff(maxCreated);
+      debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", { old: lastAuto, new: maxCreated });
+    }
+  }
+
+  // src/background/processing.ts
+  async function maybeAutoOpenLink(push) {
+    if (!push.iden || push.type !== "link" || !push.url) return false;
+    const created = typeof push.created === "number" ? push.created : 0;
+    const lastAuto = await storageRepository.getLastAutoOpenCutoff() ?? 0;
+    const maxOpenedCreated = await getMaxOpenedCreated();
+    if (await hasOpenedIden(push.iden)) {
+      debugLogger.general("DEBUG", "Auto-open skip (MRU)", { iden: push.iden });
+      return false;
+    }
+    if (!(created > lastAuto && created > maxOpenedCreated)) {
+      debugLogger.general("DEBUG", "Auto-open skip (created guard)", {
+        iden: push.iden,
+        created,
+        lastAuto,
+        maxOpenedCreated
+      });
+      return false;
+    }
+    try {
+      await openTab(push.url);
+      await markOpened(push.iden, created);
+      debugLogger.general("DEBUG", "MRU marked opened", {
+        iden: push.iden,
+        created
+      });
+      const nextCutoff = Math.max(lastAuto, created);
+      await storageRepository.setLastAutoOpenCutoff(nextCutoff);
+      debugLogger.general("INFO", "Advanced lastAutoOpenCutoff", {
+        old: lastAuto,
+        new: nextCutoff
+      });
+      return true;
+    } catch (e) {
+      debugLogger.general("WARN", `AutoOpen: failed to open iden=${push.iden}: ${e.message}`);
+      return false;
+    }
+  }
+  async function maybeAutoOpenLinkWithDismiss(push) {
+    const opened = await maybeAutoOpenLink(push);
+    if (!opened || !push.iden) return false;
+    if (await storageRepository.getDismissAfterAutoOpen()) {
+      try {
+        const apiKey2 = getApiKey();
+        if (apiKey2) {
+          await dismissPush(push.iden, apiKey2);
+          debugLogger.general("INFO", `AutoOpen: dismissed iden=${push.iden} after auto-open`);
+        }
+      } catch (e) {
+        debugLogger.general("WARN", `AutoOpen: dismiss failed for iden=${push.iden}: ${e.message}`);
+      }
+    }
+    return true;
+  }
+
   // src/background/utils.ts
   function sanitizeText(text) {
     if (!text) return "";
@@ -2510,8 +2810,8 @@
       );
       if (maxModified > cutoff) {
         sessionCache.lastModifiedCutoff = maxModified;
-        await storageRepository.setLastModifiedCutoff(maxModified);
-        debugLogger.general("DEBUG", "Pipeline 1: Updated cutoff", {
+        await setLastModifiedCutoffSafe(maxModified);
+        debugLogger.general("INFO", "Updated cutoff via safe setter", {
           old: cutoff,
           new: maxModified
         });
@@ -2527,6 +2827,8 @@
         totalDisplayPushes: updatedDisplayPushes.length,
         newPushes: newPushes.length
       });
+      let openedThisRun = 0;
+      const cap = await storageRepository.getMaxAutoOpenPerReconnect();
       for (const push of newPushes) {
         debugLogger.general("INFO", "Processing new push", {
           pushIden: push.iden,
@@ -2537,17 +2839,18 @@
             pushIden: push.iden
           }, error);
         });
-        const autoOpenLinks2 = getAutoOpenLinks();
-        if (autoOpenLinks2 && isLinkPush(push)) {
-          debugLogger.general("INFO", "Auto-opening link push", {
-            pushIden: push.iden,
-            url: push.url
-          });
-          chrome.tabs.create({ url: push.url, active: false }).catch((error) => {
-            debugLogger.general("ERROR", "Failed to auto-open link", {
-              url: push.url
-            }, error);
-          });
+        if (openedThisRun < cap) {
+          const opened = await maybeAutoOpenLinkWithDismiss(push);
+          if (opened) {
+            openedThisRun += 1;
+            if (openedThisRun === cap) {
+              debugLogger.general("WARN", "Auto-open links capped", {
+                opened: openedThisRun,
+                total: newPushes.length,
+                cap
+              });
+            }
+          }
         }
       }
       chrome.runtime.sendMessage({
@@ -2865,6 +3168,7 @@
     }
   }
   async function performPollingFetch() {
+    await hydrateCutoff();
     const apiKey2 = getApiKey();
     if (!apiKey2) {
       debugLogger.general("WARN", "Cannot perform polling fetch - no API key");
@@ -3266,101 +3570,6 @@
     }
   };
 
-  // src/background/links.ts
-  function isLinkPush2(p) {
-    return p.type === "link" && typeof p.url === "string" && p.url.length > 0;
-  }
-  async function openTab(url) {
-    if (!url || typeof url !== "string") {
-      debugLogger.general("ERROR", "Cannot open tab: invalid URL provided", {
-        url
-      });
-      throw new Error("Invalid URL provided to openTab");
-    }
-    try {
-      await chrome.tabs.create({ url, active: false });
-      debugLogger.general("DEBUG", "Tab created successfully", { url });
-      return;
-    } catch (primaryError) {
-      debugLogger.general(
-        "WARN",
-        "Failed to create tab, attempting window fallback",
-        {
-          url,
-          error: primaryError.message,
-          errorType: primaryError.name
-        },
-        primaryError
-      );
-      try {
-        await chrome.windows.create({ url, focused: false });
-        debugLogger.general("INFO", "Window created as fallback", { url });
-        return;
-      } catch (fallbackError) {
-        const error = new Error(
-          `Failed to open URL in tab or window: ${fallbackError.message}`
-        );
-        debugLogger.general(
-          "ERROR",
-          "Both tab and window creation failed",
-          {
-            url,
-            primaryError: primaryError.message,
-            fallbackError: fallbackError.message
-          },
-          error
-        );
-        throw error;
-      }
-    }
-  }
-  async function autoOpenOfflineLinks(apiKey2, sessionCutoff) {
-    const enabled = await storageRepository.getAutoOpenLinksOnReconnect();
-    if (!enabled) {
-      debugLogger.websocket("DEBUG", "Auto-open offline links disabled");
-      return;
-    }
-    const safetyCap = await storageRepository.getMaxAutoOpenPerReconnect();
-    const lastAuto = await storageRepository.getLastAutoOpenCutoff() || 0;
-    const modifiedAfter = Math.max(lastAuto, sessionCutoff || 0);
-    debugLogger.websocket(
-      "INFO",
-      "Auto-open links: fetching incremental changes",
-      { modifiedAfter }
-    );
-    const changes = await fetchIncrementalPushes(apiKey2, modifiedAfter, 100);
-    const candidates = changes.filter(isLinkPush2).filter((p) => (typeof p.created === "number" ? p.created : 0) > lastAuto).sort((a, b) => (a.created || 0) - (b.created || 0));
-    if (candidates.length === 0) {
-      debugLogger.websocket(
-        "INFO",
-        "Auto-open links: no new link pushes to open"
-      );
-      return;
-    }
-    const toOpen = candidates.slice(0, safetyCap);
-    debugLogger.websocket("INFO", "Auto-opening link pushes", {
-      count: toOpen.length,
-      total: candidates.length
-    });
-    for (const p of toOpen) {
-      await openTab(p.url);
-    }
-    const maxCreated = Math.max(lastAuto, ...toOpen.map((p) => p.created || 0));
-    if (maxCreated > lastAuto) {
-      await storageRepository.setLastAutoOpenCutoff(maxCreated);
-      debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", {
-        old: lastAuto,
-        new: maxCreated
-      });
-    }
-    if (candidates.length > safetyCap) {
-      debugLogger.websocket("WARN", "Auto-open links capped", {
-        total: candidates.length,
-        opened: toOpen.length
-      });
-    }
-  }
-
   // src/realtime/postConnectQueue.ts
   var queue = [];
   function enqueuePostConnect(task) {
@@ -3383,12 +3592,14 @@
   }) {
     startCriticalKeepalive();
     try {
+      await ensureDebugConfigLoadedOnce();
       const apiKey2 = await storageRepository.getApiKey();
       if (!apiKey2) {
         debugLogger.general("WARN", "No API key available, skipping initialization");
         return;
       }
       setApiKey(apiKey2);
+      await hydrateCutoff();
       debugLogger.general("INFO", "Starting orchestrated initialization", { trigger });
       const cachedUser = await storageRepository.getUserInfoCache();
       if (cachedUser) {
@@ -3485,7 +3696,21 @@
   }
 
   // src/background/index.ts
-  debugConfigManager.loadConfig();
+  var loadDebugConfigOnce = null;
+  function ensureDebugConfigLoadedOnce() {
+    if (!loadDebugConfigOnce) {
+      loadDebugConfigOnce = (async () => {
+        try {
+          await debugConfigManager.loadConfig();
+          debugLogger.general("INFO", "Debug configuration loaded (single-flight)");
+        } catch (e) {
+          debugLogger.general("WARN", "Failed to load debug configuration (single-flight)", { error: e.message });
+        }
+      })();
+    }
+    return loadDebugConfigOnce;
+  }
+  ensureDebugConfigLoadedOnce();
   var notificationDataStore = /* @__PURE__ */ new Map();
   var MAX_NOTIFICATION_STORE_SIZE = 100;
   function addToNotificationStore(id, push) {
@@ -3651,23 +3876,11 @@
     });
     const autoOpenLinks2 = getAutoOpenLinks();
     if (autoOpenLinks2 && isLinkPush(decryptedPush)) {
-      debugLogger.general("INFO", "Auto-opening link push", {
-        pushIden: decryptedPush.iden,
-        url: decryptedPush.url
-      });
-      chrome.tabs.create({
+      await maybeAutoOpenLinkWithDismiss({
+        iden: decryptedPush.iden,
+        type: decryptedPush.type,
         url: decryptedPush.url,
-        active: false
-        // Open in background to avoid disrupting user
-      }).catch((error) => {
-        debugLogger.general(
-          "ERROR",
-          "Failed to auto-open link",
-          {
-            url: decryptedPush.url
-          },
-          error
-        );
+        created: decryptedPush.created
       });
     }
     await promoteToReadyIfConnected();
@@ -3740,6 +3953,7 @@
       }
     );
   });
+  installDiagnosticsMessageHandler();
   function connectWebSocket() {
     if (websocketClient2) {
       const isConnected = websocketClient2.isConnected();
@@ -4437,10 +4651,12 @@
     debugLogger.general("INFO", "Bootstrap start", { trigger });
     void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
   }
-  chrome.runtime.onStartup.addListener(() => {
+  chrome.runtime.onStartup.addListener(async () => {
+    await ensureDebugConfigLoadedOnce();
     void bootstrap("startup");
   });
-  chrome.runtime.onInstalled.addListener(() => {
+  chrome.runtime.onInstalled.addListener(async () => {
+    await ensureDebugConfigLoadedOnce();
     void bootstrap("install");
   });
 })();

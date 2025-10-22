@@ -19,6 +19,7 @@ import {
   handleInvalidCursorRecovery,
 } from "../app/session";
 import { fetchDevices, updateDeviceNickname, fetchRecentPushes } from "../app/api/client";
+import { installDiagnosticsMessageHandler } from "./diagnostics";
 import { ensureConfigLoaded } from "../app/reconnect";
 import { checkPushTypeSupport, SUPPORTED_PUSH_TYPES } from "../app/push-types";
 import { PushbulletCrypto } from "../lib/crypto";
@@ -53,6 +54,7 @@ import {
 } from "./utils";
 import { autoOpenOfflineLinks } from "./links";
 import { orchestrateInitialization } from "./startup";
+import { maybeAutoOpenLinkWithDismiss } from "./processing";
 import { runPostConnect } from "../realtime/postConnectQueue";
 import { validatePrivilegedMessage } from "../lib/security/message-validation";
 import { handleKeepaliveAlarm } from "./keepalive";
@@ -63,8 +65,25 @@ import {
   clearSessionCache,
 } from "../infrastructure/storage/indexed-db";
 
+// Load debug configuration (single-flight)
+let loadDebugConfigOnce: Promise<void> | null = null;
+
+export function ensureDebugConfigLoadedOnce(): Promise<void> {
+  if (!loadDebugConfigOnce) {
+    loadDebugConfigOnce = (async () => {
+      try {
+        await debugConfigManager.loadConfig();
+        debugLogger.general('INFO', 'Debug configuration loaded (single-flight)');
+      } catch (e) {
+        debugLogger.general('WARN', 'Failed to load debug configuration (single-flight)', { error: (e as Error).message });
+      }
+    })();
+  }
+  return loadDebugConfigOnce;
+}
+
 // Load debug configuration
-debugConfigManager.loadConfig();
+ensureDebugConfigLoadedOnce();
 
 // Store notification data for detail view
 // SECURITY FIX (M-06): Limit store size to prevent memory leak
@@ -309,26 +328,12 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
   // Auto-open links if setting is enabled
   const autoOpenLinks = getAutoOpenLinks();
   if (autoOpenLinks && isLinkPush(decryptedPush)) {
-    debugLogger.general("INFO", "Auto-opening link push", {
-      pushIden: decryptedPush.iden,
+    await maybeAutoOpenLinkWithDismiss({
+      iden: decryptedPush.iden,
+      type: decryptedPush.type,
       url: decryptedPush.url,
+      created: decryptedPush.created,
     });
-
-    chrome.tabs
-      .create({
-        url: decryptedPush.url,
-        active: false, // Open in background to avoid disrupting user
-      })
-      .catch((error) => {
-        debugLogger.general(
-          "ERROR",
-          "Failed to auto-open link",
-          {
-            url: decryptedPush.url,
-          },
-          error,
-        );
-      });
   }
 
   await promoteToReadyIfConnected();
@@ -426,6 +431,9 @@ const stateMachineReady = ServiceWorkerStateMachine.create(
     },
   );
 });
+
+// Install diagnostics message handler
+installDiagnosticsMessageHandler();
 
 /**
  * Connect to WebSocket
@@ -1348,10 +1356,12 @@ async function bootstrap(
   void orchestrateInitialization({ trigger, connectWs: connectWebSocket });
 }
 
-chrome.runtime.onStartup.addListener(() => {
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureDebugConfigLoadedOnce();
   void bootstrap("startup");
 });
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
+  await ensureDebugConfigLoadedOnce();
   void bootstrap("install");
 });
 

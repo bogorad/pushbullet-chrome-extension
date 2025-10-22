@@ -1,10 +1,11 @@
 import { fetchIncrementalPushes } from "../app/api/client";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
+import { hasOpenedIden, markOpened, getMaxOpenedCreated } from "../infrastructure/storage/opened-mru.repository";
 import type { Push } from "../types/domain";
 import { debugLogger } from "../lib/logging";
 
-function isLinkPush(p: Push): p is Push & { url: string } {
-  return p.type === "link" && typeof p.url === "string" && p.url.length > 0;
+function isLinkPush(p: Push): p is Push & { url: string; iden: string } {
+  return p.type === "link" && typeof p.url === "string" && p.url.length > 0 && typeof p.iden === "string";
 }
 
 /**
@@ -21,57 +22,34 @@ function isLinkPush(p: Push): p is Push & { url: string } {
  * @param url - The URL to open. Must be a valid HTTP/HTTPS URL.
  * @returns Promise that resolves when the tab/window is created, or rejects if both fail.
  */
-async function openTab(url: string): Promise<void> {
-  // Validate URL before attempting to open
+export async function openTab(url: string): Promise<void> {
   if (!url || typeof url !== "string") {
-    debugLogger.general("ERROR", "Cannot open tab: invalid URL provided", {
-      url,
-    });
-    throw new Error("Invalid URL provided to openTab");
+    debugLogger.general("WARN", "Invalid URL (empty or non-string)", { url });
+    throw new Error("Invalid URL");
   }
-
-  // Primary strategy: Create a new background tab
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    debugLogger.general("WARN", "Invalid URL (parse failed)", { url });
+    throw new Error("Invalid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    debugLogger.general("WARN", "Invalid URL (protocol rejected)", {
+      url,
+      protocol: parsed.protocol,
+    });
+    throw new Error("Invalid protocol");
+  }
   try {
     await chrome.tabs.create({ url, active: false });
     debugLogger.general("DEBUG", "Tab created successfully", { url });
-    return; // Success - exit early
-  } catch (primaryError) {
-    // Log the primary failure for debugging
-    debugLogger.general(
-      "WARN",
-      "Failed to create tab, attempting window fallback",
-      {
-        url,
-        error: (primaryError as Error).message,
-        errorType: (primaryError as Error).name,
-      },
-      primaryError as Error,
-    );
-
-    // Fallback strategy: Create a new unfocused window
-    try {
-      await chrome.windows.create({ url, focused: false });
-      debugLogger.general("INFO", "Window created as fallback", { url });
-      return; // Fallback success
-    } catch (fallbackError) {
-      // Both strategies failed - log and propagate error
-      const error = new Error(
-        `Failed to open URL in tab or window: ${(fallbackError as Error).message}`,
-      );
-
-      debugLogger.general(
-        "ERROR",
-        "Both tab and window creation failed",
-        {
-          url,
-          primaryError: (primaryError as Error).message,
-          fallbackError: (fallbackError as Error).message,
-        },
-        error,
-      );
-
-      throw error; // Propagate to caller
-    }
+  } catch {
+    debugLogger.general("WARN", "Tab creation failed, trying window fallback", {
+      url,
+    });
+    await chrome.windows.create({ url, focused: false });
+    debugLogger.general("INFO", "Window created as fallback", { url });
   }
 }
 
@@ -96,43 +74,62 @@ export async function autoOpenOfflineLinks(
   );
 
   const changes = await fetchIncrementalPushes(apiKey, modifiedAfter, 100);
+
+  // New: apply MRU + created guards before selecting toOpen
+  const maxOpenedCreated = await getMaxOpenedCreated();
   const candidates = changes
     .filter(isLinkPush)
-    .filter((p) => (typeof p.created === "number" ? p.created : 0) > lastAuto)
-    .sort((a, b) => (a.created || 0) - (b.created || 0));
+    .filter(p => {
+      const created = typeof p.created === 'number' ? p.created : 0;
+      return created > lastAuto && created > maxOpenedCreated;
+    })
+    .sort((a, b) => (a.created ?? 0) - (b.created ?? 0));
 
   if (candidates.length === 0) {
-    debugLogger.websocket(
-      "INFO",
-      "Auto-open links: no new link pushes to open",
-    );
+    debugLogger.websocket("INFO", "Auto-open links: no new link pushes to open");
     return;
   }
 
-  const toOpen = candidates.slice(0, safetyCap);
   debugLogger.websocket("INFO", "Auto-opening link pushes", {
-    count: toOpen.length,
+    count: candidates.length,
     total: candidates.length,
   });
 
-  for (const p of toOpen) {
-    await openTab(p.url);
+  const openedCreated: number[] = [];
+  let openedThisRun = 0;
+  for (const p of candidates) {
+    if (openedThisRun >= safetyCap) {
+      debugLogger.websocket("WARN", "Auto-open links capped", {
+        opened: openedThisRun,
+        total: candidates.length,
+        cap: safetyCap,
+      });
+      break;
+    }
+
+    if (await hasOpenedIden(p.iden)) {
+      debugLogger.websocket("DEBUG", "Auto-open skip (MRU)", { iden: p.iden });
+      continue;
+    }
+
+    try {
+      await openTab(p.url);
+      await markOpened(p.iden, p.created ?? 0);
+      debugLogger.websocket("DEBUG", "MRU marked opened", {
+        iden: p.iden,
+        created: p.created ?? 0,
+      });
+      openedThisRun += 1;
+      openedCreated.push(p.created ?? 0);
+    } catch {
+      debugLogger.websocket("WARN", "Auto-open failed", { iden: p.iden, url: p.url });
+    }
   }
 
-  const maxCreated = Math.max(lastAuto, ...toOpen.map((p) => p.created || 0));
+  const maxCreated = Math.max(lastAuto, ...openedCreated, 0);
   if (maxCreated > lastAuto) {
     await storageRepository.setLastAutoOpenCutoff(maxCreated);
-    debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", {
-      old: lastAuto,
-      new: maxCreated,
-    });
-  }
-
-  if (candidates.length > safetyCap) {
-    debugLogger.websocket("WARN", "Auto-open links capped", {
-      total: candidates.length,
-      opened: toOpen.length,
-    });
+    debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", { old: lastAuto, new: maxCreated });
   }
 }
 

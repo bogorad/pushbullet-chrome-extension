@@ -149,6 +149,9 @@
      * Set Last Modified Cutoff in local storage
      */
     async setLastModifiedCutoff(value) {
+      if (value === 0) {
+        console.warn("Storage: Setting lastModifiedCutoff to 0 - ensure this is via unsafe setter");
+      }
       await chrome.storage.local.set({ lastModifiedCutoff: value });
     }
     /**
@@ -201,6 +204,19 @@
       await chrome.storage.local.set({ maxAutoOpenPerReconnect: value });
     }
     /**
+     * Get Dismiss After Auto Open setting from local storage
+     */
+    async getDismissAfterAutoOpen() {
+      const result = await chrome.storage.local.get(["dismissAfterAutoOpen"]);
+      return Boolean(result.dismissAfterAutoOpen);
+    }
+    /**
+     * Set Dismiss After Auto Open setting in local storage
+     */
+    async setDismissAfterAutoOpen(value) {
+      await chrome.storage.local.set({ dismissAfterAutoOpen: value });
+    }
+    /**
      * Get User Info Cache from local storage
      */
     async getUserInfoCache() {
@@ -231,6 +247,21 @@
         chrome.storage.sync.remove(keys),
         chrome.storage.local.remove(keys)
       ]);
+    }
+    /**
+     * Get Auto Open Debug Snapshot for diagnostics
+     */
+    async getAutoOpenDebugSnapshot() {
+      const { lastAutoOpenCutoff = 0 } = await chrome.storage.local.get("lastAutoOpenCutoff");
+      const { lastModifiedCutoff = 0 } = await chrome.storage.local.get("lastModifiedCutoff");
+      const raw = await chrome.storage.local.get("openedPushMRU");
+      const mru = raw.openedPushMRU;
+      return {
+        lastAutoOpenCutoff: typeof lastAutoOpenCutoff === "number" ? lastAutoOpenCutoff : 0,
+        lastModifiedCutoff: typeof lastModifiedCutoff === "number" ? lastModifiedCutoff : 0,
+        mruCount: Array.isArray(mru?.idens) ? mru.idens.length : 0,
+        maxOpenedCreated: typeof mru?.maxOpenedCreated === "number" ? mru.maxOpenedCreated : 0
+      };
     }
   };
   var storageRepository = new ChromeStorageRepository();

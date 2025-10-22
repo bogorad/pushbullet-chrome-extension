@@ -4,20 +4,19 @@
 
 import { debugLogger } from "../lib/logging";
 import { performanceMonitor } from "../lib/perf";
-import { sessionCache } from "../app/session";
+import { sessionCache, hydrateCutoff, setLastModifiedCutoffSafe } from "../app/session";
 import { fetchIncrementalPushes } from "../app/api/client";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 import {
   getApiKey,
-  getAutoOpenLinks,
   setPollingMode,
   isPollingMode,
 } from "./state";
-import type { Push, LinkPush } from "../types/domain";
-import { isLinkPush } from "../types/domain";
+import type { Push } from "../types/domain";
 import { createNotificationWithTimeout } from "../app/notifications";
 import { ensureConfigLoaded } from "../app/reconnect";
 import { globalEventBus } from "../lib/events/event-bus";
+import { maybeAutoOpenLinkWithDismiss } from "./processing";
 
 // Guard flag to prevent concurrent context menu setup
 // Ensures idempotent behavior when multiple startup events fire
@@ -228,9 +227,9 @@ export async function refreshPushes(
 
     if (maxModified > cutoff) {
       sessionCache.lastModifiedCutoff = maxModified;
-      await storageRepository.setLastModifiedCutoff(maxModified);
+      await setLastModifiedCutoffSafe(maxModified);
 
-      debugLogger.general('DEBUG', 'Pipeline 1: Updated cutoff', {
+      debugLogger.general('INFO', 'Updated cutoff via safe setter', {
         old: cutoff,
         new: maxModified,
       });
@@ -261,6 +260,9 @@ export async function refreshPushes(
     // ========================================
     // Only notify and auto-open for truly NEW pushes (from newPushes array)
 
+    let openedThisRun = 0;
+    const cap = await storageRepository.getMaxAutoOpenPerReconnect();
+
     for (const push of newPushes) {
       debugLogger.general('INFO', 'Processing new push', {
         pushIden: push.iden,
@@ -274,21 +276,19 @@ export async function refreshPushes(
         }, error);
       });
 
-      // Auto-open links if enabled
-      const autoOpenLinks = getAutoOpenLinks();
-      if (autoOpenLinks && isLinkPush(push)) {
-        debugLogger.general('INFO', 'Auto-opening link push', {
-          pushIden: push.iden,
-          url: (push as LinkPush).url,
-        });
-
-        chrome.tabs
-          .create({ url: (push as LinkPush).url, active: false })
-          .catch((error) => {
-            debugLogger.general('ERROR', 'Failed to auto-open link', {
-              url: (push as LinkPush).url,
-            }, error);
-          });
+      // Auto-open links if enabled and under cap
+      if (openedThisRun < cap) {
+        const opened = await maybeAutoOpenLinkWithDismiss(push);
+        if (opened) {
+          openedThisRun += 1;
+          if (openedThisRun === cap) {
+            debugLogger.general('WARN', 'Auto-open links capped', {
+              opened: openedThisRun,
+              total: newPushes.length,
+              cap,
+            });
+          }
+        }
       }
     }
 
@@ -720,6 +720,7 @@ export function stopPollingMode(): void {
  * Perform polling fetch
  */
 export async function performPollingFetch(): Promise<void> {
+  await hydrateCutoff();
   const apiKey = getApiKey();
   if (!apiKey) {
     debugLogger.general("WARN", "Cannot perform polling fetch - no API key");
