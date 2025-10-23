@@ -229,8 +229,18 @@
      </div>
     
     <p class="disclaimer">This is an unofficial extension and is not affiliated with Pushbullet Inc.</p>
-  </div>
-  
-  <script src="dist/popup.js"></script>
+   </div>
+
+   <!-- Error State Section -->
+   <div id="error-state-panel" style="display:none">
+     <div class="error-message">
+       Extension is in error state. Connection lost.
+     </div>
+     <button id="manual-reconnect-btn" class="primary-button">
+       Retry Connection
+     </button>
+   </div>
+
+   <script src="dist/popup.js"></script>
 </body>
 </html>

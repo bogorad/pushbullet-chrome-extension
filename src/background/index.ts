@@ -541,6 +541,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
 
+  // --- NEW: Handle auto-recovery alarm ---
+  if (alarm.name === 'auto-recovery-from-error') {
+    debugLogger.general('INFO', 'Auto-recovery triggered from ERROR state');
+
+    // Attempt to transition back to reconnecting
+    await stateMachine.transition('ATTEMPT_RECONNECT');
+
+    return;
+  }
+
   // Ensure state machine is ready
   await stateMachineReady;
 
@@ -806,6 +816,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           websocketConnected: websocketClient
             ? websocketClient.isConnected()
             : false,
+          state: stateMachine.getCurrentState(),
         });
       } catch (error) {
         debugLogger.general("ERROR", "Failed to handle GETSESSIONDATA", {
@@ -821,6 +832,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           autoOpenLinks: false,
           deviceNickname: "",
           websocketConnected: false,
+          state: stateMachine.getCurrentState(),
         });
       }
     })();
@@ -868,6 +880,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           websocketConnected: websocketClient
             ? websocketClient.isConnected()
             : false,
+          state: stateMachine.getCurrentState(),
         });
       })
       .catch((error) => {
@@ -920,6 +933,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               chats: sessionCache.chats || [], // ← ADD THIS
               autoOpenLinks: sessionCache.autoOpenLinks,
               deviceNickname: sessionCache.deviceNickname,
+              state: stateMachine.getCurrentState(),
             });
           })
           .catch((error) => {
@@ -1186,6 +1200,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "Notification not found" });
     }
     return false; // Synchronous response
+  } else if (message.action === 'attemptReconnect') {
+    debugLogger.general('INFO', 'Manual reconnection requested from popup');
+
+    (async () => {
+      await stateMachine.transition('ATTEMPT_RECONNECT');
+      sendResponse({ success: true });
+    })();
+
+    return true; // Async response
   } else if (message.action === MessageAction.SEND_PUSH) {
     // Handle push sending from popup
     // SERVICE WORKER AMNESIA FIX: Ensure configuration is loaded before attempting to send push

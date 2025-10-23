@@ -270,6 +270,8 @@
   var loadingSection = getElementById("loading-section");
   var loginSection = getElementById("login-section");
   var mainSection = getElementById("main-section");
+  var errorStatePanel = getElementById("error-state-panel");
+  var manualReconnectBtn = getElementById("manual-reconnect-btn");
   var apiKeyInput = getElementById("api-key");
   var deviceNicknameInput = getElementById("device-nickname");
   var saveApiKeyButton = getElementById("save-api-key");
@@ -310,6 +312,10 @@
   async function initializeFromSessionData(response) {
     if (!response.isAuthenticated) {
       showSection("login");
+      return;
+    }
+    if (response.state === "error") {
+      showSection("error");
       return;
     }
     deviceNickname = response.deviceNickname;
@@ -358,6 +364,7 @@
     loadingSection.style.display = section === "loading" ? "flex" : "none";
     loginSection.style.display = section === "login" ? "block" : "none";
     mainSection.style.display = section === "main" ? "block" : "none";
+    errorStatePanel.style.display = section === "error" ? "block" : "none";
   }
   function handleGlobalHotkeys(event) {
     const target = event.target;
@@ -430,6 +437,12 @@
       chrome.tabs.create({
         url: chrome.runtime.getURL("debug-dashboard.html")
       });
+    });
+    manualReconnectBtn.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({
+        action: "attemptReconnect"
+      });
+      window.close();
     });
     document.addEventListener("keydown", handleGlobalHotkeys);
   }

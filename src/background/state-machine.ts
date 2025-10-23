@@ -305,11 +305,22 @@ export class ServiceWorkerStateMachine {
       }
       break;
 
-    case ServiceWorkerState.ERROR:
-      if (event === 'API_KEY_SET') {
+    case ServiceWorkerState.ERROR: {
+      // ERROR state should allow recovery attempts
+      switch (event) {
+      case 'ATTEMPT_RECONNECT':
+        // User manually triggered reconnect (e.g., from popup)
+        return ServiceWorkerState.RECONNECTING;
+
+      case 'API_KEY_SET':
+        // User reconfigured API key - try initializing again
         return ServiceWorkerState.INITIALIZING;
+
+      default:
+        // Stay in ERROR state for all other events
+        return ServiceWorkerState.ERROR;
       }
-      break;
+    }
     }
 
     // No valid transition found, stay in current state
@@ -401,7 +412,7 @@ export class ServiceWorkerStateMachine {
       }
       break;
 
-    case ServiceWorkerState.ERROR:
+    case ServiceWorkerState.ERROR: {
       // Update icon to red (disconnected)
       updateConnectionIcon('disconnected');
 
@@ -422,7 +433,23 @@ export class ServiceWorkerStateMachine {
       if (this.callbacks.onShowError) {
         this.callbacks.onShowError('Service worker encountered an error');
       }
+
+      // --- NEW: Automatic recovery attempt ---
+      // Schedule automatic reconnection attempt after 30 seconds
+      // This prevents the extension from being permanently stuck
+      const RECOVERY_DELAY_MS = 30000; // 30 seconds
+
+      chrome.alarms.create('auto-recovery-from-error', {
+        delayInMinutes: RECOVERY_DELAY_MS / 60000
+      });
+
+      debugLogger.general('INFO', '[StateMachine] Scheduled automatic recovery', {
+        delayMs: RECOVERY_DELAY_MS,
+        currentState: this.currentState
+      });
+
       break;
+    }
     }
   }
 

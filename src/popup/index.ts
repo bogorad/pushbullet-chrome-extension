@@ -37,6 +37,7 @@ interface SessionData {
   autoOpenLinks: boolean;
   websocketConnected?: boolean;
   deviceNickname: string;
+  state?: string; // State machine state
 }
 
 type PushType = "note" | "link" | "file";
@@ -66,6 +67,8 @@ interface UploadRequestResponse {
 const loadingSection = getElementById<HTMLDivElement>("loading-section");
 const loginSection = getElementById<HTMLDivElement>("login-section");
 const mainSection = getElementById<HTMLDivElement>("main-section");
+const errorStatePanel = getElementById<HTMLDivElement>("error-state-panel");
+const manualReconnectBtn = getElementById<HTMLButtonElement>("manual-reconnect-btn");
 const apiKeyInput = getElementById<HTMLInputElement>("api-key");
 const deviceNicknameInput = getElementById<HTMLInputElement>("device-nickname");
 const saveApiKeyButton = getElementById<HTMLButtonElement>("save-api-key");
@@ -118,6 +121,12 @@ function init(): void {
 async function initializeFromSessionData(response: SessionData): Promise<void> {
   if (!response.isAuthenticated) {
     showSection("login");
+    return;
+  }
+
+  // Check if extension is in error state
+  if (response.state === 'error') {
+    showSection("error");
     return;
   }
 
@@ -194,11 +203,12 @@ function checkStorageForApiKey(): void {
 /**
  * Show section
  */
-function showSection(section: "loading" | "login" | "main"): void {
+function showSection(section: "loading" | "login" | "main" | "error"): void {
   console.log("Showing section:", section);
   loadingSection.style.display = section === "loading" ? "flex" : "none";
   loginSection.style.display = section === "login" ? "block" : "none";
   mainSection.style.display = section === "main" ? "block" : "none";
+  errorStatePanel.style.display = section === "error" ? "block" : "none";
 }
 
 /**
@@ -328,6 +338,17 @@ function setupEventListeners(): void {
     chrome.tabs.create({
       url: chrome.runtime.getURL("debug-dashboard.html"),
     });
+  });
+
+  // Manual reconnect button
+  manualReconnectBtn.addEventListener('click', async () => {
+    // Send message to background to attempt reconnection
+    await chrome.runtime.sendMessage({
+      action: 'attemptReconnect'
+    });
+
+    // Close popup
+    window.close();
   });
 
   // === NEW CODE: Global keyboard shortcuts ===

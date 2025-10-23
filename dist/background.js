@@ -3610,11 +3610,16 @@
             return "error" /* ERROR */;
           }
           break;
-        case "error" /* ERROR */:
-          if (event === "API_KEY_SET") {
-            return "initializing" /* INITIALIZING */;
+        case "error" /* ERROR */: {
+          switch (event) {
+            case "ATTEMPT_RECONNECT":
+              return "reconnecting" /* RECONNECTING */;
+            case "API_KEY_SET":
+              return "initializing" /* INITIALIZING */;
+            default:
+              return "error" /* ERROR */;
           }
-          break;
+        }
       }
       return this.currentState;
     }
@@ -3676,7 +3681,7 @@
             this.callbacks.onConnectWebSocket();
           }
           break;
-        case "error" /* ERROR */:
+        case "error" /* ERROR */: {
           updateConnectionIcon("disconnected");
           try {
             await chrome.storage.local.set({
@@ -3692,7 +3697,16 @@
           if (this.callbacks.onShowError) {
             this.callbacks.onShowError("Service worker encountered an error");
           }
+          const RECOVERY_DELAY_MS = 3e4;
+          chrome.alarms.create("auto-recovery-from-error", {
+            delayInMinutes: RECOVERY_DELAY_MS / 6e4
+          });
+          debugLogger.general("INFO", "[StateMachine] Scheduled automatic recovery", {
+            delayMs: RECOVERY_DELAY_MS,
+            currentState: this.currentState
+          });
           break;
+        }
       }
     }
     /**
@@ -4289,6 +4303,11 @@
       await debugLogger.flush();
       return;
     }
+    if (alarm.name === "auto-recovery-from-error") {
+      debugLogger.general("INFO", "Auto-recovery triggered from ERROR state");
+      await stateMachine.transition("ATTEMPT_RECONNECT");
+      return;
+    }
     await stateMachineReady;
     if (alarm.name === "websocketHealthCheck") {
       if (stateMachine.isInState("error" /* ERROR */)) {
@@ -4488,7 +4507,8 @@
             chats: sessionCache.chats,
             autoOpenLinks: getAutoOpenLinks(),
             deviceNickname: getDeviceNickname(),
-            websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
+            websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false,
+            state: stateMachine.getCurrentState()
           });
         } catch (error) {
           debugLogger.general("ERROR", "Failed to handle GETSESSIONDATA", {
@@ -4502,7 +4522,8 @@
             chats: [],
             autoOpenLinks: false,
             deviceNickname: "",
-            websocketConnected: false
+            websocketConnected: false,
+            state: stateMachine.getCurrentState()
           });
         }
       })();
@@ -4533,7 +4554,8 @@
           // ← ADD THIS
           autoOpenLinks: sessionCache.autoOpenLinks,
           deviceNickname: sessionCache.deviceNickname,
-          websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
+          websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false,
+          state: stateMachine.getCurrentState()
         });
       }).catch((error) => {
         debugLogger.general("ERROR", "Error saving API key", null, error);
@@ -4571,7 +4593,8 @@
               chats: sessionCache.chats || [],
               // ← ADD THIS
               autoOpenLinks: sessionCache.autoOpenLinks,
-              deviceNickname: sessionCache.deviceNickname
+              deviceNickname: sessionCache.deviceNickname,
+              state: stateMachine.getCurrentState()
             });
           }).catch((error) => {
             debugLogger.general(
@@ -4780,6 +4803,13 @@
         sendResponse({ success: false, error: "Notification not found" });
       }
       return false;
+    } else if (message.action === "attemptReconnect") {
+      debugLogger.general("INFO", "Manual reconnection requested from popup");
+      (async () => {
+        await stateMachine.transition("ATTEMPT_RECONNECT");
+        sendResponse({ success: true });
+      })();
+      return true;
     } else if (message.action === "sendPush" /* SEND_PUSH */) {
       (async () => {
         try {
