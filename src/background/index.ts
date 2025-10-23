@@ -19,7 +19,11 @@ import {
   handleInvalidCursorRecovery,
   getInitPromise,
 } from "../app/session";
-import { fetchDevices, updateDeviceNickname, fetchRecentPushes } from "../app/api/client";
+import {
+  fetchDevices,
+  updateDeviceNickname,
+  fetchRecentPushes,
+} from "../app/api/client";
 import { installDiagnosticsMessageHandler } from "./diagnostics";
 import { ensureConfigLoaded } from "../app/reconnect";
 import { checkPushTypeSupport, SUPPORTED_PUSH_TYPES } from "../app/push-types";
@@ -74,16 +78,21 @@ export function ensureDebugConfigLoadedOnce(): Promise<void> {
     loadDebugConfigOnce = (async () => {
       try {
         await debugConfigManager.loadConfig();
-        debugLogger.general('INFO', 'Debug configuration loaded (single-flight)');
+        debugLogger.general(
+          "INFO",
+          "Debug configuration loaded (single-flight)",
+        );
       } catch (e) {
-        debugLogger.general('WARN', 'Failed to load debug configuration (single-flight)', { error: (e as Error).message });
+        debugLogger.general(
+          "WARN",
+          "Failed to load debug configuration (single-flight)",
+          { error: (e as Error).message },
+        );
       }
     })();
   }
   return loadDebugConfigOnce;
 }
-
-
 
 // Store notification data for detail view
 // SECURITY FIX (M-06): Limit store size to prevent memory leak
@@ -227,7 +236,10 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
           completeData: decryptedPush,
         });
       } else {
-        debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+        debugLogger.general(
+          "WARN",
+          "Cannot decrypt push - no encryption password set",
+        );
         decryptionFailed = true;
       }
     } catch (error) {
@@ -235,7 +247,7 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
         "ERROR",
         "Failed to decrypt push",
         { error: (error as Error).message },
-        error as Error
+        error as Error,
       );
       decryptionFailed = true;
     }
@@ -244,10 +256,15 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
   // ✅ FIX: Skip type checking if decryption failed
   // For encrypted pushes, we can't check type until after decryption
   if (decryptionFailed) {
-    debugLogger.general("WARN", "Skipping encrypted push due to decryption failure", {
-      pushIden: push.iden,
-      hasEncryptionPassword: !!(await storageRepository.getEncryptionPassword()),
-    });
+    debugLogger.general(
+      "WARN",
+      "Skipping encrypted push due to decryption failure",
+      {
+        pushIden: push.iden,
+        hasEncryptionPassword:
+          !!(await storageRepository.getEncryptionPassword()),
+      },
+    );
     return; // Exit early - can't process without decrypting
   }
 
@@ -345,7 +362,10 @@ globalEventBus.on("websocket:message", async () => {
 });
 
 globalEventBus.on("websocket:connected", async () => {
-  debugLogger.websocket("INFO", "WebSocket connected - post-connect tasks starting");
+  debugLogger.websocket(
+    "INFO",
+    "WebSocket connected - post-connect tasks starting",
+  );
   await stateMachineReady;
   stateMachine.transition("WS_CONNECTED");
   void runPostConnect();
@@ -372,8 +392,6 @@ globalEventBus.on("websocket:state", (state: string) => {
 globalEventBus.on("state:enter:reconnecting", () => {
   ranReconnectAutoOpen = false;
 });
-
-
 
 // Initialize State Machine
 // ARCHITECTURAL CHANGE: Centralized lifecycle management
@@ -459,8 +477,6 @@ function connectWebSocket(): void {
     }
   }
 
-
-
   // SECURITY FIX (H-02): Dispose existing socket before creating new one
   if (websocketClient) {
     debugLogger.websocket(
@@ -542,11 +558,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 
   // --- NEW: Handle auto-recovery alarm ---
-  if (alarm.name === 'auto-recovery-from-error') {
-    debugLogger.general('INFO', 'Auto-recovery triggered from ERROR state');
+  if (alarm.name === "auto-recovery-from-error") {
+    debugLogger.general("INFO", "Auto-recovery triggered from ERROR state");
 
     // Attempt to transition back to reconnecting
-    await stateMachine.transition('ATTEMPT_RECONNECT');
+    await stateMachine.transition("ATTEMPT_RECONNECT");
 
     return;
   }
@@ -745,7 +761,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const isWakeUp = apiKey && !sessionCache.isAuthenticated;
 
         if (isWakeUp) {
-          debugLogger.general('INFO',
+          debugLogger.general(
+            "INFO",
             "Service worker wake-up detected - checking for cached data",
             { timestamp: new Date().toISOString() },
           );
@@ -754,16 +771,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const existingInit = getInitPromise();
 
           if (existingInit) {
-            debugLogger.general('INFO',
+            debugLogger.general(
+              "INFO",
               "Initialization already in progress (likely from startup), awaiting completion",
               { source: "getSessionData" },
             );
 
             try {
               await existingInit;
-              debugLogger.general('INFO', "Awaited startup initialization successfully");
+              debugLogger.general(
+                "INFO",
+                "Awaited startup initialization successfully",
+              );
             } catch (error) {
-              debugLogger.general('ERROR',
+              debugLogger.general(
+                "ERROR",
                 "Startup initialization failed, popup will retry",
                 null,
                 error as Error,
@@ -783,7 +805,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const shouldFetchPushes =
           !isWakeUp &&
           apiKey &&
-          (!sessionCache.recentPushes || sessionCache.recentPushes.length === 0);
+          (!sessionCache.recentPushes ||
+            sessionCache.recentPushes.length === 0);
 
         if (shouldFetchPushes) {
           debugLogger.general(
@@ -1200,11 +1223,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "Notification not found" });
     }
     return false; // Synchronous response
-  } else if (message.action === 'attemptReconnect') {
-    debugLogger.general('INFO', 'Manual reconnection requested from popup');
+  } else if (message.action === "attemptReconnect") {
+    debugLogger.general("INFO", "Manual reconnection requested from popup");
 
     (async () => {
-      await stateMachine.transition('ATTEMPT_RECONNECT');
+      await stateMachine.transition("ATTEMPT_RECONNECT");
       sendResponse({ success: true });
     })();
 
@@ -1397,43 +1420,73 @@ async function bootstrap(
   // --- CRITICAL FIX START ---
   // Ensure configuration is loaded BEFORE checking for API key
   // The STARTUP event needs accurate hasApiKey state
-  try {
-    await ensureConfigLoaded(
-      {
-        setApiKey,
-        setDeviceIden,
-        setAutoOpenLinks,
-        setDeviceNickname,
-        setNotificationTimeout,
-      },
-      {
-        getApiKey,
-        getDeviceIden,
-        getAutoOpenLinks,
-        getDeviceNickname,
-        getNotificationTimeout,
-      },
-    );
-    debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
-  } catch (error) {
+
+  // STEP 1: Load config (with error handling that doesn't stop execution)
+  await ensureConfigLoaded(
+    {
+      setApiKey,
+      setDeviceIden,
+      setAutoOpenLinks,
+      setDeviceNickname,
+      setNotificationTimeout,
+    },
+    {
+      getApiKey,
+      getDeviceIden,
+      getAutoOpenLinks,
+      getDeviceNickname,
+      getNotificationTimeout,
+    },
+  ).catch((error) => {
     debugLogger.general(
       "ERROR",
       "Failed to load config before STARTUP",
       null,
       error as Error,
     );
-  }
+    // Don't throw - continue execution. We'll get null from getApiKey which is fine.
+  });
 
-  // Now we can safely get the API key
-  await stateMachineReady;
+  debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
+
+  // STEP 2: Verify what was actually loaded (CRITICAL DEBUG INFO)
   const apiKey = getApiKey();
+  const deviceIden = getDeviceIden();
+  const autoOpenLinks = getAutoOpenLinks();
+  const deviceNickname = getDeviceNickname();
 
-  debugLogger.general("DEBUG", "Triggering STARTUP event", {
+  debugLogger.general(
+    "INFO",
+    "[BOOTSTRAP_DEBUG] Config state after ensureConfigLoaded",
+    {
+      hasApiKey: !!apiKey,
+      apiKeyLength: apiKey?.length || 0,
+      apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : "null",
+      hasDeviceIden: !!deviceIden,
+      deviceIden: deviceIden || "null",
+      autoOpenLinks: autoOpenLinks,
+      deviceNickname: deviceNickname || "null",
+    },
+  );
+
+  // STEP 3: Wait for state machine and trigger STARTUP
+  await stateMachineReady;
+
+  debugLogger.general("INFO", "[BOOTSTRAP_DEBUG] Triggering STARTUP event", {
     hasApiKey: !!apiKey,
     apiKeyLength: apiKey?.length || 0,
+    trigger: trigger,
   });
 
   await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
+
+  debugLogger.general(
+    "INFO",
+    "[BOOTSTRAP_DEBUG] STARTUP transition completed",
+    {
+      newState: stateMachine.getCurrentState(),
+    },
+  );
   // --- CRITICAL FIX END ---
 
   // The orchestrateInitialization is now primarily driven by the state machine's

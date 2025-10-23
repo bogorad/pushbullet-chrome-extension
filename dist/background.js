@@ -4011,9 +4011,16 @@
       loadDebugConfigOnce = (async () => {
         try {
           await debugConfigManager.loadConfig();
-          debugLogger.general("INFO", "Debug configuration loaded (single-flight)");
+          debugLogger.general(
+            "INFO",
+            "Debug configuration loaded (single-flight)"
+          );
         } catch (e) {
-          debugLogger.general("WARN", "Failed to load debug configuration (single-flight)", { error: e.message });
+          debugLogger.general(
+            "WARN",
+            "Failed to load debug configuration (single-flight)",
+            { error: e.message }
+          );
         }
       })();
     }
@@ -4109,7 +4116,10 @@
             completeData: decryptedPush
           });
         } else {
-          debugLogger.general("WARN", "Cannot decrypt push - no encryption password set");
+          debugLogger.general(
+            "WARN",
+            "Cannot decrypt push - no encryption password set"
+          );
           decryptionFailed = true;
         }
       } catch (error) {
@@ -4123,10 +4133,14 @@
       }
     }
     if (decryptionFailed) {
-      debugLogger.general("WARN", "Skipping encrypted push due to decryption failure", {
-        pushIden: push.iden,
-        hasEncryptionPassword: !!await storageRepository.getEncryptionPassword()
-      });
+      debugLogger.general(
+        "WARN",
+        "Skipping encrypted push due to decryption failure",
+        {
+          pushIden: push.iden,
+          hasEncryptionPassword: !!await storageRepository.getEncryptionPassword()
+        }
+      );
       return;
     }
     if (!decryptedPush.type) {
@@ -4197,7 +4211,10 @@
     await promoteToReadyIfConnected();
   });
   globalEventBus.on("websocket:connected", async () => {
-    debugLogger.websocket("INFO", "WebSocket connected - post-connect tasks starting");
+    debugLogger.websocket(
+      "INFO",
+      "WebSocket connected - post-connect tasks starting"
+    );
     await stateMachineReady;
     stateMachine.transition("WS_CONNECTED");
     void runPostConnect();
@@ -4502,7 +4519,10 @@
               );
               try {
                 await existingInit;
-                debugLogger.general("INFO", "Awaited startup initialization successfully");
+                debugLogger.general(
+                  "INFO",
+                  "Awaited startup initialization successfully"
+                );
               } catch (error) {
                 debugLogger.general(
                   "ERROR",
@@ -4989,39 +5009,61 @@
   });
   async function bootstrap(trigger) {
     debugLogger.general("INFO", "Bootstrap start", { trigger });
-    try {
-      await ensureConfigLoaded(
-        {
-          setApiKey,
-          setDeviceIden,
-          setAutoOpenLinks,
-          setDeviceNickname,
-          setNotificationTimeout
-        },
-        {
-          getApiKey,
-          getDeviceIden,
-          getAutoOpenLinks,
-          getDeviceNickname,
-          getNotificationTimeout
-        }
-      );
-      debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
-    } catch (error) {
+    await ensureConfigLoaded(
+      {
+        setApiKey,
+        setDeviceIden,
+        setAutoOpenLinks,
+        setDeviceNickname,
+        setNotificationTimeout
+      },
+      {
+        getApiKey,
+        getDeviceIden,
+        getAutoOpenLinks,
+        getDeviceNickname,
+        getNotificationTimeout
+      }
+    ).catch((error) => {
       debugLogger.general(
         "ERROR",
         "Failed to load config before STARTUP",
         null,
         error
       );
-    }
-    await stateMachineReady;
+    });
+    debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
     const apiKey2 = getApiKey();
-    debugLogger.general("DEBUG", "Triggering STARTUP event", {
+    const deviceIden2 = getDeviceIden();
+    const autoOpenLinks2 = getAutoOpenLinks();
+    const deviceNickname2 = getDeviceNickname();
+    debugLogger.general(
+      "INFO",
+      "[BOOTSTRAP_DEBUG] Config state after ensureConfigLoaded",
+      {
+        hasApiKey: !!apiKey2,
+        apiKeyLength: apiKey2?.length || 0,
+        apiKeyPrefix: apiKey2 ? `${apiKey2.substring(0, 8)}...` : "null",
+        hasDeviceIden: !!deviceIden2,
+        deviceIden: deviceIden2 || "null",
+        autoOpenLinks: autoOpenLinks2,
+        deviceNickname: deviceNickname2 || "null"
+      }
+    );
+    await stateMachineReady;
+    debugLogger.general("INFO", "[BOOTSTRAP_DEBUG] Triggering STARTUP event", {
       hasApiKey: !!apiKey2,
-      apiKeyLength: apiKey2?.length || 0
+      apiKeyLength: apiKey2?.length || 0,
+      trigger
     });
     await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
+    debugLogger.general(
+      "INFO",
+      "[BOOTSTRAP_DEBUG] STARTUP transition completed",
+      {
+        newState: stateMachine.getCurrentState()
+      }
+    );
     void orchestrateInitialization(trigger, connectWebSocket);
   }
   chrome.runtime.onStartup.addListener(async () => {
