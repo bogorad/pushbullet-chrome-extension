@@ -1653,14 +1653,26 @@
               });
             });
             const currentDevice = devices.find((d) => d.iden === existingDeviceIden);
-            const currentNickname = currentDevice?.nickname;
-            if (currentNickname !== deviceNickname2) {
-              await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
-              debugLogger.general("INFO", "Device nickname updated", { old: currentNickname, new: deviceNickname2 });
+            if (!currentDevice) {
+              debugLogger.general("WARN", "[DEVICE_DEBUG] Stored device ID not found in API response - device was deleted", {
+                storedDeviceIden: existingDeviceIden,
+                availableDeviceIdens: devices.map((d) => d.iden)
+              });
+              await storageRepository.setDeviceIden(null);
+              debugLogger.general("INFO", "Cleared stale device ID, will register new device");
             } else {
-              debugLogger.general("DEBUG", "Device nickname unchanged, skipping update");
+              const currentNickname = currentDevice.nickname;
+              if (currentNickname !== deviceNickname2) {
+                debugLogger.general("INFO", "[DEVICE_DEBUG] Nickname mismatch, updating", {
+                  currentNickname,
+                  newNickname: deviceNickname2
+                });
+                await updateDeviceNickname(apiKey2, existingDeviceIden, deviceNickname2);
+              } else {
+                debugLogger.general("DEBUG", "Device nickname unchanged, skipping update");
+              }
+              return { deviceIden: existingDeviceIden, needsUpdate: false };
             }
-            return { deviceIden: existingDeviceIden, needsUpdate: false };
           } catch (error) {
             debugLogger.general("WARN", "Failed to update existing device, will re-register", {
               error: error.message,
@@ -2248,7 +2260,7 @@
           const devices = await fetchDevices(apiKeyValue);
           sessionCache.devices = devices;
           debugLogger.general("INFO", "Pipeline 1: Fetching incremental pushes for auto-open");
-          const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyValue);
+          const { isSeedRun } = await refreshPushesIncremental(apiKeyValue);
           if (isSeedRun) {
             debugLogger.general("INFO", "Seed run: cutoff initialized; skipping processing and auto-open.");
             const updatedCutoff2 = await storageRepository.getLastModifiedCutoff();

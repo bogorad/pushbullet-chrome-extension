@@ -1,7 +1,6 @@
 import { performanceMonitor } from "../../lib/perf";
 import { debugLogger, globalErrorTracker } from "../../lib/logging";
 import { wsStateMonitor } from "../../lib/monitoring";
-import type { WebSocketMessage } from "../../types/domain";
 import { WS_READY_STATE } from "../../types/domain";
 import { clearErrorBadge, showPermanentWebSocketError } from "../notifications";
 import { globalEventBus } from "../../lib/events/event-bus";
@@ -144,14 +143,14 @@ export class WebSocketClient {
         socketExists: !!this.socket,
       });
 
-       this.socket.onopen = () => {
-         debugLogger.websocket("INFO", "WebSocket connection established", {
-           timestamp: new Date().toISOString(),
-         });
+      this.socket.onopen = () => {
+        debugLogger.websocket("INFO", "WebSocket connection established", {
+          timestamp: new Date().toISOString(),
+        });
 
-         this.lastNopAt = Date.now();
-         performanceMonitor.recordWebSocketConnection(true);
-         wsStateMonitor.startMonitoring();
+        this.lastNopAt = Date.now();
+        performanceMonitor.recordWebSocketConnection(true);
+        wsStateMonitor.startMonitoring();
 
         // Emit event to stop polling mode
         globalEventBus.emit("websocket:polling:stop");
@@ -167,33 +166,33 @@ export class WebSocketClient {
 
         // Emit state change for popup
         globalEventBus.emit("websocket:state", "connected");
-       };
+      };
 
-       this.socket.onmessage = (ev) => {
-         const msg = JSON.parse(ev.data);
-         globalEventBus.emit("websocket:message", msg);
-         if (msg.type === "nop") {
-           this.lastNopAt = Date.now();
-           debugLogger.websocket("DEBUG", "Server nop received", { timestamp: new Date(this.lastNopAt).toISOString() });
-         }
-         if (msg.type === "tickle") {
-           if (msg.subtype === "push") {
-             globalEventBus.emit("websocket:tickle:push");
-           } else if (msg.subtype === "device") {
-             globalEventBus.emit("websocket:tickle:device");
-           }
-         }
-         if (msg.type === "push") {
-           if ("push" in msg && msg.push) {
-             globalEventBus.emit("websocket:push", msg.push);
-           } else {
-             debugLogger.websocket(
-               "WARN",
-               "Push message received without push payload",
-             );
-           }
-         }
-       };
+      this.socket.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        globalEventBus.emit("websocket:message", msg);
+        if (msg.type === "nop") {
+          this.lastNopAt = Date.now();
+          debugLogger.websocket("DEBUG", "Server nop received", { timestamp: new Date(this.lastNopAt).toISOString() });
+        }
+        if (msg.type === "tickle") {
+          if (msg.subtype === "push") {
+            globalEventBus.emit("websocket:tickle:push");
+          } else if (msg.subtype === "device") {
+            globalEventBus.emit("websocket:tickle:device");
+          }
+        }
+        if (msg.type === "push") {
+          if ("push" in msg && msg.push) {
+            globalEventBus.emit("websocket:push", msg.push);
+          } else {
+            debugLogger.websocket(
+              "WARN",
+              "Push message received without push payload",
+            );
+          }
+        }
+      };
 
       this.socket.onerror = (error) => {
         // WebSocket error events are generic Event objects, not Error instances

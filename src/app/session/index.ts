@@ -1,12 +1,10 @@
-import type { SessionCache, Push } from "../../types/domain";
+import type { SessionCache } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import { performanceMonitor } from "../../lib/perf";
 import {
   fetchChats,
   fetchDevices,
   fetchDisplayPushes,  // ← ADD: Import new function
-  fetchIncrementalPushes,
-  fetchRecentPushes,
   fetchUserInfo,
   registerDevice,
 } from "../api/client";
@@ -403,7 +401,7 @@ export async function initializeSessionCache(
 
         debugLogger.general('INFO', 'Pipeline 1: Fetching incremental pushes for auto-open');
 
-        const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyValue);
+        const { isSeedRun } = await refreshPushesIncremental(apiKeyValue);
 
         if (isSeedRun) {
           debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
@@ -545,15 +543,15 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
       // ========================================
       debugLogger.general('DEBUG', 'Pipeline 1: Refreshing incremental pushes');
 
-       const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyParam);
+      const { pushes: incrementalPushes, isSeedRun } = await refreshPushesIncremental(apiKeyParam);
 
-        if (isSeedRun) {
-          debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
-          // Update sessionCache.lastModifiedCutoff from storage
-          const updatedCutoff = await storageRepository.getLastModifiedCutoff();
-          sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
-          // Continue with initialization even on seed run
-        }
+      if (isSeedRun) {
+        debugLogger.general('INFO', 'Seed run: cutoff initialized; skipping processing and auto-open.');
+        // Update sessionCache.lastModifiedCutoff from storage
+        const updatedCutoff = await storageRepository.getLastModifiedCutoff();
+        sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
+        // Continue with initialization even on seed run
+      }
 
       // Update sessionCache.lastModifiedCutoff from storage
       const updatedCutoff = await storageRepository.getLastModifiedCutoff();

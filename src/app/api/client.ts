@@ -388,15 +388,41 @@ export async function registerDevice(
           // --- END NEW CODE ---
 
           const currentDevice = devices.find(d => d.iden === existingDeviceIden);
-          const currentNickname = currentDevice?.nickname;
 
-          if (currentNickname !== deviceNickname) {
-            await updateDeviceNickname(apiKey, existingDeviceIden, deviceNickname);
-            debugLogger.general('INFO', 'Device nickname updated', { old: currentNickname, new: deviceNickname });
+          // --- START FIX ---
+          // Check if the stored device ID actually exists in the fetched device list
+          if (!currentDevice) {
+            debugLogger.general('WARN', '[DEVICE_DEBUG] Stored device ID not found in API response - device was deleted', {
+              storedDeviceIden: existingDeviceIden,
+              availableDeviceIdens: devices.map(d => d.iden)
+            });
+
+            // Clear stale device ID from storage
+            await storageRepository.setDeviceIden(null);
+
+            debugLogger.general('INFO', 'Cleared stale device ID, will register new device');
+
+            // Fall through to device registration below
+            // (DON'T use 'return' here - let it continue to the registration code)
           } else {
-            debugLogger.general('DEBUG', 'Device nickname unchanged, skipping update');
+            // Device exists - check if nickname needs updating
+            const currentNickname = currentDevice.nickname;
+
+            if (currentNickname !== deviceNickname) {
+              debugLogger.general('INFO', '[DEVICE_DEBUG] Nickname mismatch, updating', {
+                currentNickname,
+                newNickname: deviceNickname
+              });
+
+              await updateDeviceNickname(apiKey, existingDeviceIden, deviceNickname);
+
+            } else {
+              debugLogger.general('DEBUG', 'Device nickname unchanged, skipping update');
+            }
+
+            return { deviceIden: existingDeviceIden, needsUpdate: false };
           }
-          return { deviceIden: existingDeviceIden, needsUpdate: false };
+          // --- END FIX ---
         } catch (error) {
           debugLogger.general('WARN', 'Failed to update existing device, will re-register', {
             error: (error as Error).message,
