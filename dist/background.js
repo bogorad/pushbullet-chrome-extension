@@ -1630,6 +1630,28 @@
           debugLogger.general("INFO", "Device already registered", { deviceIden: existingDeviceIden, deviceNickname: deviceNickname2 });
           try {
             const devices = await fetchDevices(apiKey2);
+            debugLogger.general("INFO", "[DEVICE_DEBUG] All devices fetched from API", {
+              totalDevices: devices.length,
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            });
+            devices.forEach((device2, index) => {
+              debugLogger.general("INFO", `[DEVICE_DEBUG] Device #${index + 1}`, {
+                iden: device2.iden,
+                nickname: device2.nickname || "(no nickname)",
+                model: device2.model || "(no model)",
+                manufacturer: device2.manufacturer || "(no manufacturer)",
+                type: device2.type || "(no type)",
+                active: device2.active,
+                created: device2.created,
+                modified: device2.modified,
+                icon: device2.icon || "(no icon)",
+                pushToken: device2.push_token ? `${device2.push_token.substring(0, 8)}...` : "(no push token)",
+                appVersion: device2.app_version || "(no app version)",
+                hasSms: device2.has_sms || false,
+                // Include ALL raw device data
+                rawDevice: device2
+              });
+            });
             const currentDevice = devices.find((d) => d.iden === existingDeviceIden);
             const currentNickname = currentDevice?.nickname;
             if (currentNickname !== deviceNickname2) {

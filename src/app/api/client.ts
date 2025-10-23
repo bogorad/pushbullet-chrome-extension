@@ -358,6 +358,35 @@ export async function registerDevice(
         // Check if nickname needs updating
         try {
           const devices = await fetchDevices(apiKey);
+
+          // --- START NEW CODE ---
+          // Log ALL devices with ALL attributes for debugging
+          debugLogger.general('INFO', '[DEVICE_DEBUG] All devices fetched from API', {
+            totalDevices: devices.length,
+            timestamp: new Date().toISOString()
+          });
+
+          // Log each device individually with full details
+          devices.forEach((device, index) => {
+            debugLogger.general('INFO', `[DEVICE_DEBUG] Device #${index + 1}`, {
+              iden: device.iden,
+              nickname: device.nickname || '(no nickname)',
+              model: device.model || '(no model)',
+              manufacturer: device.manufacturer || '(no manufacturer)',
+              type: device.type || '(no type)',
+              active: device.active,
+              created: device.created,
+              modified: device.modified,
+              icon: device.icon || '(no icon)',
+              pushToken: device.push_token ? `${device.push_token.substring(0, 8)}...` : '(no push token)',
+              appVersion: device.app_version || '(no app version)',
+              hasSms: device.has_sms || false,
+              // Include ALL raw device data
+              rawDevice: device
+            });
+          });
+          // --- END NEW CODE ---
+
           const currentDevice = devices.find(d => d.iden === existingDeviceIden);
           const currentNickname = currentDevice?.nickname;
 
