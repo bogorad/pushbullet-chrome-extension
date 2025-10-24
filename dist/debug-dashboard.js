@@ -48,6 +48,7 @@
   var logCategoryFilter = getElementById("log-category-filter");
   var logLevelFilter = getElementById("log-level-filter");
   var logCountSelect = getElementById("log-count-select");
+  var logMessageFilter = getElementById("log-message-filter");
   var logsContainer = getElementById("logs-container");
   var websocketMetricsEl = getElementById("websocket-metrics");
   var qualityMetricsEl = getElementById("quality-metrics");
@@ -123,6 +124,9 @@
     });
     logCountSelect.addEventListener("change", () => {
       loadDashboardData();
+    });
+    logMessageFilter.addEventListener("input", () => {
+      renderLogs();
     });
   }
   function switchTab(tabName) {
@@ -204,6 +208,7 @@
     }
     const categoryFilter = logCategoryFilter.value;
     const levelFilter = logLevelFilter.value;
+    const messageFilter = logMessageFilter.value.trim();
     let filteredLogs = currentData.logs;
     if (categoryFilter) {
       filteredLogs = filteredLogs.filter((log) => log.category === categoryFilter);
@@ -212,6 +217,17 @@
       filteredLogs = filteredLogs.filter(
         (log) => shouldShowLogByLevel(log.level, levelFilter)
       );
+    }
+    if (messageFilter) {
+      try {
+        const regex = new RegExp(messageFilter, "i");
+        filteredLogs = filteredLogs.filter((log) => regex.test(log.message));
+      } catch {
+        const lowerFilter = messageFilter.toLowerCase();
+        filteredLogs = filteredLogs.filter(
+          (log) => log.message.toLowerCase().includes(lowerFilter)
+        );
+      }
     }
     if (filteredLogs.length === 0) {
       logsContainer.innerHTML = '<p class="loading">No logs match the current filters</p>';
