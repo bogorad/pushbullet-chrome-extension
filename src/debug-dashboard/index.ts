@@ -198,6 +198,7 @@ const tabPanes = document.querySelectorAll<HTMLDivElement>('.tab-pane');
 const logCategoryFilter = getElementById<HTMLSelectElement>('log-category-filter');
 const logLevelFilter = getElementById<HTMLSelectElement>('log-level-filter');
 const logCountSelect = getElementById<HTMLSelectElement>('log-count-select');
+const logMessageFilter = getElementById<HTMLInputElement>('log-message-filter');
 const logsContainer = getElementById<HTMLDivElement>('logs-container');
 
 // Performance tab elements
@@ -308,6 +309,10 @@ function setupEventListeners(): void {
 
   logCountSelect.addEventListener('change', () => {
     loadDashboardData();
+  });
+
+  logMessageFilter.addEventListener('input', () => {
+    renderLogs();
   });
 }
 
@@ -423,6 +428,7 @@ function renderLogs(): void {
   // Apply filters
   const categoryFilter = logCategoryFilter.value;
   const levelFilter = logLevelFilter.value;
+  const messageFilter = logMessageFilter.value.trim();
 
   let filteredLogs = currentData.logs;
 
@@ -435,6 +441,21 @@ function renderLogs(): void {
     filteredLogs = filteredLogs.filter((log) =>
       shouldShowLogByLevel(log.level, levelFilter),
     );
+  }
+
+  // Filter by message (supports regex)
+  if (messageFilter) {
+    try {
+      // Try to use as regex (case-insensitive)
+      const regex = new RegExp(messageFilter, "i");
+      filteredLogs = filteredLogs.filter((log) => regex.test(log.message));
+    } catch {
+      // If regex is invalid, fall back to simple text search
+      const lowerFilter = messageFilter.toLowerCase();
+      filteredLogs = filteredLogs.filter((log) =>
+        log.message.toLowerCase().includes(lowerFilter),
+      );
+    }
   }
 
   // Render logs

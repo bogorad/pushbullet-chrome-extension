@@ -94,16 +94,26 @@
                   <option value="ERROR">Error</option>
                 </select>
               </label>
-              <label>
-                Show last:
-                <select id="log-count-select">
-                  <option value="50">50 logs</option>
-                  <option value="100" selected>100 logs</option>
-                  <option value="200">200 logs</option>
-                  <option value="500">500 logs</option>
-                </select>
-              </label>
-            </div>
+               <label>
+                 Show last:
+                 <select id="log-count-select">
+                   <option value="50">50 logs</option>
+                   <option value="100" selected>100 logs</option>
+                   <option value="200">200 logs</option>
+                   <option value="500">500 logs</option>
+                 </select>
+               </label>
+
+               <!-- NEW: Message filter input -->
+               <label>
+                 Filter by message:
+                 <input
+                   type="text"
+                   id="log-message-filter"
+                   placeholder="Search message (regex supported)"
+                 />
+               </label>
+             </div>
             <div id="logs-container" class="logs-container">
               <p class="loading">Loading logs...</p>
             </div>
