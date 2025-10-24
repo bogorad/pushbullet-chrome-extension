@@ -337,7 +337,8 @@ export class ServiceWorkerStateMachine {
     previousState: ServiceWorkerState,
     data?: any
   ): Promise<void> {
-    debugLogger.general('DEBUG', `[StateMachine] Entering state`, { state, previousState });
+    // debugLogger.general('DEBUG', `[StateMachine] Entering state`, { state, previousState });
+    debugLogger.general('DEBUG', `[StateMachine] Entering state: ${state} (from ${previousState})`, { state, previousState });
 
     // Update extension tooltip to show current state
     updateExtensionTooltip(this.getStateDescription());
@@ -462,7 +463,9 @@ export class ServiceWorkerStateMachine {
     state: ServiceWorkerState,
     nextState: ServiceWorkerState
   ): Promise<void> {
-    debugLogger.general('DEBUG', `[StateMachine] Exiting state`, { state, nextState });
+    // debugLogger.general('DEBUG', `[StateMachine] Exiting state`, { state, nextState });
+    debugLogger.general('DEBUG', `[StateMachine] Exiting state: ${state} -> ${nextState}`, { state, nextState });
+
 
     // When we EXIT the DEGRADED state, we must stop polling
     if (state === ServiceWorkerState.DEGRADED) {

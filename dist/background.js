@@ -3663,7 +3663,7 @@
      * This is where side effects happen (calling callbacks).
      */
     async onStateEnter(state, previousState, data) {
-      debugLogger.general("DEBUG", `[StateMachine] Entering state`, { state, previousState });
+      debugLogger.general("DEBUG", `[StateMachine] Entering state: ${state} (from ${previousState})`, { state, previousState });
       updateExtensionTooltip(this.getStateDescription());
       switch (state) {
         case "idle" /* IDLE */:
@@ -3749,7 +3749,7 @@
      * Optional cleanup logic when leaving a state.
      */
     async onStateExit(state, nextState) {
-      debugLogger.general("DEBUG", `[StateMachine] Exiting state`, { state, nextState });
+      debugLogger.general("DEBUG", `[StateMachine] Exiting state: ${state} -> ${nextState}`, { state, nextState });
       if (state === "degraded" /* DEGRADED */) {
         debugLogger.general("INFO", "Exiting DEGRADED state. Stopping polling fallback.");
         if (this.callbacks.onStopPolling) {
