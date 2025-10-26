@@ -3341,27 +3341,77 @@
     debugLogger.general("DEBUG", "Performing polling fetch (incremental)");
     await refreshPushes();
   }
-  function performWebSocketHealthCheck(wsClient, connectFn) {
+  function performWebSocketHealthCheck(websocketClient3, connectFn) {
     const apiKey2 = getApiKey();
-    if (apiKey2 && (!wsClient || !wsClient.isConnected())) {
+    debugLogger.websocket(
+      "DEBUG",
+      "[HealthCheck] Running WebSocket health check",
+      {
+        hasClient: !!websocketClient3,
+        hasApiKey: !!apiKey2,
+        isConnected: websocketClient3?.isConnected() ?? false,
+        readyState: websocketClient3?.["ws"]?.readyState ?? "N/A"
+      }
+    );
+    if (!websocketClient3 || !websocketClient3.isConnected()) {
       debugLogger.websocket(
         "WARN",
-        "Health check failed - WebSocket is disconnected. Triggering reconnect."
+        "[HealthCheck] WebSocket is null or disconnected",
+        {
+          hasApiKey: !!apiKey2,
+          currentState: stateMachine.getCurrentState()
+        }
       );
-      performanceMonitor.recordHealthCheckFailure();
-      connectFn();
-    } else if (wsClient && wsClient.isConnected()) {
-      if (wsClient.isConnectionHealthy()) {
-        debugLogger.websocket("DEBUG", "WebSocket connection is healthy.");
-        performanceMonitor.recordHealthCheckSuccess();
+      if (apiKey2) {
+        const currentState = stateMachine.getCurrentState();
+        if (currentState === "idle" /* IDLE */) {
+          debugLogger.websocket(
+            "WARN",
+            "[HealthCheck] Detected IDLE state with API key - triggering recovery"
+          );
+          stateMachine.transition(
+            "ATTEMPT_RECONNECT",
+            {
+              hasApiKey: true
+            }
+          ).catch(
+            (error) => {
+              debugLogger.websocket(
+                "ERROR",
+                "[HealthCheck] Failed to trigger recovery",
+                null,
+                error
+              );
+              connectFn();
+            }
+          );
+        } else if (currentState === "degraded" /* DEGRADED */ || currentState === "reconnecting" /* RECONNECTING */) {
+          connectFn();
+        } else {
+          debugLogger.websocket(
+            "DEBUG",
+            "[HealthCheck] Skipping reconnect - unexpected state",
+            {
+              currentState
+            }
+          );
+        }
       } else {
         debugLogger.websocket(
-          "WARN",
-          "WebSocket connection is unhealthy. Triggering reconnect."
+          "DEBUG",
+          "[HealthCheck] No API key - cannot reconnect"
         );
-        performanceMonitor.recordHealthCheckFailure();
-        globalEventBus.emit("websocket:disconnected");
       }
+      return;
+    }
+    if (!websocketClient3.isConnectionHealthy()) {
+      debugLogger.websocket(
+        "WARN",
+        "[HealthCheck] Connection unhealthy - emitting disconnect event"
+      );
+      globalEventBus.emit(
+        "websocket:disconnected"
+      );
     }
   }
   function updatePopupConnectionState(state) {
@@ -3605,7 +3655,14 @@
           if (event === "API_KEY_SET") {
             return "initializing" /* INITIALIZING */;
           }
-          break;
+          if (event === "ATTEMPT_RECONNECT") {
+            const hasApiKey = data?.hasApiKey === true;
+            if (hasApiKey) {
+              debugLogger.general("INFO", "[StateMachine] Attempting recovery from IDLE with existing API key");
+              return "initializing" /* INITIALIZING */;
+            }
+          }
+          return "idle" /* IDLE */;
         case "initializing" /* INITIALIZING */:
           if (event === "INIT_SUCCESS") {
             return "ready" /* READY */;
@@ -4355,34 +4412,57 @@
       return;
     }
     if (alarm.name === "auto-recovery-from-error") {
-      debugLogger.general("INFO", "Auto-recovery triggered from ERROR state");
-      await stateMachine.transition("ATTEMPT_RECONNECT");
-      return;
+      debugLogger.general(
+        "INFO",
+        "[Alarm] Auto-recovery timer fired, attempting to reconnect"
+      );
+      const apiKey2 = getApiKey();
+      if (apiKey2) {
+        await stateMachine.transition("ATTEMPT_RECONNECT", {
+          hasApiKey: true
+        });
+      } else {
+        debugLogger.general("WARN", "[Alarm] Cannot auto-recover - no API key");
+      }
     }
     await stateMachineReady;
     if (alarm.name === "websocketHealthCheck") {
-      if (stateMachine.isInState("error" /* ERROR */)) {
-        debugLogger.general("INFO", "In ERROR state, ignoring health check.");
-        return;
-      }
-      await ensureConfigLoaded();
+      const currentState = stateMachine.getCurrentState();
+      debugLogger.general(
+        "DEBUG",
+        "[Alarm] Health check alarm fired",
+        {
+          currentState,
+          hasWebSocketClient: !!websocketClient2
+        }
+      );
       if (stateMachine.isInState("degraded" /* DEGRADED */)) {
         await performPollingFetch();
-        const failures = performanceMonitor.getQualityMetrics().consecutiveFailures;
-        const FAILURE_THRESHOLD = 5;
-        if (failures >= FAILURE_THRESHOLD) {
+        const consecutiveFailures = performanceMonitor.getQualityMetrics().consecutiveFailures;
+        if (consecutiveFailures >= 3) {
           debugLogger.general(
-            "ERROR",
-            `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`
+            "WARN",
+            "[Degraded] Too many failures, escalating to ERROR"
           );
           await stateMachine.transition("WS_PERMANENT_ERROR");
         } else {
-          debugLogger.general(
-            "INFO",
-            "Health check found us in DEGRADED state. Attempting to reconnect."
-          );
           await stateMachine.transition("ATTEMPT_RECONNECT");
-          ranReconnectAutoOpen = false;
+        }
+      } else if (stateMachine.isInState("idle" /* IDLE */)) {
+        const apiKey2 = getApiKey();
+        if (apiKey2) {
+          debugLogger.general(
+            "WARN",
+            "[Alarm] Health check found IDLE state with API key - attempting recovery"
+          );
+          await stateMachine.transition("ATTEMPT_RECONNECT", {
+            hasApiKey: true
+          });
+        } else {
+          debugLogger.general(
+            "DEBUG",
+            "[Alarm] IDLE state without API key - nothing to do"
+          );
         }
       } else {
         performWebSocketHealthCheck(websocketClient2, connectWebSocket);
@@ -5064,6 +5144,37 @@
         newState: stateMachine.getCurrentState()
       }
     );
+    if (apiKey2 && stateMachine.isInState(
+      "idle" /* IDLE */
+    )) {
+      debugLogger.general(
+        "WARN",
+        "[Bootstrap] Detected orphaned session: have API key but state is IDLE. Triggering recovery."
+      );
+      try {
+        await stateMachine.transition(
+          "ATTEMPT_RECONNECT",
+          {
+            hasApiKey: true
+          }
+        );
+      } catch (error) {
+        debugLogger.general(
+          "ERROR",
+          "[Bootstrap] Failed to recover orphaned session",
+          null,
+          error
+        );
+      }
+    }
+    debugLogger.general(
+      "INFO",
+      "Bootstrap completed",
+      {
+        finalState: stateMachine.getCurrentState(),
+        trigger
+      }
+    );
     void orchestrateInitialization(trigger, connectWebSocket);
   }
   chrome.runtime.onStartup.addListener(async () => {
@@ -5073,6 +5184,45 @@
   chrome.runtime.onInstalled.addListener(async () => {
     await ensureDebugConfigLoadedOnce();
     void bootstrap("install");
+  });
+  async function checkExtensionHealth() {
+    const apiKey2 = getApiKey();
+    const currentState = stateMachine.getCurrentState();
+    const isConnected = websocketClient2?.isConnected() ?? false;
+    debugLogger.general(
+      "INFO",
+      "[Diagnostic] Extension health check",
+      {
+        hasApiKey: !!apiKey2,
+        currentState,
+        isConnected,
+        hasWebSocketClient: !!websocketClient2,
+        sessionAuthenticated: sessionCache.isAuthenticated,
+        lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : "never"
+      }
+    );
+    if (apiKey2 && currentState === "idle" /* IDLE */ && !isConnected) {
+      debugLogger.general(
+        "ERROR",
+        "[Diagnostic] INCONSISTENT STATE DETECTED: Have API key but in IDLE state without connection"
+      );
+      return;
+    }
+    if (!apiKey2 && currentState !== "idle" /* IDLE */) {
+      debugLogger.general(
+        "ERROR",
+        "[Diagnostic] INCONSISTENT STATE DETECTED: No API key but not in IDLE state"
+      );
+      return;
+    }
+    debugLogger.general(
+      "INFO",
+      "[Diagnostic] Extension state is consistent"
+    );
+  }
+  chrome.runtime.onStartup.addListener(async () => {
+    await ensureDebugConfigLoadedOnce();
+    setTimeout(checkExtensionHealth, 5e3);
   });
 })();
 //# sourceMappingURL=background.js.map

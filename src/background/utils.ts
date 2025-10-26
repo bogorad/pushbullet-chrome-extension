@@ -16,6 +16,8 @@ import type { Push } from "../types/domain";
 import { createNotificationWithTimeout } from "../app/notifications";
 import { ensureConfigLoaded } from "../app/reconnect";
 import { globalEventBus } from "../lib/events/event-bus";
+import { ServiceWorkerState } from "./state-machine";
+import { stateMachine } from "./index";
 import { maybeAutoOpenLinkWithDismiss } from "./processing";
 
 // Guard flag to prevent concurrent context menu setup
@@ -745,36 +747,121 @@ export async function performPollingFetch(): Promise<void> {
  * Perform WebSocket health check
  */
 export function performWebSocketHealthCheck(
-  wsClient: any,
+  websocketClient: any,
   connectFn: () => void,
 ): void {
   const apiKey = getApiKey();
 
-  // This is the key condition:
-  // If we SHOULD be connected (we have an API key) but we ARE NOT...
-  if (apiKey && (!wsClient || !wsClient.isConnected())) {
+  debugLogger.websocket(
+    "DEBUG",
+    "[HealthCheck] Running WebSocket health check",
+    {
+      hasClient:
+        !!websocketClient,
+      hasApiKey:
+        !!apiKey,
+      isConnected:
+        websocketClient?.isConnected() ??
+        false,
+      readyState:
+        websocketClient?.[
+          "ws"
+        ]
+          ?.readyState ??
+        "N/A",
+    },
+  );
+
+  // Case 1: No client or disconnected
+  if (
+    !websocketClient ||
+    !websocketClient.isConnected()
+  ) {
     debugLogger.websocket(
       "WARN",
-      "Health check failed - WebSocket is disconnected. Triggering reconnect.",
+      "[HealthCheck] WebSocket is null or disconnected",
+      {
+        hasApiKey:
+          !!apiKey,
+        currentState:
+          stateMachine.getCurrentState(),
+      },
     );
-    performanceMonitor.recordHealthCheckFailure();
 
-    // ...then it's the health check's job to initiate the connection.
-    connectFn(); // This calls connectWebSocket in the background script.
-  }
-  // The new health check for active connections.
-  else if (wsClient && wsClient.isConnected()) {
-    if (wsClient.isConnectionHealthy()) {
-      debugLogger.websocket("DEBUG", "WebSocket connection is healthy.");
-      performanceMonitor.recordHealthCheckSuccess();
+    if (apiKey) {
+      // NEW: Check current state before reconnecting
+      const currentState =
+        stateMachine.getCurrentState();
+
+      // If we're in IDLE with an API key, we need to bootstrap recovery
+      if (
+        currentState ===
+        ServiceWorkerState.IDLE
+      ) {
+        debugLogger.websocket(
+          "WARN",
+          "[HealthCheck] Detected IDLE state with API key - triggering recovery",
+        );
+
+        // Use state machine transition instead of direct connect
+        stateMachine
+          .transition(
+            "ATTEMPT_RECONNECT",
+            {
+              hasApiKey: true,
+            },
+          )
+          .catch(
+            (
+              error,
+            ) => {
+              debugLogger.websocket(
+                "ERROR",
+                "[HealthCheck] Failed to trigger recovery",
+                null,
+                error as Error,
+              );
+              // Fallback to direct connection
+              connectFn();
+            },
+          );
+      } else if (
+        currentState ===
+          ServiceWorkerState.DEGRADED ||
+        currentState ===
+          ServiceWorkerState.RECONNECTING
+      ) {
+        // Normal reconnection for expected states
+        connectFn();
+      } else {
+        debugLogger.websocket(
+          "DEBUG",
+          "[HealthCheck] Skipping reconnect - unexpected state",
+          {
+            currentState,
+          },
+        );
+      }
     } else {
       debugLogger.websocket(
-        "WARN",
-        "WebSocket connection is unhealthy. Triggering reconnect.",
+        "DEBUG",
+        "[HealthCheck] No API key - cannot reconnect",
       );
-      performanceMonitor.recordHealthCheckFailure();
-      globalEventBus.emit("websocket:disconnected");
     }
+    return;
+  }
+
+  // Case 2: Client exists and connected - check health
+  if (
+    !websocketClient.isConnectionHealthy()
+  ) {
+    debugLogger.websocket(
+      "WARN",
+      "[HealthCheck] Connection unhealthy - emitting disconnect event",
+    );
+    globalEventBus.emit(
+      "websocket:disconnected",
+    );
   }
 }
 

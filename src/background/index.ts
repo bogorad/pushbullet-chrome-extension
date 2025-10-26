@@ -557,14 +557,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
 
-  // --- NEW: Handle auto-recovery alarm ---
+  // NEW: Handle auto-recovery from ERROR state
   if (alarm.name === "auto-recovery-from-error") {
-    debugLogger.general("INFO", "Auto-recovery triggered from ERROR state");
+    debugLogger.general(
+      "INFO",
+      "[Alarm] Auto-recovery timer fired, attempting to reconnect",
+    );
 
-    // Attempt to transition back to reconnecting
-    await stateMachine.transition("ATTEMPT_RECONNECT");
-
-    return;
+    const apiKey = getApiKey();
+    if (apiKey) {
+      await stateMachine.transition("ATTEMPT_RECONNECT", {
+        hasApiKey: true,
+      });
+    } else {
+      debugLogger.general("WARN", "[Alarm] Cannot auto-recover - no API key");
+    }
   }
 
   // Ensure state machine is ready
@@ -572,42 +579,53 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   // Handle our two main periodic alarms.
   if (alarm.name === "websocketHealthCheck") {
-    // ADD THIS CHECK AT THE TOP
-    if (stateMachine.isInState(ServiceWorkerState.ERROR)) {
-      debugLogger.general("INFO", "In ERROR state, ignoring health check.");
-      return;
-    }
+    const currentState = stateMachine.getCurrentState();
 
-    await ensureConfigLoaded();
-    // Check the current state first.
+    debugLogger.general(
+      "DEBUG",
+      "[Alarm] Health check alarm fired",
+      {
+        currentState,
+        hasWebSocketClient: !!websocketClient,
+      },
+    );
+
     if (stateMachine.isInState(ServiceWorkerState.DEGRADED)) {
-      // Perform polling as fallback
+      // Degraded mode: use polling fallback
       await performPollingFetch();
 
-      // Check for escalation to ERROR state
-      const failures =
+      // Check if we should escalate
+      const consecutiveFailures =
         performanceMonitor.getQualityMetrics().consecutiveFailures;
-      const FAILURE_THRESHOLD = 5; // Escalate after 5 consecutive failures (approx. 5 minutes)
-
-      if (failures >= FAILURE_THRESHOLD) {
-        // If we've failed too many times, escalate to ERROR and STOP.
+      if (consecutiveFailures >= 3) {
         debugLogger.general(
-          "ERROR",
-          `Exceeded failure threshold (${failures} consecutive failures). Escalating to ERROR state.`,
+          "WARN",
+          "[Degraded] Too many failures, escalating to ERROR",
         );
         await stateMachine.transition("WS_PERMANENT_ERROR");
       } else {
-        // Only if we are NOT escalating to error, do we try to reconnect.
-        debugLogger.general(
-          "INFO",
-          "Health check found us in DEGRADED state. Attempting to reconnect.",
-        );
-        // Tell the state machine to start the reconnect process.
+        // Try to reconnect WebSocket
         await stateMachine.transition("ATTEMPT_RECONNECT");
-        ranReconnectAutoOpen = false; // reset guard here [file:9]
+      }
+    } else if (stateMachine.isInState(ServiceWorkerState.IDLE)) {
+      // NEW: Handle orphaned IDLE state
+      const apiKey = getApiKey();
+      if (apiKey) {
+        debugLogger.general(
+          "WARN",
+          "[Alarm] Health check found IDLE state with API key - attempting recovery",
+        );
+        await stateMachine.transition("ATTEMPT_RECONNECT", {
+          hasApiKey: true,
+        });
+      } else {
+        debugLogger.general(
+          "DEBUG",
+          "[Alarm] IDLE state without API key - nothing to do",
+        );
       }
     } else {
-      // If we are not in DEGRADED, do the normal health check.
+      // Normal state: perform health check
       performWebSocketHealthCheck(websocketClient, connectWebSocket);
     }
   }
@@ -1489,6 +1507,46 @@ async function bootstrap(
   );
   // --- CRITICAL FIX END ---
 
+  // NEW: Detect orphaned session and trigger recovery
+  if (
+    apiKey &&
+    stateMachine.isInState(
+      ServiceWorkerState.IDLE,
+    )
+  ) {
+    debugLogger.general(
+      "WARN",
+      "[Bootstrap] Detected orphaned session: have API key but state is IDLE. Triggering recovery.",
+    );
+
+    // Attempt to recover by transitioning to initializing
+    try {
+      await stateMachine.transition(
+        "ATTEMPT_RECONNECT",
+        {
+          hasApiKey: true,
+        },
+      );
+    } catch (error) {
+      debugLogger.general(
+        "ERROR",
+        "[Bootstrap] Failed to recover orphaned session",
+        null,
+        error as Error,
+      );
+    }
+  }
+
+  debugLogger.general(
+    "INFO",
+    "Bootstrap completed",
+    {
+      finalState:
+        stateMachine.getCurrentState(),
+      trigger,
+    },
+  );
+
   // The orchestrateInitialization is now primarily driven by the state machine's
   // onInitialize callback, but we can keep this for redundancy if desired.
   void orchestrateInitialization(trigger, connectWebSocket);
@@ -1507,3 +1565,59 @@ chrome.runtime.onInstalled.addListener(async () => {
 // chrome.alarms.onAlarm.addListener(a => {
 //   if (a.name === 'keepAlive' || a.name === 'recovery') { void bootstrap('wakeup'); }
 // });
+
+// Diagnostic function to check extension health
+async function checkExtensionHealth(): Promise<void> {
+  const apiKey = getApiKey();
+  const currentState = stateMachine.getCurrentState();
+  const isConnected = websocketClient?.isConnected() ?? false;
+
+  debugLogger.general(
+    "INFO",
+    "[Diagnostic] Extension health check",
+    {
+      hasApiKey: !!apiKey,
+      currentState,
+      isConnected,
+      hasWebSocketClient: !!websocketClient,
+      sessionAuthenticated: sessionCache.isAuthenticated,
+      lastUpdated: sessionCache.lastUpdated
+        ? new Date(sessionCache.lastUpdated).toISOString()
+        : "never",
+    },
+  );
+
+  // Check for inconsistent state
+  if (
+    apiKey &&
+    currentState === ServiceWorkerState.IDLE &&
+    !isConnected
+  ) {
+    debugLogger.general(
+      "ERROR",
+      "[Diagnostic] INCONSISTENT STATE DETECTED: Have API key but in IDLE state without connection",
+    );
+    return;
+  }
+
+  if (!apiKey && currentState !== ServiceWorkerState.IDLE) {
+    debugLogger.general(
+      "ERROR",
+      "[Diagnostic] INCONSISTENT STATE DETECTED: No API key but not in IDLE state",
+    );
+    return;
+  }
+
+  debugLogger.general(
+    "INFO",
+    "[Diagnostic] Extension state is consistent",
+  );
+}
+
+// Run diagnostic on startup
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureDebugConfigLoadedOnce();
+  setTimeout(checkExtensionHealth, 5000); // Wait 5 seconds after startup
+});
+
+export { stateMachine };

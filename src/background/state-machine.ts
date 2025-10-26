@@ -258,7 +258,16 @@ export class ServiceWorkerStateMachine {
       if (event === 'API_KEY_SET') {
         return ServiceWorkerState.INITIALIZING;
       }
-      break;
+      // NEW: Allow recovery from idle when we have credentials
+      if (event === 'ATTEMPT_RECONNECT') {
+        // Check if we have an API key
+        const hasApiKey = data?.hasApiKey === true;
+        if (hasApiKey) {
+          debugLogger.general('INFO', '[StateMachine] Attempting recovery from IDLE with existing API key');
+          return ServiceWorkerState.INITIALIZING;
+        }
+      }
+      return ServiceWorkerState.IDLE;
 
     case ServiceWorkerState.INITIALIZING:
       if (event === 'INIT_SUCCESS') {
