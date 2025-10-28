@@ -5,6 +5,7 @@
 - `npm run typecheck` - Run TypeScript type checking
 - `npm run lint` - Lint TypeScript files with ESLint
 - `npm run lint:fix` - Auto-fix ESLint issues
+- `node ./scripts/bump-patch.cjs` - Bump patch level
 
 ## Test Commands
 - `npm run test` - Run all tests with Vitest

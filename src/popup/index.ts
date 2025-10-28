@@ -3,7 +3,7 @@
  */
 
 import type { Push, Device, User, Chat, SessionDataResponse } from "../types/domain";
-import { MessageAction } from "../types/domain";
+import { MessageAction, isMirrorPush } from "../types/domain";
 import {
   getElementById,
 } from "../lib/ui/dom";
@@ -473,22 +473,24 @@ async function logout(): Promise<void> {
  */
 
 /**
- * REMOVED: connectWebSocket() and disconnectWebSocket()
- *
- * The popup no longer maintains its own WebSocket connection.
- * The background service worker manages a single, persistent WebSocket connection
- * and sends push updates to the popup via chrome.runtime.sendMessage with action 'pushesUpdated'.
- *
- * This architectural change:
- * - Eliminates dual state (popup and background having separate connections)
- * - Reduces resource consumption (only one WebSocket connection)
- * - Ensures connection persists when popup is closed
- * - Makes background script the single source of truth for WebSocket state
- */
+  * REMOVED: connectWebSocket() and disconnectWebSocket()
+  *
+  * The popup no longer maintains its own WebSocket connection.
+  * The background service worker manages a single, persistent WebSocket connection
+  * and sends push updates to the popup via chrome.runtime.sendMessage with action 'pushesUpdated'.
+  *
+  * This architectural change:
+  * - Eliminates dual state (popup and background having separate connections)
+  * - Reduces resource consumption (only one WebSocket connection)
+  * - Ensures connection persists when popup is closed
+  * - Makes background script the single source of truth for WebSocket state
+  */
+
+
 
 /**
- * Update user info
- */
+  * Update user info
+  */
 function updateUserInfo(userInfo: User): void {
   userName.textContent = userInfo.name || userInfo.email || '';
 
@@ -574,9 +576,30 @@ function displayPushes(pushes: Push[]): void {
       title = push.title;
       url = push.url;
       body = push.body;
-    } else if (push.type === 'mirror') {
-      title = `SMS: ${push.title || ''}`;
+    } else if (isMirrorPush(push)) {
+      // ARCHITECTURAL NOTE: Mirror pushes can come from any Android app
+      // (SMS apps, WhatsApp, AntennaPod, etc.). The application_name field
+      // tells us which app sent the notification.
+
+      // Safely extract and sanitize the application name
+      const appName = push.application_name?.trim();
+
+      // Create a dynamic prefix based on the actual app name
+      // If application_name is missing or empty, don't add any prefix
+      const prefix = appName ? `${appName}: ` : '';
+
+      // Build the final title with the dynamic prefix
+      title = `${prefix}${push.title || ''}`;
       body = push.body;
+
+      // DEBUGGING: Log cases where application_name is missing
+      // This helps us monitor data quality from the Pushbullet API
+      if (!appName) {
+        logToBackground("WARN", "[displayPushes] Mirror push missing application_name", {
+          pushIden: push.iden,
+          pushTitle: push.title
+        });
+      }
     } else if (push.type === 'sms_changed') {
       // This also fixes the 'sms is possibly undefined' error
       if (push.notifications && push.notifications.length > 0) {
@@ -595,9 +618,24 @@ function displayPushes(pushes: Push[]): void {
     pushItem.className = "push-item";
 
     // Add SMS badge for SMS-related pushes
-    if (push.type === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
-      pushItem.classList.add("push-sms");
+    // Use package name matching for accuracy instead of app name heuristics
+    if (push.type === "mirror") {
+      // Known SMS app package names on Android
+      const smsPackages = [
+        "com.google.android.apps.messaging",  // Google Messages
+        "com.android.mms",                     // Stock Android SMS
+        "com.samsung.android.messaging",       // Samsung Messages
+        "com.textra",                           // Textra SMS
+      ];
+
+      const isSmsApp = push.package_name &&
+        smsPackages.some(pkg => push.package_name?.startsWith(pkg));
+
+      if (isSmsApp) {
+        pushItem.classList.add("push-sms");
+      }
     } else if (push.type === "sms_changed") {
+      // sms_changed type is ALWAYS SMS
       pushItem.classList.add("push-sms");
     }
 

@@ -1,5 +1,10 @@
 "use strict";
 (() => {
+  // src/types/domain.ts
+  function isMirrorPush(push) {
+    return push.type === "mirror";
+  }
+
   // src/lib/ui/dom.ts
   function getElementById(id) {
     const element = document.getElementById(id);
@@ -558,9 +563,17 @@
         title = push.title;
         url = push.url;
         body = push.body;
-      } else if (push.type === "mirror") {
-        title = `SMS: ${push.title || ""}`;
+      } else if (isMirrorPush(push)) {
+        const appName = push.application_name?.trim();
+        const prefix = appName ? `${appName}: ` : "";
+        title = `${prefix}${push.title || ""}`;
         body = push.body;
+        if (!appName) {
+          logToBackground("WARN", "[displayPushes] Mirror push missing application_name", {
+            pushIden: push.iden,
+            pushTitle: push.title
+          });
+        }
       } else if (push.type === "sms_changed") {
         if (push.notifications && push.notifications.length > 0) {
           const sms = push.notifications[0];
@@ -573,8 +586,21 @@
       }
       const pushItem = document.createElement("div");
       pushItem.className = "push-item";
-      if (push.type === "mirror" && push.application_name?.toLowerCase().includes("messaging")) {
-        pushItem.classList.add("push-sms");
+      if (push.type === "mirror") {
+        const smsPackages = [
+          "com.google.android.apps.messaging",
+          // Google Messages
+          "com.android.mms",
+          // Stock Android SMS
+          "com.samsung.android.messaging",
+          // Samsung Messages
+          "com.textra"
+          // Textra SMS
+        ];
+        const isSmsApp = push.package_name && smsPackages.some((pkg) => push.package_name?.startsWith(pkg));
+        if (isSmsApp) {
+          pushItem.classList.add("push-sms");
+        }
       } else if (push.type === "sms_changed") {
         pushItem.classList.add("push-sms");
       }
