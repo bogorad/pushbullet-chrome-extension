@@ -11,7 +11,6 @@
       self,
       nixpkgs,
       flake-utils,
-      opencode-flake,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
