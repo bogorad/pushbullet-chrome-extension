@@ -4,7 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    opencode-flake.url = "github:bogorad/opencode-flake";
   };
 
   outputs =
@@ -30,7 +29,6 @@
             esbuild # build
             prettier # format js/ts
             biome # format json
-            opencode-flake.packages.${pkgs.system}.default
           ];
 
           shell = "${pkgs.zsh}/bin/zsh";
