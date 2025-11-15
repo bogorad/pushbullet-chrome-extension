@@ -77,7 +77,7 @@ export async function fetchDevices(apiKey: string): Promise<Device[]> {
   debugLogger.api('INFO', 'Fetching devices', { url: DEVICES_URL, hasApiKey: !!apiKey, timestamp: new Date().toISOString() });
 
   try {
-    const response = await fetch(DEVICES_URL, { headers: authHeaders(apiKey) });
+    const response = await fetch(`${DEVICES_URL}?active=true`, { headers: authHeaders(apiKey) });
     const duration = Date.now() - startTime;
 
     if (!response.ok) {
@@ -92,15 +92,37 @@ export async function fetchDevices(apiKey: string): Promise<Device[]> {
     }
 
     const data: DevicesResponse = await response.json();
-    const activeDevices = data.devices.filter(device => device.active);
+    const allDevices = data.devices; // Include inactive mobiles for "Send to"
+    
+    // Log EVERY device name/details
+    allDevices.forEach((device, index) => {
+      const displayName = device.nickname || `${device.manufacturer || ''} ${device.model || device.type || ''}`.trim() || 'Unknown Device';
+      debugLogger.general('INFO', `[DEVICE_NAME] #${index + 1}/${allDevices.length}: "${displayName}"`, {
+        iden: device.iden,
+        nickname: device.nickname || '(none)',
+        model: device.model || '(none)',
+        manufacturer: device.manufacturer || '(none)',
+        type: device.type || '(none)',
+        active: device.active
+      });
+    });
+    
+    // Filter ghosts (no truthy identifying fields)
+    const validDevices = allDevices.filter(device => 
+      device.nickname || device.model || device.manufacturer || device.type
+    );
+    
     debugLogger.api('INFO', 'Devices fetched successfully', {
       url: DEVICES_URL,
       status: response.status,
       duration: `${duration}ms`,
       totalDevices: data.devices.length,
-      activeDevices: activeDevices.length
+      validDevices: validDevices.length,
+      ghostDevices: data.devices.length - validDevices.length,
+      activeDevices: validDevices.filter(d => d.active).length,
+      inactiveDevices: validDevices.filter(d => !d.active).length
     });
-    return activeDevices;
+    return validDevices;
   } catch (error) {
     const duration = Date.now() - startTime;
     debugLogger.api('ERROR', 'Devices fetch error', {

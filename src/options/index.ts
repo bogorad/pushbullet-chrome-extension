@@ -16,6 +16,7 @@ const encryptionPasswordInput = getElementById<HTMLInputElement>('encryption-pas
 const debugModeCheckbox = getElementById<HTMLInputElement>('debug-mode');
 const saveSettingsButton = getElementById<HTMLButtonElement>('save-settings');
 const resetSettingsButton = getElementById<HTMLButtonElement>('reset-settings');
+const forceWakeBtn = getElementById<HTMLButtonElement>('force-wake');
 const statusMessage = getElementById<HTMLDivElement>('status-message');
 const versionSpan = getElementById<HTMLSpanElement>('version');
 
@@ -300,6 +301,13 @@ function init(): void {
   updateNicknameButton.addEventListener('click', updateNickname);
   saveSettingsButton.addEventListener('click', saveAllSettings);
   resetSettingsButton.addEventListener('click', resetToDefaults);
+forceWakeBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ action: 'attemptReconnect' }).then(() => {
+    showStatus('Force wake sent, check extension popup for status', 'success');
+  }).catch(() => {
+    showStatus('Failed to send force wake', 'error');
+  });
+});
 
   // Auto-save on change
   notificationTimeoutInput.addEventListener('change', () => {

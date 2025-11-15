@@ -290,6 +290,7 @@
   var debugModeCheckbox = getElementById("debug-mode");
   var saveSettingsButton = getElementById("save-settings");
   var resetSettingsButton = getElementById("reset-settings");
+  var forceWakeBtn = getElementById("force-wake");
   var statusMessage = getElementById("status-message");
   var versionSpan = getElementById("version");
   var DEFAULT_SETTINGS = {
@@ -474,6 +475,13 @@
     updateNicknameButton.addEventListener("click", updateNickname);
     saveSettingsButton.addEventListener("click", saveAllSettings);
     resetSettingsButton.addEventListener("click", resetToDefaults);
+    forceWakeBtn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ action: "attemptReconnect" }).then(() => {
+        showStatus2("Force wake sent, check extension popup for status", "success");
+      }).catch(() => {
+        showStatus2("Failed to send force wake", "error");
+      });
+    });
     notificationTimeoutInput.addEventListener("change", () => {
       const seconds = parseInt(notificationTimeoutInput.value, 10);
       if (!isNaN(seconds) && seconds >= 0 && seconds <= 60) {

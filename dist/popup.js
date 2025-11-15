@@ -520,14 +520,18 @@
     }
   }
   function populateDeviceDropdown(devicesList, chatsList) {
-    const devicesToUse = devicesList || devices;
+    const devicesToUse = (devicesList || devices).filter(
+      (device) => device.nickname || device.model || device.manufacturer || device.type
+    );
     while (targetDeviceSelect.options.length > 1) {
       targetDeviceSelect.remove(1);
     }
     devicesToUse.forEach((device) => {
       const option = document.createElement("option");
       option.value = device.iden;
-      option.textContent = device.nickname || device.model || "Unknown Device";
+      let displayName = device.nickname || `${device.manufacturer || ""} ${device.model || device.type || ""}`.trim() || "Unknown Device";
+      if (!device.active) displayName += " (offline)";
+      option.textContent = displayName;
       targetDeviceSelect.appendChild(option);
     });
     const chatsToUse = chatsList || [];

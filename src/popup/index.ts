@@ -506,7 +506,9 @@ function updateUserInfo(userInfo: User): void {
  * Populate device dropdown
  */
 function populateDeviceDropdown(devicesList: Device[], chatsList?: Chat[]): void {
-  const devicesToUse = devicesList || devices;
+  const devicesToUse = (devicesList || devices).filter(device =>
+    device.nickname || device.model || device.manufacturer || device.type
+  );
 
   // Clear existing options except 'All Devices'
   while (targetDeviceSelect.options.length > 1) {
@@ -517,7 +519,11 @@ function populateDeviceDropdown(devicesList: Device[], chatsList?: Chat[]): void
   devicesToUse.forEach((device) => {
     const option = document.createElement("option");
     option.value = device.iden;
-    option.textContent = device.nickname || device.model || "Unknown Device";
+    let displayName = device.nickname ||
+      `${device.manufacturer || ''} ${device.model || device.type || ''}`.trim() ||
+      "Unknown Device";
+    if (!device.active) displayName += " (offline)";
+    option.textContent = displayName;
     targetDeviceSelect.appendChild(option);
   });
 

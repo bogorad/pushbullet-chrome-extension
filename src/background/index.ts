@@ -577,6 +577,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   // Ensure state machine is ready
   await stateMachineReady;
 
+  if (alarm.name === "longSleepRecovery") {
+    const apiKey = getApiKey();
+    if (apiKey && (await stateMachineReady, stateMachine.isInState(ServiceWorkerState.IDLE) || stateMachine.isInState(ServiceWorkerState.ERROR))) {
+      debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
+      await stateMachine.transition("ATTEMPT_RECONNECT", { hasApiKey: true });
+    }
+    return;
+  }
+
   // Handle our two main periodic alarms.
   if (alarm.name === "websocketHealthCheck") {
     const currentState = stateMachine.getCurrentState();
@@ -843,6 +852,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           debugLogger.general("DEBUG", "Popup opened - using cached pushes", {
             count: sessionCache.recentPushes?.length ?? 0,
           });
+        }
+
+        // FORCE REFRESH DEVICES FOR POPUP - BYPASS CACHE
+        if (apiKey) {
+          debugLogger.general("INFO", "Force refreshing devices for popup");
+          const devices = await fetchDevices(apiKey);
+          sessionCache.devices = devices;
         }
 
         // STEP 5: Send response with session data
@@ -1554,6 +1570,7 @@ async function bootstrap(
 
 chrome.runtime.onStartup.addListener(async () => {
   await ensureDebugConfigLoadedOnce();
+  chrome.alarms.create('longSleepRecovery', { periodInMinutes: 5 });
   void bootstrap("startup");
 });
 chrome.runtime.onInstalled.addListener(async () => {

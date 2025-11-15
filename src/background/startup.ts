@@ -76,8 +76,13 @@ export async function orchestrateInitialization(
 
       // *** STEP 1: Try to load session from IndexedDB ***
       const cachedSession = await loadSessionCache();
+      const DOWNTIME_THRESHOLD = 3600000; // 1 hour
+      const isLongDowntime = cachedSession && (Date.now() - cachedSession.cachedAt > DOWNTIME_THRESHOLD);
+      if (isLongDowntime) {
+        debugLogger.general('WARN', 'Long downtime (>1h) detected, forcing full network reinit');
+      }
 
-      if (cachedSession && isCacheFresh(cachedSession)) {
+      if (cachedSession && !isLongDowntime && isCacheFresh(cachedSession)) {
         // Cache is fresh! Use it immediately
         debugLogger.general('INFO', 'Hydrating session from IndexedDB cache', {
           cacheAge: `${Math.round((Date.now() - cachedSession.cachedAt) / 1000)}s`,

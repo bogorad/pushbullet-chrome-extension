@@ -1428,7 +1428,7 @@
     const startTime = Date.now();
     debugLogger.api("INFO", "Fetching devices", { url: DEVICES_URL, hasApiKey: !!apiKey2, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
     try {
-      const response = await fetch(DEVICES_URL, { headers: authHeaders(apiKey2) });
+      const response = await fetch(`${DEVICES_URL}?active=true`, { headers: authHeaders(apiKey2) });
       const duration = Date.now() - startTime;
       if (!response.ok) {
         const error = new Error(`Failed to fetch devices: ${response.status} ${response.statusText}`);
@@ -1441,15 +1441,32 @@
         throw error;
       }
       const data = await response.json();
-      const activeDevices = data.devices.filter((device) => device.active);
+      const allDevices = data.devices;
+      allDevices.forEach((device, index) => {
+        const displayName = device.nickname || `${device.manufacturer || ""} ${device.model || device.type || ""}`.trim() || "Unknown Device";
+        debugLogger.general("INFO", `[DEVICE_NAME] #${index + 1}/${allDevices.length}: "${displayName}"`, {
+          iden: device.iden,
+          nickname: device.nickname || "(none)",
+          model: device.model || "(none)",
+          manufacturer: device.manufacturer || "(none)",
+          type: device.type || "(none)",
+          active: device.active
+        });
+      });
+      const validDevices = allDevices.filter(
+        (device) => device.nickname || device.model || device.manufacturer || device.type
+      );
       debugLogger.api("INFO", "Devices fetched successfully", {
         url: DEVICES_URL,
         status: response.status,
         duration: `${duration}ms`,
         totalDevices: data.devices.length,
-        activeDevices: activeDevices.length
+        validDevices: validDevices.length,
+        ghostDevices: data.devices.length - validDevices.length,
+        activeDevices: validDevices.filter((d) => d.active).length,
+        inactiveDevices: validDevices.filter((d) => !d.active).length
       });
-      return activeDevices;
+      return validDevices;
     } catch (error) {
       const duration = Date.now() - startTime;
       debugLogger.api("ERROR", "Devices fetch error", {
@@ -3880,7 +3897,12 @@
           trigger
         });
         const cachedSession = await loadSessionCache();
-        if (cachedSession && isCacheFresh(cachedSession)) {
+        const DOWNTIME_THRESHOLD = 36e5;
+        const isLongDowntime = cachedSession && Date.now() - cachedSession.cachedAt > DOWNTIME_THRESHOLD;
+        if (isLongDowntime) {
+          debugLogger.general("WARN", "Long downtime (>1h) detected, forcing full network reinit");
+        }
+        if (cachedSession && !isLongDowntime && isCacheFresh(cachedSession)) {
           debugLogger.general("INFO", "Hydrating session from IndexedDB cache", {
             cacheAge: `${Math.round((Date.now() - cachedSession.cachedAt) / 1e3)}s`,
             deviceCount: cachedSession.devices.length,
@@ -4426,6 +4448,14 @@
       }
     }
     await stateMachineReady;
+    if (alarm.name === "longSleepRecovery") {
+      const apiKey2 = getApiKey();
+      if (apiKey2 && (await stateMachineReady, stateMachine.isInState("idle" /* IDLE */) || stateMachine.isInState("error" /* ERROR */))) {
+        debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
+        await stateMachine.transition("ATTEMPT_RECONNECT", { hasApiKey: true });
+      }
+      return;
+    }
     if (alarm.name === "websocketHealthCheck") {
       const currentState = stateMachine.getCurrentState();
       debugLogger.general(
@@ -4632,6 +4662,11 @@
             debugLogger.general("DEBUG", "Popup opened - using cached pushes", {
               count: sessionCache.recentPushes?.length ?? 0
             });
+          }
+          if (apiKey2) {
+            debugLogger.general("INFO", "Force refreshing devices for popup");
+            const devices = await fetchDevices(apiKey2);
+            sessionCache.devices = devices;
           }
           sendResponse({
             isAuthenticated: !!apiKey2,
@@ -5179,6 +5214,7 @@
   }
   chrome.runtime.onStartup.addListener(async () => {
     await ensureDebugConfigLoadedOnce();
+    chrome.alarms.create("longSleepRecovery", { periodInMinutes: 5 });
     void bootstrap("startup");
   });
   chrome.runtime.onInstalled.addListener(async () => {
