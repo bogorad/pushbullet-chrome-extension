@@ -36,6 +36,9 @@ export interface StorageRepository {
   getNotificationTimeout(): Promise<number>;
   setNotificationTimeout(timeout: number): Promise<void>;
 
+  getOnlyThisDevice(): Promise<boolean>;
+  setOnlyThisDevice(value: boolean): Promise<void>;
+
   // Encryption
   getEncryptionPassword(): Promise<string | null>;
   setEncryptionPassword(password: string | null): Promise<void>;
@@ -177,7 +180,23 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   /**
+   * Get Only This Device setting from sync storage
+   */
+  async getOnlyThisDevice(): Promise<boolean> {
+    const result = await chrome.storage.sync.get(['onlyThisDevice']);
+    return result.onlyThisDevice !== undefined ? result.onlyThisDevice : false;
+  }
+
+  /**
+   * Set Only This Device setting in sync storage
+   */
+  async setOnlyThisDevice(value: boolean): Promise<void> {
+    await chrome.storage.sync.set({ onlyThisDevice: value });
+  }
+
+  /**
    * Get Encryption Password from local storage
+   */
    */
   async getEncryptionPassword(): Promise<string | null> {
     const result = await chrome.storage.local.get(['encryptionPassword']);

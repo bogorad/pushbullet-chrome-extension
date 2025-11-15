@@ -147,6 +147,7 @@ export interface SessionCache {
   lastUpdated: number;
   autoOpenLinks: boolean;
   deviceNickname: string;
+  onlyThisDevice: boolean;
   lastModifiedCutoff: number; // ← Tracks last timestamp for incremental fetches
   cachedAt: number; // Timestamp when cache was saved to IndexedDB
 }
@@ -227,6 +228,7 @@ export interface StorageConfig {
   deviceNickname?: string;
   autoOpenLinks?: boolean;
   notificationTimeout?: number;
+  onlyThisDevice?: boolean;
   debugConfig?: DebugConfig;
 }
 
@@ -269,6 +271,8 @@ export interface SessionDataResponse {
   autoOpenLinks: boolean;
   deviceNickname: string;
   websocketConnected?: boolean;
+  onlyThisDevice?: boolean;
+  deviceIden?: string;
 }
 
 export interface ApiKeyChangedMessage {
@@ -296,6 +300,7 @@ export interface SettingsChangedMessage {
   action: MessageAction.SETTINGS_CHANGED;
   autoOpenLinks?: boolean;
   notificationTimeout?: number;
+  onlyThisDevice?: boolean;
 }
 
 export interface LogoutMessage {

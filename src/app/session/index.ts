@@ -23,6 +23,7 @@ export const sessionCache: SessionCache = {
   lastUpdated: 0,
   autoOpenLinks: true,
   deviceNickname: "Chrome",
+  onlyThisDevice: false,
   lastModifiedCutoff: 0,  // ← ADD: Initialize to 0
   cachedAt: 0, // No cache initially
 };

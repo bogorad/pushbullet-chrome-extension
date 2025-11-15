@@ -861,12 +861,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sessionCache.devices = devices;
         }
 
+        // STEP 5: Apply onlyThisDevice filter to recentPushes for display
+        const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
+        const deviceIden = await storageRepository.getDeviceIden();
+        const filteredPushes = onlyThisDevice && deviceIden 
+          ? sessionCache.recentPushes.filter((p: any) => p.target_device_iden === deviceIden)
+          : sessionCache.recentPushes;
+        debugLogger.general('INFO', 'Recent pushes filtered for display', {
+          total: sessionCache.recentPushes.length,
+          filtered: filteredPushes.length,
+          onlyThisDevice,
+          hasDeviceIden: !!deviceIden
+        });
+
         // STEP 5: Send response with session data
         sendResponse({
           isAuthenticated: !!apiKey,
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,
-          recentPushes: sessionCache.recentPushes,
+          recentPushes: filteredPushes,
           chats: sessionCache.chats,
           autoOpenLinks: getAutoOpenLinks(),
           deviceNickname: getDeviceNickname(),

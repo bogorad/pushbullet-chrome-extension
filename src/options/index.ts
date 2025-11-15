@@ -17,6 +17,7 @@ const debugModeCheckbox = getElementById<HTMLInputElement>('debug-mode');
 const saveSettingsButton = getElementById<HTMLButtonElement>('save-settings');
 const resetSettingsButton = getElementById<HTMLButtonElement>('reset-settings');
 const forceWakeBtn = getElementById<HTMLButtonElement>('force-wake');
+const onlyThisDeviceCheckbox = getElementById<HTMLInputElement>('only-this-device');
 const statusMessage = getElementById<HTMLDivElement>('status-message');
 const versionSpan = getElementById<HTMLSpanElement>('version');
 
@@ -47,6 +48,7 @@ async function loadSettings(): Promise<void> {
     const notificationTimeout = await storageRepository.getNotificationTimeout();
     const autoOpenLinks = await storageRepository.getAutoOpenLinks();
     const autoOpenLinksOnReconnect = await storageRepository.getAutoOpenLinksOnReconnect();
+    const onlyThisDevice = await storageRepository.getOnlyThisDevice();
     const encryptionPassword = await storageRepository.getEncryptionPassword();
 
     // Set device nickname
@@ -58,6 +60,13 @@ async function loadSettings(): Promise<void> {
     // Set auto-open links
     autoOpenLinksCheckbox.checked = autoOpenLinks;
     autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
+    onlyThisDeviceCheckbox.checked = onlyThisDevice;
+
+    // Save auto-open on reconnect
+    autoOpenLinksOnReconnectCheckbox.addEventListener('change', saveAutoOpenLinksOnReconnect);
+
+    // Save only this device filter
+    onlyThisDeviceCheckbox.addEventListener('change', saveOnlyThisDevice);
 
     // Set encryption password
     encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
@@ -160,6 +169,22 @@ async function saveAutoOpenLinksOnReconnect(): Promise<void> {
   } catch (error) {
     console.error('Error saving auto-open links on reconnect:', error);
     showStatus('Error saving auto-open links on reconnect setting', 'error');
+  }
+}
+
+async function saveOnlyThisDevice(): Promise<void> {
+  const enabled = onlyThisDeviceCheckbox.checked;
+
+  try {
+    await storageRepository.setOnlyThisDevice(enabled);
+    chrome.runtime.sendMessage({
+      action: MessageAction.SETTINGS_CHANGED,
+      onlyThisDevice: enabled
+    });
+    showStatus('Only this device filter updated', 'success');
+  } catch (error) {
+    console.error('Error saving only this device filter:', error);
+    showStatus('Error saving filter setting', 'error');
   }
 }
 
@@ -301,13 +326,13 @@ function init(): void {
   updateNicknameButton.addEventListener('click', updateNickname);
   saveSettingsButton.addEventListener('click', saveAllSettings);
   resetSettingsButton.addEventListener('click', resetToDefaults);
-forceWakeBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ action: 'attemptReconnect' }).then(() => {
-    showStatus('Force wake sent, check extension popup for status', 'success');
-  }).catch(() => {
-    showStatus('Failed to send force wake', 'error');
+  forceWakeBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'attemptReconnect' }).then(() => {
+      showStatus('Force wake sent, check extension popup for status', 'success');
+    }).catch(() => {
+      showStatus('Failed to send force wake', 'error');
+    });
   });
-});
 
   // Auto-save on change
   notificationTimeoutInput.addEventListener('change', () => {
