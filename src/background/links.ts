@@ -129,7 +129,7 @@ export async function autoOpenOfflineLinks(
         created: p.created ?? 0,
       });
 
-      // 🔥 NEW BLOCK: Dismiss after auto-open (added in Step 4B)
+      // Dismiss after auto-open (matches real-time behavior)
       if (shouldDismiss && dismissApiKey && p.iden) {
         try {
           await dismissPush(p.iden, dismissApiKey);
