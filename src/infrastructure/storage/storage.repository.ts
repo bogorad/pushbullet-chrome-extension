@@ -197,7 +197,6 @@ export class ChromeStorageRepository implements StorageRepository {
   /**
    * Get Encryption Password from local storage
    */
-   */
   async getEncryptionPassword(): Promise<string | null> {
     const result = await chrome.storage.local.get(['encryptionPassword']);
     return result.encryptionPassword || null;

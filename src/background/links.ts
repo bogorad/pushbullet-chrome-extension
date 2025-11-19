@@ -1,8 +1,12 @@
-import { fetchIncrementalPushes } from "../app/api/client";
+import {
+  fetchIncrementalPushes,
+  dismissPush,
+} from "../app/api/client"; // dismissPush added
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 import { hasOpenedIden, markOpened, getMaxOpenedCreated } from "../infrastructure/storage/opened-mru.repository";
 import type { Push } from "../types/domain";
 import { debugLogger } from "../lib/logging";
+import { getApiKey } from "./state"; // ⬅️ NEW LINE
 
 function isLinkPush(p: Push): p is Push & { url: string; iden: string } {
   return p.type === "link" && typeof p.url === "string" && p.url.length > 0 && typeof p.iden === "string";
@@ -97,6 +101,11 @@ export async function autoOpenOfflineLinks(
 
   const openedCreated: number[] = [];
   let openedThisRun = 0;
+
+  // Pre-loop optimization (added in Step 4C)
+  const shouldDismiss = await storageRepository.getDismissAfterAutoOpen();
+  const dismissApiKey = getApiKey();
+
   for (const p of candidates) {
     if (openedThisRun >= safetyCap) {
       debugLogger.websocket("WARN", "Auto-open links capped", {
@@ -119,6 +128,23 @@ export async function autoOpenOfflineLinks(
         iden: p.iden,
         created: p.created ?? 0,
       });
+
+      // 🔥 NEW BLOCK: Dismiss after auto-open (added in Step 4B)
+      if (shouldDismiss && dismissApiKey && p.iden) {
+        try {
+          await dismissPush(p.iden, dismissApiKey);
+          debugLogger.websocket(
+            "INFO",
+            `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`,
+          );
+        } catch (e) {
+          debugLogger.websocket(
+            "WARN",
+            `Offline AutoOpen: dismiss failed for iden=${p.iden}: ${(e as Error).message}`,
+          );
+        }
+      }
+
       openedThisRun += 1;
       openedCreated.push(p.created ?? 0);
     } catch {
