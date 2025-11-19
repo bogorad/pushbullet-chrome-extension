@@ -1111,6 +1111,19 @@
       await chrome.storage.sync.set({ notificationTimeout: timeout });
     }
     /**
+     * Get Only This Device setting from sync storage
+     */
+    async getOnlyThisDevice() {
+      const result = await chrome.storage.sync.get(["onlyThisDevice"]);
+      return result.onlyThisDevice !== void 0 ? result.onlyThisDevice : false;
+    }
+    /**
+     * Set Only This Device setting in sync storage
+     */
+    async setOnlyThisDevice(value) {
+      await chrome.storage.sync.set({ onlyThisDevice: value });
+    }
+    /**
      * Get Encryption Password from local storage
      */
     async getEncryptionPassword() {
@@ -2044,6 +2057,7 @@
     lastUpdated: 0,
     autoOpenLinks: true,
     deviceNickname: "Chrome",
+    onlyThisDevice: false,
     lastModifiedCutoff: 0,
     // ← ADD: Initialize to 0
     cachedAt: 0
@@ -2786,6 +2800,8 @@
     });
     const openedCreated = [];
     let openedThisRun = 0;
+    const shouldDismiss = await storageRepository.getDismissAfterAutoOpen();
+    const dismissApiKey = getApiKey();
     for (const p of candidates) {
       if (openedThisRun >= safetyCap) {
         debugLogger.websocket("WARN", "Auto-open links capped", {
@@ -2806,6 +2822,20 @@
           iden: p.iden,
           created: p.created ?? 0
         });
+        if (shouldDismiss && dismissApiKey && p.iden) {
+          try {
+            await dismissPush(p.iden, dismissApiKey);
+            debugLogger.websocket(
+              "INFO",
+              `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`
+            );
+          } catch (e) {
+            debugLogger.websocket(
+              "WARN",
+              `Offline AutoOpen: dismiss failed for iden=${p.iden}: ${e.message}`
+            );
+          }
+        }
         openedThisRun += 1;
         openedCreated.push(p.created ?? 0);
       } catch {
@@ -4668,11 +4698,20 @@
             const devices = await fetchDevices(apiKey2);
             sessionCache.devices = devices;
           }
+          const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
+          const deviceIden2 = await storageRepository.getDeviceIden();
+          const filteredPushes = onlyThisDevice && deviceIden2 ? sessionCache.recentPushes.filter((p) => p.target_device_iden === deviceIden2) : sessionCache.recentPushes;
+          debugLogger.general("INFO", "Recent pushes filtered for display", {
+            total: sessionCache.recentPushes.length,
+            filtered: filteredPushes.length,
+            onlyThisDevice,
+            hasDeviceIden: !!deviceIden2
+          });
           sendResponse({
             isAuthenticated: !!apiKey2,
             userInfo: sessionCache.userInfo,
             devices: sessionCache.devices,
-            recentPushes: sessionCache.recentPushes,
+            recentPushes: filteredPushes,
             chats: sessionCache.chats,
             autoOpenLinks: getAutoOpenLinks(),
             deviceNickname: getDeviceNickname(),

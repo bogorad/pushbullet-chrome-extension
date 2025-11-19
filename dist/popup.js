@@ -94,6 +94,19 @@
       await chrome.storage.sync.set({ notificationTimeout: timeout });
     }
     /**
+     * Get Only This Device setting from sync storage
+     */
+    async getOnlyThisDevice() {
+      const result = await chrome.storage.sync.get(["onlyThisDevice"]);
+      return result.onlyThisDevice !== void 0 ? result.onlyThisDevice : false;
+    }
+    /**
+     * Set Only This Device setting in sync storage
+     */
+    async setOnlyThisDevice(value) {
+      await chrome.storage.sync.set({ onlyThisDevice: value });
+    }
+    /**
      * Get Encryption Password from local storage
      */
     async getEncryptionPassword() {

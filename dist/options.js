@@ -103,6 +103,19 @@
       await chrome.storage.sync.set({ notificationTimeout: timeout });
     }
     /**
+     * Get Only This Device setting from sync storage
+     */
+    async getOnlyThisDevice() {
+      const result = await chrome.storage.sync.get(["onlyThisDevice"]);
+      return result.onlyThisDevice !== void 0 ? result.onlyThisDevice : false;
+    }
+    /**
+     * Set Only This Device setting in sync storage
+     */
+    async setOnlyThisDevice(value) {
+      await chrome.storage.sync.set({ onlyThisDevice: value });
+    }
+    /**
      * Get Encryption Password from local storage
      */
     async getEncryptionPassword() {
@@ -291,6 +304,7 @@
   var saveSettingsButton = getElementById("save-settings");
   var resetSettingsButton = getElementById("reset-settings");
   var forceWakeBtn = getElementById("force-wake");
+  var onlyThisDeviceCheckbox = getElementById("only-this-device");
   var statusMessage = getElementById("status-message");
   var versionSpan = getElementById("version");
   var DEFAULT_SETTINGS = {
@@ -313,11 +327,15 @@
       const notificationTimeout = await storageRepository.getNotificationTimeout();
       const autoOpenLinks = await storageRepository.getAutoOpenLinks();
       const autoOpenLinksOnReconnect = await storageRepository.getAutoOpenLinksOnReconnect();
+      const onlyThisDevice = await storageRepository.getOnlyThisDevice();
       const encryptionPassword = await storageRepository.getEncryptionPassword();
       deviceNicknameInput.value = deviceNickname || DEFAULT_SETTINGS.deviceNickname;
       notificationTimeoutInput.value = Math.round(notificationTimeout / 1e3).toString();
       autoOpenLinksCheckbox.checked = autoOpenLinks;
       autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
+      onlyThisDeviceCheckbox.checked = onlyThisDevice;
+      autoOpenLinksOnReconnectCheckbox.addEventListener("change", saveAutoOpenLinksOnReconnect);
+      onlyThisDeviceCheckbox.addEventListener("change", saveOnlyThisDevice);
       encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
       debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
       const manifest = chrome.runtime.getManifest();
@@ -383,6 +401,20 @@
     } catch (error) {
       console.error("Error saving auto-open links on reconnect:", error);
       showStatus2("Error saving auto-open links on reconnect setting", "error");
+    }
+  }
+  async function saveOnlyThisDevice() {
+    const enabled = onlyThisDeviceCheckbox.checked;
+    try {
+      await storageRepository.setOnlyThisDevice(enabled);
+      chrome.runtime.sendMessage({
+        action: "settingsChanged" /* SETTINGS_CHANGED */,
+        onlyThisDevice: enabled
+      });
+      showStatus2("Only this device filter updated", "success");
+    } catch (error) {
+      console.error("Error saving only this device filter:", error);
+      showStatus2("Error saving filter setting", "error");
     }
   }
   async function saveEncryptionPassword() {
