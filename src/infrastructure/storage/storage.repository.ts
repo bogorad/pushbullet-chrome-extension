@@ -84,6 +84,15 @@ export interface StorageRepository {
   }>;
 }
 
+const getStringOrNull = (value: unknown): string | null =>
+  typeof value === 'string' ? value : null;
+
+const getBooleanOrDefault = (value: unknown, fallback: boolean): boolean =>
+  typeof value === 'boolean' ? value : fallback;
+
+const getNumberOrDefault = (value: unknown, fallback: number): number =>
+  typeof value === 'number' ? value : fallback;
+
 /**
  * Chrome Storage Repository Implementation
  * 
@@ -99,7 +108,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getApiKey(): Promise<string | null> {
     const result = await chrome.storage.local.get(['apiKey']);
-    return result.apiKey || null;
+    return getStringOrNull(result.apiKey);
   }
 
   /**
@@ -120,7 +129,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getDeviceIden(): Promise<string | null> {
     const result = await chrome.storage.local.get(['deviceIden']);
-    return result.deviceIden || null;
+    return getStringOrNull(result.deviceIden);
   }
 
   /**
@@ -139,7 +148,7 @@ export class ChromeStorageRepository implements StorageRepository {
     */
   async getDeviceNickname(): Promise<string | null> {
     const result = await chrome.storage.local.get(['deviceNickname']);
-    return result.deviceNickname || null;
+    return getStringOrNull(result.deviceNickname);
   }
 
   /**
@@ -154,7 +163,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getAutoOpenLinks(): Promise<boolean> {
     const result = await chrome.storage.sync.get(['autoOpenLinks']);
-    return result.autoOpenLinks !== undefined ? result.autoOpenLinks : false;
+    return getBooleanOrDefault(result.autoOpenLinks, false);
   }
 
   /**
@@ -169,7 +178,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getNotificationTimeout(): Promise<number> {
     const result = await chrome.storage.sync.get(['notificationTimeout']);
-    return result.notificationTimeout !== undefined ? result.notificationTimeout : 5000;
+    return getNumberOrDefault(result.notificationTimeout, 5000);
   }
 
   /**
@@ -184,7 +193,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getOnlyThisDevice(): Promise<boolean> {
     const result = await chrome.storage.sync.get(['onlyThisDevice']);
-    return result.onlyThisDevice !== undefined ? result.onlyThisDevice : false;
+    return getBooleanOrDefault(result.onlyThisDevice, false);
   }
 
   /**
@@ -199,7 +208,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getEncryptionPassword(): Promise<string | null> {
     const result = await chrome.storage.local.get(['encryptionPassword']);
-    return result.encryptionPassword || null;
+    return getStringOrNull(result.encryptionPassword);
   }
 
   /**
@@ -218,7 +227,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getScrollToRecentPushes(): Promise<boolean> {
     const result = await chrome.storage.local.get(['scrollToRecentPushes']);
-    return result.scrollToRecentPushes || false;
+    return getBooleanOrDefault(result.scrollToRecentPushes, false);
   }
 
   /**
@@ -240,7 +249,7 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getDeviceRegistrationInProgress(): Promise<boolean> {
     const result = await chrome.storage.local.get(['deviceRegistrationInProgress']);
-    return result.deviceRegistrationInProgress || false;
+    return getBooleanOrDefault(result.deviceRegistrationInProgress, false);
   }
 
   /**
@@ -410,4 +419,3 @@ export class ChromeStorageRepository implements StorageRepository {
  * This ensures we have a single point of access throughout the application
  */
 export const storageRepository = new ChromeStorageRepository();
-

@@ -50,6 +50,7 @@ vi.mock('../../src/app/reconnect', () => ({
 
 vi.mock('../../src/lib/events/event-bus', () => ({
   globalEventBus: {
+    on: vi.fn(),
     emit: vi.fn()
   }
 }));
@@ -69,6 +70,13 @@ vi.mock('../../src/background/state', () => ({
   isPollingMode: vi.fn(() => false),
   setWebSocketClient: vi.fn(),
   WEBSOCKET_URL: 'wss://example.com/'
+}));
+
+vi.mock('../../src/background/index', () => ({
+  stateMachine: {
+    getCurrentState: vi.fn(() => 'degraded'),
+    transition: vi.fn(() => Promise.resolve())
+  }
 }));
 
 describe('setupContextMenu - Idempotent Guard Pattern', () => {
@@ -128,8 +136,9 @@ describe('setupContextMenu - Idempotent Guard Pattern', () => {
     expect(chrome.contextMenus.removeAll).toHaveBeenCalledTimes(1);
     
     // Complete the removeAll operation
-    if (removeAllCallback) {
-      removeAllCallback();
+    const callback = removeAllCallback as (() => void) | null;
+    if (callback) {
+      callback();
     }
     
     // Even after completion, only one set of menus should be created
@@ -582,5 +591,3 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
     expect(mockConnectFn).toHaveBeenCalledTimes(1);
   });
 });
-
-

@@ -1154,8 +1154,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
 
       // MV3 LIFECYCLE TRACKING: Gather metrics for dashboard
-      const { restarts = 0, recoveryTimings = [] } =
-        await chrome.storage.local.get(["restarts", "recoveryTimings"]);
+      const lifecycleMetrics = await chrome.storage.local.get([
+        "restarts",
+        "recoveryTimings",
+      ]);
+      const restarts =
+        typeof lifecycleMetrics.restarts === "number"
+          ? lifecycleMetrics.restarts
+          : 0;
+      const recoveryTimings = Array.isArray(lifecycleMetrics.recoveryTimings)
+        ? lifecycleMetrics.recoveryTimings.filter(
+          (value): value is number => typeof value === "number",
+        )
+        : [];
       const avgRecoveryTime =
         recoveryTimings.length > 0
           ? recoveryTimings.reduce((a: number, b: number) => a + b, 0) /

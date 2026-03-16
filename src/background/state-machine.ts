@@ -94,19 +94,24 @@ export class ServiceWorkerStateMachine {
 
     try {
       const { lastKnownState } = await chrome.storage.local.get('lastKnownState');
+      const restoredState =
+        typeof lastKnownState === 'string' &&
+        Object.values(ServiceWorkerState).includes(lastKnownState as ServiceWorkerState)
+          ? (lastKnownState as ServiceWorkerState)
+          : null;
 
       // --- START MODIFICATION ---
       // Clear terminal and transient states on extension reload
       // These states imply active connections that no longer exist after reload
-      if (lastKnownState === ServiceWorkerState.ERROR) {
+      if (restoredState === ServiceWorkerState.ERROR) {
         debugLogger.general(
           "WARN",
           "[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization.",
         );
         instance.currentState = ServiceWorkerState.IDLE;
       } else if (
-        lastKnownState === ServiceWorkerState.RECONNECTING ||
-        lastKnownState === ServiceWorkerState.DEGRADED
+        restoredState === ServiceWorkerState.RECONNECTING ||
+        restoredState === ServiceWorkerState.DEGRADED
       ) {
         // These states imply active connection attempts that are now stale after reload
         debugLogger.general(
@@ -117,11 +122,8 @@ export class ServiceWorkerStateMachine {
           },
         );
         instance.currentState = ServiceWorkerState.IDLE;
-      } else if (
-        lastKnownState &&
-        Object.values(ServiceWorkerState).includes(lastKnownState)
-      ) {
-        instance.currentState = lastKnownState as ServiceWorkerState;
+      } else if (restoredState) {
+        instance.currentState = restoredState;
         debugLogger.general("INFO", "[StateMachine] Hydrated state from storage", {
           restoredState: instance.currentState,
         });
@@ -507,4 +509,3 @@ export class ServiceWorkerStateMachine {
     }
   }
 }
-
