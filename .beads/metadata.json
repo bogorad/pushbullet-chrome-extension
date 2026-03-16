@@ -2,6 +2,8 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
+  "dolt_server_host": "127.0.0.1",
+  "dolt_server_user": "root",
   "dolt_database": "pushbullet_chrome_extension",
   "project_id": "4876c000-4de3-43be-9c96-bb30b9748cfe"
 }
