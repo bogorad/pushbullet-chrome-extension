@@ -24,6 +24,9 @@
   }
 
   // src/infrastructure/storage/storage.repository.ts
+  var getStringOrNull = (value) => typeof value === "string" ? value : null;
+  var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
+  var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
   var ChromeStorageRepository = class {
     /**
      * Get API Key from local storage
@@ -32,7 +35,7 @@
      */
     async getApiKey() {
       const result = await chrome.storage.local.get(["apiKey"]);
-      return result.apiKey || null;
+      return getStringOrNull(result.apiKey);
     }
     /**
      * Set API Key in local storage
@@ -51,7 +54,7 @@
      */
     async getDeviceIden() {
       const result = await chrome.storage.local.get(["deviceIden"]);
-      return result.deviceIden || null;
+      return getStringOrNull(result.deviceIden);
     }
     /**
      * Set Device Identifier in local storage
@@ -68,7 +71,7 @@
       */
     async getDeviceNickname() {
       const result = await chrome.storage.local.get(["deviceNickname"]);
-      return result.deviceNickname || null;
+      return getStringOrNull(result.deviceNickname);
     }
     /**
       * Set Device Nickname in local storage
@@ -81,7 +84,7 @@
      */
     async getAutoOpenLinks() {
       const result = await chrome.storage.sync.get(["autoOpenLinks"]);
-      return result.autoOpenLinks !== void 0 ? result.autoOpenLinks : false;
+      return getBooleanOrDefault(result.autoOpenLinks, false);
     }
     /**
      * Set Auto Open Links setting in sync storage
@@ -94,7 +97,7 @@
      */
     async getNotificationTimeout() {
       const result = await chrome.storage.sync.get(["notificationTimeout"]);
-      return result.notificationTimeout !== void 0 ? result.notificationTimeout : 5e3;
+      return getNumberOrDefault(result.notificationTimeout, 5e3);
     }
     /**
      * Set Notification Timeout in sync storage
@@ -107,7 +110,7 @@
      */
     async getOnlyThisDevice() {
       const result = await chrome.storage.sync.get(["onlyThisDevice"]);
-      return result.onlyThisDevice !== void 0 ? result.onlyThisDevice : false;
+      return getBooleanOrDefault(result.onlyThisDevice, false);
     }
     /**
      * Set Only This Device setting in sync storage
@@ -120,7 +123,7 @@
      */
     async getEncryptionPassword() {
       const result = await chrome.storage.local.get(["encryptionPassword"]);
-      return result.encryptionPassword || null;
+      return getStringOrNull(result.encryptionPassword);
     }
     /**
      * Set Encryption Password in local storage
@@ -137,7 +140,7 @@
      */
     async getScrollToRecentPushes() {
       const result = await chrome.storage.local.get(["scrollToRecentPushes"]);
-      return result.scrollToRecentPushes || false;
+      return getBooleanOrDefault(result.scrollToRecentPushes, false);
     }
     /**
      * Set Scroll to Recent Pushes flag in local storage
@@ -156,7 +159,7 @@
      */
     async getDeviceRegistrationInProgress() {
       const result = await chrome.storage.local.get(["deviceRegistrationInProgress"]);
-      return result.deviceRegistrationInProgress || false;
+      return getBooleanOrDefault(result.deviceRegistrationInProgress, false);
     }
     /**
      * Set Device Registration In Progress flag in local storage

@@ -15,6 +15,9 @@
   }
 
   // src/infrastructure/storage/storage.repository.ts
+  var getStringOrNull = (value) => typeof value === "string" ? value : null;
+  var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
+  var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
   var ChromeStorageRepository = class {
     /**
      * Get API Key from local storage
@@ -23,7 +26,7 @@
      */
     async getApiKey() {
       const result = await chrome.storage.local.get(["apiKey"]);
-      return result.apiKey || null;
+      return getStringOrNull(result.apiKey);
     }
     /**
      * Set API Key in local storage
@@ -42,7 +45,7 @@
      */
     async getDeviceIden() {
       const result = await chrome.storage.local.get(["deviceIden"]);
-      return result.deviceIden || null;
+      return getStringOrNull(result.deviceIden);
     }
     /**
      * Set Device Identifier in local storage
@@ -59,7 +62,7 @@
       */
     async getDeviceNickname() {
       const result = await chrome.storage.local.get(["deviceNickname"]);
-      return result.deviceNickname || null;
+      return getStringOrNull(result.deviceNickname);
     }
     /**
       * Set Device Nickname in local storage
@@ -72,7 +75,7 @@
      */
     async getAutoOpenLinks() {
       const result = await chrome.storage.sync.get(["autoOpenLinks"]);
-      return result.autoOpenLinks !== void 0 ? result.autoOpenLinks : false;
+      return getBooleanOrDefault(result.autoOpenLinks, false);
     }
     /**
      * Set Auto Open Links setting in sync storage
@@ -85,7 +88,7 @@
      */
     async getNotificationTimeout() {
       const result = await chrome.storage.sync.get(["notificationTimeout"]);
-      return result.notificationTimeout !== void 0 ? result.notificationTimeout : 5e3;
+      return getNumberOrDefault(result.notificationTimeout, 5e3);
     }
     /**
      * Set Notification Timeout in sync storage
@@ -98,7 +101,7 @@
      */
     async getOnlyThisDevice() {
       const result = await chrome.storage.sync.get(["onlyThisDevice"]);
-      return result.onlyThisDevice !== void 0 ? result.onlyThisDevice : false;
+      return getBooleanOrDefault(result.onlyThisDevice, false);
     }
     /**
      * Set Only This Device setting in sync storage
@@ -111,7 +114,7 @@
      */
     async getEncryptionPassword() {
       const result = await chrome.storage.local.get(["encryptionPassword"]);
-      return result.encryptionPassword || null;
+      return getStringOrNull(result.encryptionPassword);
     }
     /**
      * Set Encryption Password in local storage
@@ -128,7 +131,7 @@
      */
     async getScrollToRecentPushes() {
       const result = await chrome.storage.local.get(["scrollToRecentPushes"]);
-      return result.scrollToRecentPushes || false;
+      return getBooleanOrDefault(result.scrollToRecentPushes, false);
     }
     /**
      * Set Scroll to Recent Pushes flag in local storage
@@ -147,7 +150,7 @@
      */
     async getDeviceRegistrationInProgress() {
       const result = await chrome.storage.local.get(["deviceRegistrationInProgress"]);
-      return result.deviceRegistrationInProgress || false;
+      return getBooleanOrDefault(result.deviceRegistrationInProgress, false);
     }
     /**
      * Set Device Registration In Progress flag in local storage
@@ -319,13 +322,27 @@
   var openDebugDashboardBtn = getElementById(
     "open-debug-dashboard"
   );
-  var deviceNickname = "Chrome";
   var devices = [];
+  var chats = [];
   var currentPushType = "note";
   function init() {
-    console.log("Popup initializing");
     setupEventListeners();
     checkStorageForApiKey();
+  }
+  function applySessionData(response) {
+    if (response.userInfo) {
+      updateUserInfo(response.userInfo);
+    }
+    if (response.devices) {
+      devices = response.devices;
+    }
+    if (response.chats) {
+      chats = response.chats;
+    }
+    populateDeviceDropdown();
+    if (response.recentPushes) {
+      displayPushes(response.recentPushes);
+    }
   }
   async function initializeFromSessionData(response) {
     if (!response.isAuthenticated) {
@@ -336,13 +353,7 @@
       showSection("error");
       return;
     }
-    deviceNickname = response.deviceNickname;
-    console.log("Device nickname:", deviceNickname);
-    if (response.userInfo) {
-      updateUserInfo(response.userInfo);
-    }
-    populateDeviceDropdown(response.devices, response.chats);
-    displayPushes(response.recentPushes);
+    applySessionData(response);
     const manifest = chrome.runtime.getManifest();
     const version = manifest.version;
     const sendPushHeading = document.getElementById("send-push-heading");
@@ -352,7 +363,6 @@
     showSection("main");
   }
   function checkStorageForApiKey() {
-    console.log("Requesting session data from background");
     showSection("loading");
     chrome.runtime.sendMessage(
       { action: "getSessionData" /* GET_SESSION_DATA */ },
@@ -378,7 +388,6 @@
     );
   }
   function showSection(section) {
-    console.log("Showing section:", section);
     loadingSection.style.display = section === "loading" ? "flex" : "none";
     loginSection.style.display = section === "login" ? "block" : "none";
     mainSection.style.display = section === "main" ? "block" : "none";
@@ -475,7 +484,6 @@
     try {
       await storageRepository.setApiKey(newApiKey);
       await storageRepository.setDeviceNickname(newNickname);
-      deviceNickname = newNickname;
       chrome.runtime.sendMessage(
         {
           action: "apiKeyChanged" /* API_KEY_CHANGED */,
@@ -532,7 +540,8 @@
       userImage.style.display = "none";
     }
   }
-  function populateDeviceDropdown(devicesList, chatsList) {
+  function populateDeviceDropdown(devicesList = devices, chatsList = chats) {
+    const selectedValue = targetDeviceSelect.value;
     const devicesToUse = (devicesList || devices).filter(
       (device) => device.nickname || device.model || device.manufacturer || device.type
     );
@@ -560,6 +569,9 @@
         option.textContent = `F: ${displayName}`;
         targetDeviceSelect.appendChild(option);
       });
+    }
+    if (selectedValue && Array.from(targetDeviceSelect.options).some((option) => option.value === selectedValue)) {
+      targetDeviceSelect.value = selectedValue;
     }
   }
   function displayPushes(pushes) {
@@ -940,7 +952,10 @@
   }
   chrome.runtime.onMessage.addListener((message, _, __) => {
     if (message.action === "connectionStateChanged" /* CONNECTION_STATE_CHANGED */) {
-      console.log("Connection state changed:", message.state);
+      return;
+    }
+    if (message.action === "sessionDataUpdated" /* SESSION_DATA_UPDATED */) {
+      applySessionData(message);
     } else if (message.action === "pushesUpdated" /* PUSHES_UPDATED */) {
       if (message.pushes) {
         displayPushes(message.pushes);

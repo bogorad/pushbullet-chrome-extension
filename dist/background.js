@@ -1032,6 +1032,9 @@
   };
 
   // src/infrastructure/storage/storage.repository.ts
+  var getStringOrNull = (value) => typeof value === "string" ? value : null;
+  var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
+  var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
   var ChromeStorageRepository = class {
     /**
      * Get API Key from local storage
@@ -1040,7 +1043,7 @@
      */
     async getApiKey() {
       const result = await chrome.storage.local.get(["apiKey"]);
-      return result.apiKey || null;
+      return getStringOrNull(result.apiKey);
     }
     /**
      * Set API Key in local storage
@@ -1059,7 +1062,7 @@
      */
     async getDeviceIden() {
       const result = await chrome.storage.local.get(["deviceIden"]);
-      return result.deviceIden || null;
+      return getStringOrNull(result.deviceIden);
     }
     /**
      * Set Device Identifier in local storage
@@ -1076,7 +1079,7 @@
       */
     async getDeviceNickname() {
       const result = await chrome.storage.local.get(["deviceNickname"]);
-      return result.deviceNickname || null;
+      return getStringOrNull(result.deviceNickname);
     }
     /**
       * Set Device Nickname in local storage
@@ -1089,7 +1092,7 @@
      */
     async getAutoOpenLinks() {
       const result = await chrome.storage.sync.get(["autoOpenLinks"]);
-      return result.autoOpenLinks !== void 0 ? result.autoOpenLinks : false;
+      return getBooleanOrDefault(result.autoOpenLinks, false);
     }
     /**
      * Set Auto Open Links setting in sync storage
@@ -1102,7 +1105,7 @@
      */
     async getNotificationTimeout() {
       const result = await chrome.storage.sync.get(["notificationTimeout"]);
-      return result.notificationTimeout !== void 0 ? result.notificationTimeout : 5e3;
+      return getNumberOrDefault(result.notificationTimeout, 5e3);
     }
     /**
      * Set Notification Timeout in sync storage
@@ -1115,7 +1118,7 @@
      */
     async getOnlyThisDevice() {
       const result = await chrome.storage.sync.get(["onlyThisDevice"]);
-      return result.onlyThisDevice !== void 0 ? result.onlyThisDevice : false;
+      return getBooleanOrDefault(result.onlyThisDevice, false);
     }
     /**
      * Set Only This Device setting in sync storage
@@ -1128,7 +1131,7 @@
      */
     async getEncryptionPassword() {
       const result = await chrome.storage.local.get(["encryptionPassword"]);
-      return result.encryptionPassword || null;
+      return getStringOrNull(result.encryptionPassword);
     }
     /**
      * Set Encryption Password in local storage
@@ -1145,7 +1148,7 @@
      */
     async getScrollToRecentPushes() {
       const result = await chrome.storage.local.get(["scrollToRecentPushes"]);
-      return result.scrollToRecentPushes || false;
+      return getBooleanOrDefault(result.scrollToRecentPushes, false);
     }
     /**
      * Set Scroll to Recent Pushes flag in local storage
@@ -1164,7 +1167,7 @@
      */
     async getDeviceRegistrationInProgress() {
       const result = await chrome.storage.local.get(["deviceRegistrationInProgress"]);
-      return result.deviceRegistrationInProgress || false;
+      return getBooleanOrDefault(result.deviceRegistrationInProgress, false);
     }
     /**
      * Set Device Registration In Progress flag in local storage
@@ -2052,16 +2055,13 @@
     devices: [],
     recentPushes: [],
     chats: [],
-    // ← ADD THIS LINE
     isAuthenticated: false,
     lastUpdated: 0,
     autoOpenLinks: true,
     deviceNickname: "Chrome",
     onlyThisDevice: false,
     lastModifiedCutoff: 0,
-    // ← ADD: Initialize to 0
     cachedAt: 0
-    // No cache initially
   };
   var CACHE_TTL_MS = 5 * 60 * 1e3;
   function isCacheFresh(cachedSession) {
@@ -2095,23 +2095,43 @@
     sessionCache.lastModifiedCutoff = 0;
     sessionCache.cachedAt = 0;
   }
+  async function persistSessionCache() {
+    sessionCache.cachedAt = Date.now();
+    await saveSessionCache(sessionCache);
+  }
+  async function getPopupRecentPushes(pushes) {
+    const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
+    const deviceIden2 = await storageRepository.getDeviceIden();
+    if (!onlyThisDevice || !deviceIden2) {
+      return pushes;
+    }
+    return pushes.filter((push) => push.target_device_iden === deviceIden2);
+  }
   async function refreshSessionInBackground(apiKey2) {
     debugLogger.general("INFO", "Starting background cache refresh");
     try {
+      let didRefreshUser = true;
+      let didRefreshDevices = true;
+      let didRefreshPushes = true;
+      let didRefreshChats = true;
       const [userInfo, devices, displayPushes, chats] = await Promise.all([
         fetchUserInfo(apiKey2).catch((e) => {
+          didRefreshUser = false;
           debugLogger.api("WARN", "Background user fetch failed", { error: String(e) });
           return sessionCache.userInfo;
         }),
         fetchDevices(apiKey2).catch((e) => {
+          didRefreshDevices = false;
           debugLogger.api("WARN", "Background devices fetch failed", { error: String(e) });
           return sessionCache.devices;
         }),
         fetchDisplayPushes(apiKey2, 50).catch((e) => {
+          didRefreshPushes = false;
           debugLogger.api("WARN", "Background pushes fetch failed", { error: String(e) });
           return sessionCache.recentPushes;
         }),
         fetchChats(apiKey2).catch((e) => {
+          didRefreshChats = false;
           debugLogger.api("WARN", "Background chats fetch failed", { error: String(e) });
           return sessionCache.chats;
         })
@@ -2121,18 +2141,31 @@
       sessionCache.recentPushes = displayPushes;
       sessionCache.chats = chats;
       sessionCache.lastUpdated = Date.now();
-      await saveSessionCache(sessionCache);
+      const popupPushes = await getPopupRecentPushes(displayPushes);
+      if (didRefreshUser && didRefreshDevices && didRefreshPushes && didRefreshChats) {
+        await persistSessionCache();
+      } else {
+        debugLogger.general("WARN", "Skipping session cache persistence after partial background refresh", {
+          didRefreshUser,
+          didRefreshDevices,
+          didRefreshPushes,
+          didRefreshChats
+        });
+      }
       debugLogger.general("INFO", "Background cache refresh completed", {
         deviceCount: devices.length,
         pushCount: displayPushes.length,
         chatCount: chats.length
       });
       chrome.runtime.sendMessage({
-        action: "SESSION_DATA_UPDATED",
+        action: "sessionDataUpdated" /* SESSION_DATA_UPDATED */,
+        isAuthenticated: sessionCache.isAuthenticated,
         userInfo,
         devices,
-        recentPushes: displayPushes,
-        chats
+        recentPushes: popupPushes,
+        chats,
+        autoOpenLinks: sessionCache.autoOpenLinks,
+        deviceNickname: sessionCache.deviceNickname
       }).catch(() => {
         debugLogger.general("DEBUG", "Popup not available for background update notification");
       });
@@ -2340,7 +2373,7 @@
             "No API key available - session cache not initialized"
           );
         }
-        saveSessionCache(sessionCache);
+        await persistSessionCache();
         debugLogger.general("INFO", "Initialization completed successfully", {
           source,
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -2397,16 +2430,25 @@
           incrementalCount: incrementalPushes.length,
           displayCount: displayPushes.length
         });
+        let didRefreshChats = true;
         try {
           const chats = await fetchChats(apiKeyParam);
           sessionCache.chats = chats;
         } catch (error) {
+          didRefreshChats = false;
           debugLogger.general("WARN", "Failed to refresh chats", {
             error: error.message
           });
         }
         sessionCache.isAuthenticated = true;
         sessionCache.lastUpdated = Date.now();
+        if (didRefreshChats) {
+          await persistSessionCache();
+        } else {
+          debugLogger.general("WARN", "Skipping session cache persistence after partial refresh", {
+            didRefreshChats
+          });
+        }
         debugLogger.general("INFO", "Session cache refreshed successfully", {
           hasUserInfo: !!sessionCache.userInfo,
           deviceCount: sessionCache.devices.length,
@@ -3584,13 +3626,14 @@
       const instance = new _ServiceWorkerStateMachine(callbacks);
       try {
         const { lastKnownState } = await chrome.storage.local.get("lastKnownState");
-        if (lastKnownState === "error" /* ERROR */) {
+        const restoredState = typeof lastKnownState === "string" && Object.values(ServiceWorkerState).includes(lastKnownState) ? lastKnownState : null;
+        if (restoredState === "error" /* ERROR */) {
           debugLogger.general(
             "WARN",
             "[StateMachine] Hydrated to ERROR state. Reverting to IDLE to force re-initialization."
           );
           instance.currentState = "idle" /* IDLE */;
-        } else if (lastKnownState === "reconnecting" /* RECONNECTING */ || lastKnownState === "degraded" /* DEGRADED */) {
+        } else if (restoredState === "reconnecting" /* RECONNECTING */ || restoredState === "degraded" /* DEGRADED */) {
           debugLogger.general(
             "INFO",
             "[StateMachine] Hydrated to transient state. Resetting to IDLE to re-establish connection.",
@@ -3599,8 +3642,8 @@
             }
           );
           instance.currentState = "idle" /* IDLE */;
-        } else if (lastKnownState && Object.values(ServiceWorkerState).includes(lastKnownState)) {
-          instance.currentState = lastKnownState;
+        } else if (restoredState) {
+          instance.currentState = restoredState;
           debugLogger.general("INFO", "[StateMachine] Hydrated state from storage", {
             restoredState: instance.currentState
           });
@@ -3976,9 +4019,34 @@
           sessionCache.devices = d;
           debugLogger.general("INFO", "Devices fetched", { count: d.length });
         });
+        const displayPushesP = fetchDisplayPushes(apiKey2, 50).catch((e) => {
+          debugLogger.api("WARN", "Display pushes fetch failed during startup", {
+            error: String(e)
+          });
+          return sessionCache.recentPushes;
+        }).then((pushes) => {
+          sessionCache.recentPushes = pushes;
+          debugLogger.general("INFO", "Display pushes fetched", {
+            count: pushes.length
+          });
+        });
+        const chatsP = fetchChats(apiKey2).catch((e) => {
+          debugLogger.api("WARN", "Chats fetch failed during startup", {
+            error: String(e)
+          });
+          return sessionCache.chats;
+        }).then((chats) => {
+          sessionCache.chats = chats;
+          debugLogger.general("INFO", "Chats fetched", { count: chats.length });
+        });
         const wsP = Promise.resolve().then(() => connectWs());
-        const results = await Promise.allSettled([devicesP, wsP]);
-        debugLogger.general("INFO", "Functional ready: devices + ws initialized", {
+        const results = await Promise.allSettled([
+          devicesP,
+          displayPushesP,
+          chatsP,
+          wsP
+        ]);
+        debugLogger.general("INFO", "Functional ready: popup session data + ws initialized", {
           trigger,
           results: results.map((r, i) => ({ index: i, status: r.status }))
         });
@@ -3995,7 +4063,6 @@
               pushCount: sessionCache.recentPushes.length,
               chatCount: sessionCache.chats.length,
               cachedAt: sessionCache.cachedAt
-              // ← Shows correct value
             }
           );
         } catch (error) {
@@ -4084,16 +4151,19 @@
     return true;
   }
   var PRIVILEGED_ACTIONS = /* @__PURE__ */ new Set([
-    "apiKeyChanged",
-    "logout",
-    "settingsChanged",
-    "deviceNicknameChanged",
-    "autoOpenLinksChanged",
-    "encryptionPasswordChanged",
-    "debugModeChanged",
-    "pushNote",
-    "pushLink",
-    "pushFile"
+    "apiKeyChanged" /* API_KEY_CHANGED */,
+    "logout" /* LOGOUT */,
+    "settingsChanged" /* SETTINGS_CHANGED */,
+    "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */,
+    "sendPush" /* SEND_PUSH */,
+    "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */,
+    "clearAllLogs" /* CLEAR_ALL_LOGS */,
+    "exportDebugData" /* EXPORT_DEBUG_DATA */,
+    "getDebugSummary" /* GET_DEBUG_SUMMARY */,
+    "autoOpenLinksChanged" /* AUTO_OPEN_LINKS_CHANGED */,
+    "encryptionPasswordChanged" /* ENCRYPTION_PASSWORD_CHANGED */,
+    "debugModeChanged" /* DEBUG_MODE_CHANGED */,
+    "attemptReconnect"
   ]);
   function isPrivilegedAction(action) {
     return PRIVILEGED_ACTIONS.has(action);
@@ -4191,9 +4261,10 @@
       sessionCache.lastUpdated = Date.now();
       chrome.runtime.sendMessage({
         action: "sessionDataUpdated" /* SESSION_DATA_UPDATED */,
+        isAuthenticated: sessionCache.isAuthenticated,
         devices,
+        chats: sessionCache.chats,
         userInfo: sessionCache.userInfo,
-        recentPushes: sessionCache.recentPushes,
         autoOpenLinks: sessionCache.autoOpenLinks,
         deviceNickname: sessionCache.deviceNickname
       }).catch(() => {
@@ -4694,9 +4765,18 @@
             });
           }
           if (apiKey2) {
-            debugLogger.general("INFO", "Force refreshing devices for popup");
-            const devices = await fetchDevices(apiKey2);
+            debugLogger.general("INFO", "Force refreshing popup targets");
+            const [devices, chats] = await Promise.all([
+              fetchDevices(apiKey2),
+              fetchChats(apiKey2).catch((chatError) => {
+                debugLogger.general("WARN", "Failed to refresh chats for popup", {
+                  error: chatError.message
+                });
+                return sessionCache.chats;
+              })
+            ]);
             sessionCache.devices = devices;
+            sessionCache.chats = chats;
           }
           const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
           const deviceIden2 = await storageRepository.getDeviceIden();
@@ -4759,7 +4839,6 @@
           devices: sessionCache.devices,
           recentPushes: sessionCache.recentPushes,
           chats: sessionCache.chats || [],
-          // ← ADD THIS
           autoOpenLinks: sessionCache.autoOpenLinks,
           deviceNickname: sessionCache.deviceNickname,
           websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false,
@@ -4799,7 +4878,6 @@
               devices: sessionCache.devices,
               recentPushes: sessionCache.recentPushes,
               chats: sessionCache.chats || [],
-              // ← ADD THIS
               autoOpenLinks: sessionCache.autoOpenLinks,
               deviceNickname: sessionCache.deviceNickname,
               state: stateMachine.getCurrentState()
@@ -4820,8 +4898,9 @@
       return true;
     } else if (message.action === "settingsChanged" /* SETTINGS_CHANGED */) {
       const promises = [];
-      if (message.settings?.deviceNickname) {
-        const newNickname = message.settings.deviceNickname;
+      const settings = message.settings ?? message;
+      if (settings.deviceNickname) {
+        const newNickname = settings.deviceNickname;
         const apiKey2 = getApiKey();
         const deviceIden2 = getDeviceIden();
         if (apiKey2 && deviceIden2) {
@@ -4838,15 +4917,15 @@
           promises.push(storageRepository.setDeviceNickname(newNickname));
         }
       }
-      if (message.autoOpenLinks !== void 0) {
-        setAutoOpenLinks(message.autoOpenLinks);
-        sessionCache.autoOpenLinks = message.autoOpenLinks;
-        promises.push(storageRepository.setAutoOpenLinks(message.autoOpenLinks));
+      if (settings.autoOpenLinks !== void 0) {
+        setAutoOpenLinks(settings.autoOpenLinks);
+        sessionCache.autoOpenLinks = settings.autoOpenLinks;
+        promises.push(storageRepository.setAutoOpenLinks(settings.autoOpenLinks));
       }
-      if (message.notificationTimeout !== void 0) {
-        setNotificationTimeout(message.notificationTimeout);
+      if (settings.notificationTimeout !== void 0) {
+        setNotificationTimeout(settings.notificationTimeout);
         promises.push(
-          storageRepository.setNotificationTimeout(message.notificationTimeout)
+          storageRepository.setNotificationTimeout(settings.notificationTimeout)
         );
       }
       Promise.all(promises).then(() => {
@@ -4917,7 +4996,14 @@
           },
           notifications: perfSummary.notifications
         };
-        const { restarts = 0, recoveryTimings = [] } = await chrome.storage.local.get(["restarts", "recoveryTimings"]);
+        const lifecycleMetrics = await chrome.storage.local.get([
+          "restarts",
+          "recoveryTimings"
+        ]);
+        const restarts = typeof lifecycleMetrics.restarts === "number" ? lifecycleMetrics.restarts : 0;
+        const recoveryTimings = Array.isArray(lifecycleMetrics.recoveryTimings) ? lifecycleMetrics.recoveryTimings.filter(
+          (value) => typeof value === "number"
+        ) : [];
         const avgRecoveryTime = recoveryTimings.length > 0 ? recoveryTimings.reduce((a, b) => a + b, 0) / recoveryTimings.length : 0;
         const mv3LifecycleStats = {
           restarts,
