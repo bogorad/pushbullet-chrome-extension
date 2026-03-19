@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- SECURITY FIX (H-01): Content Security Policy -->
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'; base-uri 'none';">
+  <title>Pushbullet</title>
+  <link rel="stylesheet" href="css/popup.css">
+  <style>
+    /* Hide all sections by default to prevent flashing */
+    #loading-section, #login-section, #main-section {
+      display: none;
+    }
+    
+    /* Show loading section by default */
+    #loading-section {
+      display: flex;
+    }
+    
+    .disclaimer {
+      font-size: 11px;
+      color: #666;
+      margin-top: 12px;
+      text-align: center;
+      font-style: italic;
+    }
+
+    .push-type-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 5px;
+    }
+
+    .push-type-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      background-color: #4a4a4a;
+      color: #ffffff;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+
+    .push-type-btn.active {
+      background-color: #007bff;
+      color: white;
+      border-color: #007bff;
+    }
+
+    .push-type-btn:hover {
+      background-color: #5a5a5a;
+    }
+
+    .push-type-btn.active:hover {
+      background-color: #0056b3;
+    }
+
+    .file-input-wrapper {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+      width: 100%;
+    }
+
+    .file-input-wrapper input[type=file] {
+      position: absolute;
+      left: -9999px;
+    }
+
+    .file-input-label {
+      display: block;
+      padding: 10px;
+      background-color: #f0f0f0;
+      border: 2px dashed #ccc;
+      border-radius: 4px;
+      text-align: center;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .file-input-label:hover {
+      background-color: #e0e0e0;
+    }
+
+    .file-selected {
+      margin-top: 8px;
+      padding: 8px;
+      background-color: #e7f3ff;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .send-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .hotkey-hint {
+      font-size: 11px;
+      color: #666;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Section -->
+  <div id="loading-section">
+    <div class="spinner"></div>
+    <p>Loading...</p>
+  </div>
+  
+  <!-- Login Section -->
+  <div id="login-section">
+    <h1>Pushbullet</h1>
+    <p>Please enter your Access Token to continue.</p>
+    <p>You can find your Access Token in your <a href="https://www.pushbullet.com/#settings/account" target="_blank">Pushbullet account settings</a> under Access Tokens.</p>
+    <div class="form-group">
+      <input type="text" id="api-key" placeholder="Access Token">
+    </div>
+    <div class="form-group">
+      <input type="text" id="device-nickname" placeholder="Device Nickname (e.g., My Chrome)">
+    </div>
+    <div class="form-group">
+      <button id="save-api-key">Save</button>
+    </div>
+    <p class="disclaimer">This is an unofficial extension and is not affiliated with, endorsed by, or connected to Pushbullet Inc.</p>
+  </div>
+  
+  <!-- Main Section -->
+  <div id="main-section">
+    <div class="header">
+      <div class="user-info">
+        <img id="user-image" src="" alt="User Image">
+        <span id="user-name">User Name</span>
+      </div>
+      <button id="logout">Logout</button>
+    </div>
+
+      <div class="action-toolbar">
+        <h2 id="send-push-heading">Send a Push</h2>
+        <div class="toolbar-icons">
+         <button id="open-settings" class="icon-btn" title="Settings">⚙️</button>
+         <button id="open-debug-dashboard" class="icon-btn" title="Debug Dashboard">🐛</button>
+
+         <!-- NEW: Pushbullet web app link -->
+         <a
+           href="https://www.pushbullet.com/"
+           target="_blank"
+           class="web-app-link"
+           title="Open Pushbullet Web App"
+         >
+           <img src="icons/original-green.png" alt="Pushbullet" class="web-app-icon" />
+         </a>
+       </div>
+     </div>
+
+    <div class="push-form">
+      
+       <div class="form-group">
+         <label>Push Type:</label>
+          <div class="push-type-buttons">
+            <button id="push-type-note" class="push-type-btn active">[N]ote</button>
+            <button id="push-type-link" class="push-type-btn">[L]ink</button>
+            <button id="push-type-file" class="push-type-btn">[A]ttach</button>
+          </div>
+       </div>
+      
+      <div id="note-form">
+        <div class="form-group">
+          <input type="text" id="note-title" placeholder="Title">
+        </div>
+        <div class="form-group">
+          <textarea id="note-body" placeholder="Body"></textarea>
+        </div>
+      </div>
+      
+      <div id="link-form" style="display: none;">
+        <div class="form-group">
+          <input type="text" id="link-title" placeholder="Title">
+        </div>
+        <div class="form-group">
+          <input type="text" id="link-url" placeholder="URL">
+        </div>
+        <div class="form-group">
+          <textarea id="link-body" placeholder="Comment (optional)"></textarea>
+        </div>
+      </div>
+
+      <div id="file-form" style="display: none;">
+        <div class="form-group">
+          <div class="file-input-wrapper">
+            <input type="file" id="file-input" accept="*/*">
+            <label for="file-input" class="file-input-label">
+              📎 Click to select a file
+            </label>
+          </div>
+          <div id="file-selected" class="file-selected" style="display: none;">
+            <strong>Selected:</strong> <span id="file-name"></span> (<span id="file-size"></span>)
+          </div>
+        </div>
+        <div class="form-group">
+          <textarea id="file-body" placeholder="Description (optional)"></textarea>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="target-device">Send to:</label>
+        <select id="target-device">
+          <option value="all">All Devices</option>
+        </select>
+      </div>
+      
+       <div class="form-group">
+         <div class="send-section">
+           <button id="send-push">Send</button>
+           <span class="hotkey-hint">(Ctrl+Enter to send)</span>
+         </div>
+       </div>
+      
+      <div id="status-message"></div>
+    </div>
+
+     <div class="recent-pushes">
+       <h2>Recent Pushes</h2>
+       <div id="pushes-list"></div>
+     </div>
+    
+    <p class="disclaimer">This is an unofficial extension and is not affiliated with Pushbullet Inc.</p>
+   </div>
+
+   <!-- Error State Section -->
+   <div id="error-state-panel" style="display:none">
+     <div class="error-message">
+       Extension is in error state. Connection lost.
+     </div>
+     <button id="manual-reconnect-btn" class="primary-button">
+       Retry Connection
+     </button>
+   </div>
+
+   <script src="popup.js"></script>
+</body>
+</html>

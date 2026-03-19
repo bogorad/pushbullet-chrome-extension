@@ -1,0 +1,378 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  margin: 0;
+  padding: 0;
+  width: 350px;
+  color: #333;
+  background-color: #f9f9f9;
+}
+
+.container {
+  width: 100%;
+  height: 100%;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+h1, h2 {
+  margin-top: 0;
+  color: #4285f4;
+}
+
+h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+h2 {
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+
+.section {
+  margin-bottom: 20px;
+}
+
+/* Loading section */
+#loading-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(66, 133, 244, 0.2);
+  border-radius: 50%;
+  border-top-color: #4285f4;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 14px;
+  color: #666;
+}
+
+/* Login section */
+#login-section {
+  padding: 20px;
+  text-align: center;
+}
+
+/* Main section */
+#main-section {
+  padding: 16px;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Connection indicator removed - no longer needed */
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+#user-image {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
+#user-name {
+  font-weight: 500;
+}
+
+/* Action toolbar */
+.action-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.action-toolbar h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.toolbar-icons {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: #f5f5f5;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.icon-btn:hover {
+  background: #e0e0e0;
+  transform: scale(1.1);
+}
+
+.icon-btn:active {
+  transform: scale(0.95);
+}
+
+/* Form elements */
+.form-group {
+  margin-bottom: 12px;
+}
+
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+button {
+  background-color: #4285f4;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+button:hover {
+  background-color: #3367d6;
+}
+
+#logout {
+  background-color: transparent;
+  color: #4285f4;
+  padding: 4px 8px;
+}
+
+#logout:hover {
+  background-color: rgba(66, 133, 244, 0.1);
+}
+
+.help-text {
+  font-size: 12px;
+  color: #666;
+  margin-top: 8px;
+}
+
+a {
+  color: #4285f4;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Push form */
+.push-form {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+/* Settings */
+.settings {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-buttons button {
+  flex: 1;
+  min-width: 140px;
+}
+
+/* Recent pushes */
+.recent-pushes {
+  margin-bottom: 16px;
+}
+
+.push-item {
+  padding: 12px;
+  margin-bottom: 8px;
+  background-color: white;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.push-item.push-sms {
+  border-left: 4px solid #2196F3;
+  background-color: #E3F2FD;
+}
+
+.push-title {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.push-url {
+  display: block;
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.push-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.push-time {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+}
+
+/* Status message */
+#status-message {
+  padding: 8px;
+  margin-top: 8px;
+  border-radius: 4px;
+  text-align: center;
+}
+
+#status-message.success {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+#status-message.error {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+/* Debug controls */
+.secondary-btn {
+  background-color: #6c757d;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 8px;
+  width: 100%;
+  transition: background-color 0.2s;
+}
+
+.secondary-btn:hover {
+  background-color: #5a6268;
+}
+
+.secondary-btn:active {
+  background-color: #545b62;
+}
+
+/* Pushbullet Web App Link */
+.web-app-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 6px;
+  border-radius: 50%;
+  background-color: transparent;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    transform 0.1s;
+  text-decoration: none;
+  margin-left: 8px;
+}
+
+.web-app-link:hover {
+  background-color: rgba(74, 179, 103, 0.15);
+  transform: scale(1.1);
+}
+
+.web-app-icon {
+  width: 24px;
+  height: 24px;
+  display: block;
+  image-rendering: crisp-edges;
+}
+
+/* Version text styling for popup heading */
+.version-text {
+  font-size: 0.9em;
+  color: #888;
+  font-weight: normal;
+}

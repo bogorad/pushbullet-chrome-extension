@@ -59,12 +59,14 @@ A modern, feature-rich Chrome extension for Pushbullet built with Manifest V3 ar
    ```bash
    npm run build
    ```
+   This writes a complete unpacked extension to `dist/`.
 
 4. **Load in Chrome**
-   - Open Chrome and navigate to `chrome://extensions`
-   - Enable "Developer mode" (toggle in top-right corner)
-   - Click "Load unpacked"
-   - Select the `dist/` directory from the project
+    - Open Chrome and navigate to `chrome://extensions`
+    - Enable and leave "Developer mode" on (Chrome disables unpacked extensions on reload when it is off)
+    - Click "Load unpacked"
+    - Select the `dist/` directory from the project
+    - After code changes, rerun `npm run build` and click the extension's reload button in `chrome://extensions`
 
 5. **Configure**
    - Click the Pushbullet extension icon in your toolbar
@@ -149,19 +151,15 @@ Built with Chrome's latest extension architecture:
 
 ### Build Commands
 
-**Development build** (watch mode with source maps):
-```bash
-npm run dev
-```
-
-**Production build** (optimized, minified):
+**Build the unpacked extension**:
 ```bash
 npm run build
 ```
+This uses the repo's esbuild-based packaging script and writes the extension to `dist/` with source maps.
 
 **Run tests**:
 ```bash
-npm test
+npm run test
 ```
 
 **Lint code**:
@@ -171,7 +169,12 @@ npm run lint
 
 **Type check**:
 ```bash
-npm run type-check
+npm run typecheck
+```
+
+**Bump the patch version**:
+```bash
+node ./scripts/bump-patch.cjs
 ```
 
 ### Project Structure
@@ -287,7 +290,7 @@ If issues persist:
 ### Testing
 ```bash
 # Run all tests
-npm test
+npm run test
 
 # Run tests in watch mode
 npm run test:watch
@@ -303,11 +306,11 @@ Enable comprehensive logging:
 3. Select log categories to monitor
 4. Set log level (DEBUG for verbose output)
 
-### Hot Reload Development
+### Rebuild Workflow
 ```bash
-npm run dev
+npm run build
 ```
-This watches for file changes and rebuilds automatically. Reload the extension in Chrome after builds complete.
+There is no dedicated watch or hot reload script in this repo. Rebuild when you make changes, then reload the unpacked extension in `chrome://extensions`.
 
 ---
 
@@ -330,7 +333,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Credits
 
-- Built with TypeScript, Webpack, and Chrome Extension APIs
+- Built with TypeScript, esbuild, and Chrome Extension APIs
 - Uses Pushbullet's official API (unofficial client)
 - Inspired by the need for a modern, MV3-compliant Pushbullet extension
 

@@ -1,0 +1,279 @@
+/* Options Page Styles */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  padding: 40px 20px;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+/* Header */
+header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 40px;
+  text-align: center;
+}
+
+header h1 {
+  font-size: 32px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.subtitle {
+  font-size: 16px;
+  opacity: 0.9;
+}
+
+/* Main Content */
+main {
+  padding: 40px;
+}
+
+.settings-section {
+  margin-bottom: 40px;
+  padding-bottom: 40px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.settings-section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.settings-section h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 20px;
+}
+
+/* Setting Items */
+.setting-item {
+  margin-bottom: 24px;
+}
+
+.setting-item:last-child {
+  margin-bottom: 0;
+}
+
+.setting-item label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.help-text {
+  font-size: 13px;
+  color: #888;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+/* Input Groups */
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+input[type="text"],
+input[type="number"] {
+  flex: 1;
+  padding: 10px 14px;
+  border: 2px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+input[type="number"] {
+  max-width: 120px;
+}
+
+.input-suffix {
+  font-size: 14px;
+  color: #888;
+  white-space: nowrap;
+}
+
+/* Checkbox Labels */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.checkbox-label span {
+  font-size: 14px;
+  font-weight: 500;
+  color: #555;
+}
+
+/* Buttons */
+button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: #f5f5f5;
+  color: #666;
+}
+
+.btn-secondary:hover {
+  background: #e0e0e0;
+}
+
+.btn-large {
+  padding: 14px 32px;
+  font-size: 16px;
+}
+
+/* Action Buttons */
+.action-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Status Message */
+.status-message {
+  margin-top: 24px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.status-message.show {
+  opacity: 1;
+}
+
+.status-message.success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.status-message.error {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+/* Footer */
+footer {
+  background: #f8f9fa;
+  padding: 24px 40px;
+  text-align: center;
+  border-top: 1px solid #e0e0e0;
+}
+
+.disclaimer {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.version {
+  font-size: 12px;
+  color: #aaa;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  body {
+    padding: 20px 10px;
+  }
+
+  header {
+    padding: 30px 20px;
+  }
+
+  header h1 {
+    font-size: 24px;
+  }
+
+  main {
+    padding: 30px 20px;
+  }
+
+  .settings-section {
+    margin-bottom: 30px;
+    padding-bottom: 30px;
+  }
+
+  .input-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  input[type="number"] {
+    max-width: none;
+  }
+
+  .action-buttons {
+    flex-direction: column;
+  }
+
+  .action-buttons button {
+    width: 100%;
+  }
+}
+
