@@ -45,31 +45,6 @@ When the extension reconnects after being offline, it can automatically open mis
 - **Error Handling**: Non-fatal - dismiss failures don't prevent auto-opening
 - **Logging**: Uses `websocket` category with `Offline AutoOpen:` prefix
 
-### Code Structure
-
-```typescript
-// Pre-loop optimization (efficiency)
-const shouldDismiss =
-  await storageRepository.getDismissAfterAutoOpen();
-const dismissApiKey = getApiKey();
-
-// Inside loop after markOpened()
-if (shouldDismiss && dismissApiKey && p.iden) {
-  try {
-    await dismissPush(p.iden, dismissApiKey);
-    debugLogger.websocket(
-      "INFO",
-      `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`,
-    );
-  } catch (e) {
-    debugLogger.websocket(
-      "WARN",
-      `Offline AutoOpen: dismiss failed for iden=${p.iden}: ${(e as Error).message}`,
-    );
-  }
-}
-```
-
 ### Testing
 
 - Enable both "Auto-open links on reconnect" and "Dismiss after auto-open" in options
