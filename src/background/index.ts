@@ -20,6 +20,7 @@ import {
   getInitPromise,
 } from "../app/session";
 import {
+  fetchChats,
   fetchDevices,
   updateDeviceNickname,
   fetchRecentPushes,
@@ -188,9 +189,10 @@ globalEventBus.on("websocket:tickle:device", async () => {
     chrome.runtime
       .sendMessage({
         action: MessageAction.SESSION_DATA_UPDATED,
+        isAuthenticated: sessionCache.isAuthenticated,
         devices: devices,
+        chats: sessionCache.chats,
         userInfo: sessionCache.userInfo,
-        recentPushes: sessionCache.recentPushes,
         autoOpenLinks: sessionCache.autoOpenLinks,
         deviceNickname: sessionCache.deviceNickname,
       })
@@ -854,11 +856,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         }
 
-        // FORCE REFRESH DEVICES FOR POPUP - BYPASS CACHE
+        // Force refresh popup targets before responding.
         if (apiKey) {
-          debugLogger.general("INFO", "Force refreshing devices for popup");
-          const devices = await fetchDevices(apiKey);
+          debugLogger.general("INFO", "Force refreshing popup targets");
+          const [devices, chats] = await Promise.all([
+            fetchDevices(apiKey),
+            fetchChats(apiKey).catch((chatError) => {
+              debugLogger.general("WARN", "Failed to refresh chats for popup", {
+                error: (chatError as Error).message,
+              });
+              return sessionCache.chats;
+            }),
+          ]);
           sessionCache.devices = devices;
+          sessionCache.chats = chats;
         }
 
         // STEP 5: Apply onlyThisDevice filter to recentPushes for display
@@ -944,7 +955,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           userInfo: sessionCache.userInfo,
           devices: sessionCache.devices,
           recentPushes: sessionCache.recentPushes,
-          chats: sessionCache.chats || [], // ← ADD THIS
+          chats: sessionCache.chats || [],
           autoOpenLinks: sessionCache.autoOpenLinks,
           deviceNickname: sessionCache.deviceNickname,
           websocketConnected: websocketClient
@@ -1000,7 +1011,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               userInfo: sessionCache.userInfo,
               devices: sessionCache.devices,
               recentPushes: sessionCache.recentPushes,
-              chats: sessionCache.chats || [], // ← ADD THIS
+              chats: sessionCache.chats || [],
               autoOpenLinks: sessionCache.autoOpenLinks,
               deviceNickname: sessionCache.deviceNickname,
               state: stateMachine.getCurrentState(),
@@ -1023,10 +1034,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Async response
   } else if (message.action === MessageAction.SETTINGS_CHANGED) {
     const promises: Promise<void>[] = [];
+    const settings = message.settings ?? message;
 
-    // BONUS FIX: Handle device nickname updates from "Save All Settings" button
-    if (message.settings?.deviceNickname) {
-      const newNickname = message.settings.deviceNickname;
+    if (settings.deviceNickname) {
+      const newNickname = settings.deviceNickname;
       const apiKey = getApiKey();
       const deviceIden = getDeviceIden();
 
@@ -1048,16 +1059,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     }
 
-    if (message.autoOpenLinks !== undefined) {
-      setAutoOpenLinks(message.autoOpenLinks);
-      sessionCache.autoOpenLinks = message.autoOpenLinks;
-      promises.push(storageRepository.setAutoOpenLinks(message.autoOpenLinks));
+    if (settings.autoOpenLinks !== undefined) {
+      setAutoOpenLinks(settings.autoOpenLinks);
+      sessionCache.autoOpenLinks = settings.autoOpenLinks;
+      promises.push(storageRepository.setAutoOpenLinks(settings.autoOpenLinks));
     }
 
-    if (message.notificationTimeout !== undefined) {
-      setNotificationTimeout(message.notificationTimeout);
+    if (settings.notificationTimeout !== undefined) {
+      setNotificationTimeout(settings.notificationTimeout);
       promises.push(
-        storageRepository.setNotificationTimeout(message.notificationTimeout),
+        storageRepository.setNotificationTimeout(settings.notificationTimeout),
       );
     }
 

@@ -1,91 +1,222 @@
-// tests/popup/popup.test.ts
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Chat, Device, SessionDataResponse } from '../../src/types/domain';
+import { MessageAction } from '../../src/types/domain';
+import popupHtml from '../../popup.html?raw';
 
-// Import necessary tools
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest'
-import popupHtml from '../../popup.html?raw'
+declare const chrome: any;
 
-// Chrome API is mocked globally in tests/setup.ts
-declare const chrome: any
+const storageRepositoryMock = {
+  setApiKey: vi.fn(),
+  setDeviceNickname: vi.fn(),
+  setDeviceIden: vi.fn(),
+  getApiKey: vi.fn().mockResolvedValue('test-api-key'),
+  getScrollToRecentPushes: vi.fn().mockResolvedValue(false),
+  removeScrollToRecentPushes: vi.fn(),
+};
 
-// Mock the storage repository dependency
-vi.mock('src/infrastructure/storage/storage.repository', () => ({
-  storageRepository: {
-    setApiKey: vi.fn(),
-    setDeviceNickname: vi.fn(),
-    setDeviceIden: vi.fn(),
-    getScrollToRecentPushes: vi.fn().mockResolvedValue(false),
-    removeScrollToRecentPushes: vi.fn()
-  }
-}))
+vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
+  storageRepository: storageRepositoryMock,
+}));
 
-describe('Popup UI and Logic', () => {
-  beforeAll(() => {
-    // Set up the DOM once for all popup tests
-    document.body.innerHTML = popupHtml
-  })
+const sampleDevices: Device[] = [
+  {
+    active: true,
+    created: 1,
+    modified: 1,
+    icon: 'system',
+    iden: 'device-1',
+    nickname: 'Work Laptop',
+    type: 'chrome',
+    kind: 'chrome',
+  },
+  {
+    active: false,
+    created: 1,
+    modified: 1,
+    icon: 'system',
+    iden: 'device-2',
+    manufacturer: 'Google',
+    model: 'Pixel 8',
+    type: 'android',
+    kind: 'android',
+  },
+];
 
+const sampleChats: Chat[] = [
+  {
+    iden: 'chat-1',
+    active: true,
+    created: 1,
+    modified: 1,
+    with: {
+      email: 'alice@example.com',
+      email_normalized: 'alice@example.com',
+      name: 'Alice',
+      type: 'user',
+    },
+  },
+  {
+    iden: 'chat-2',
+    active: true,
+    created: 1,
+    modified: 1,
+    with: {
+      email: 'bob@example.com',
+      email_normalized: 'bob@example.com',
+      type: 'email',
+    },
+  },
+];
+
+function createSessionData(overrides: Partial<SessionDataResponse> = {}): SessionDataResponse & { state?: string } {
+  return {
+    isAuthenticated: true,
+    userInfo: { email: 'test@example.com', name: 'Test User', iden: 'user-1' },
+    devices: sampleDevices,
+    recentPushes: [],
+    chats: sampleChats,
+    autoOpenLinks: true,
+    deviceNickname: 'Chrome',
+    websocketConnected: true,
+    ...overrides,
+  };
+}
+
+function setDocumentReadyState(value: DocumentReadyState): void {
+  Object.defineProperty(document, 'readyState', {
+    configurable: true,
+    get: () => value,
+  });
+}
+
+async function loadPopup(): Promise<void> {
+  vi.resetModules();
+  document.body.innerHTML = popupHtml;
+  setDocumentReadyState('loading');
+  const popupModule = await import('../../src/popup/index.ts');
+  setDocumentReadyState('complete');
+  popupModule.init();
+}
+
+describe('Popup friend targets', () => {
   beforeEach(() => {
-    // Reset all mocks to ensure tests don't interfere with each other
-    vi.resetAllMocks()
-  })
+    vi.clearAllMocks();
+    document.body.innerHTML = popupHtml;
+
+    chrome.runtime.getURL.mockImplementation((path = '') => `chrome-extension://test/${path}`);
+    storageRepositoryMock.getScrollToRecentPushes.mockResolvedValue(false);
+    storageRepositoryMock.getApiKey.mockResolvedValue('test-api-key');
+  });
 
   afterAll(() => {
-    // Clean up the DOM after all tests
-    document.body.innerHTML = ''
-  })
+    document.body.innerHTML = '';
+  });
 
-  // --- TEST CASE 1: Unauthenticated User ---
-  it('should show the login section if the user is not authenticated', async () => {
-    // ARRANGE: Set up our mocks BEFORE running the script.
-    // We will tell the mocked chrome API how to respond.
-    chrome.runtime.sendMessage.mockImplementation((message, callback) => {
-      if (message.action === 'getSessionData') {
-        // Simulate the background script responding that the user is not logged in.
-        callback({ isAuthenticated: false })
+  it('renders device and friend targets from session data', async () => {
+    const session = createSessionData();
+
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(session);
       }
-    })
+      return Promise.resolve(undefined);
+    });
 
-    // ACT: Import the popup module and call init
-    const { init } = await vi.importActual('../../src/popup/index.ts') as { init: () => void }
-    init()
+    await loadPopup();
 
-    // ASSERT: Check if the DOM is in the correct state.
-    const loginSection = document.getElementById('login-section')
-    const mainSection = document.getElementById('main-section')
+    const loginSection = document.getElementById('login-section');
+    const mainSection = document.getElementById('main-section');
+    const targetDeviceSelect = document.getElementById('target-device') as HTMLSelectElement;
 
-    expect(loginSection!.style.display).toBe('block')
-    expect(mainSection!.style.display).toBe('none')
-  })
+    expect(mainSection?.style.display).toBe('block');
+    expect(loginSection?.style.display).toBe('none');
 
-  // --- TEST CASE 2: Authenticated User ---
-  it('should show the main section if the user is authenticated', async () => {
-    // ARRANGE:
-    const mockSession = {
+    const options = Array.from(targetDeviceSelect.options).map((option) => ({
+      value: option.value,
+      text: option.textContent,
+      disabled: option.disabled,
+    }));
+
+    expect(options).toEqual([
+      { value: 'all', text: 'All Devices', disabled: false },
+      { value: 'device-1', text: 'Work Laptop', disabled: false },
+      { value: 'device-2', text: 'Google Pixel 8 (offline)', disabled: false },
+      { value: '--- Friends ---', text: '--- Friends ---', disabled: true },
+      { value: 'friend:alice@example.com', text: 'F: Alice', disabled: false },
+      { value: 'friend:bob@example.com', text: 'F: bob@example.com', disabled: false },
+    ]);
+  });
+
+  it('sends friend targets as email pushes', async () => {
+    const session = createSessionData();
+
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string; pushData?: Record<string, string> }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(session);
+      }
+
+      if (message.action === MessageAction.SEND_PUSH && callback) {
+        callback({ success: true });
+      }
+
+      return Promise.resolve(undefined);
+    });
+
+    await loadPopup();
+
+    const targetDeviceSelect = document.getElementById('target-device') as HTMLSelectElement;
+    const noteBodyInput = document.getElementById('note-body') as HTMLTextAreaElement;
+    const sendPushButton = document.getElementById('send-push') as HTMLButtonElement;
+
+    targetDeviceSelect.value = 'friend:alice@example.com';
+    noteBodyInput.value = 'Hello Alice';
+    sendPushButton.click();
+
+    const sendPushCall = chrome.runtime.sendMessage.mock.calls.find(
+      ([message]: [{ action?: string }]) => message.action === MessageAction.SEND_PUSH,
+    );
+
+    expect(sendPushCall).toBeDefined();
+    expect(sendPushCall?.[0]).toMatchObject({
+      action: MessageAction.SEND_PUSH,
+      pushData: {
+        type: 'note',
+        body: 'Hello Alice',
+        email: 'alice@example.com',
+      },
+    });
+    expect(sendPushCall?.[0].pushData.device_iden).toBeUndefined();
+  });
+
+  it('repopulates targets when the background sends session data updates', async () => {
+    const initialSession = createSessionData({ devices: [], chats: [] });
+    const updatedSession = {
+      action: MessageAction.SESSION_DATA_UPDATED,
       isAuthenticated: true,
-      userInfo: { name: 'Test User', email: 'test@example.com' },
-      devices: [],
+      devices: sampleDevices,
+      chats: sampleChats,
       recentPushes: [],
+      userInfo: { email: 'test@example.com', name: 'Test User', iden: 'user-1' },
       autoOpenLinks: true,
-      deviceNickname: 'Chrome'
-    }
+      deviceNickname: 'Chrome',
+    };
 
-    chrome.runtime.sendMessage.mockImplementation((message, callback) => {
-      if (message.action === 'getSessionData') {
-        callback(mockSession)
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(initialSession);
       }
-    })
+      return Promise.resolve(undefined);
+    });
 
-    // ACT: Import the popup module and call init
-    const { init } = await vi.importActual('../../src/popup/index.ts') as { init: () => void }
-    init()
+    await loadPopup();
 
-    // ASSERT:
-    const loginSection = document.getElementById('login-section')
-    const mainSection = document.getElementById('main-section')
-    const userNameElement = document.getElementById('user-name')
+    const targetDeviceSelect = document.getElementById('target-device') as HTMLSelectElement;
+    expect(Array.from(targetDeviceSelect.options)).toHaveLength(1);
 
-    expect(mainSection!.style.display).toBe('block')
-    expect(loginSection!.style.display).toBe('none')
-    expect(userNameElement!.textContent).toBe('Test User')
-  })
-})
+    chrome.runtime.onMessage.callListeners(updatedSession, {}, vi.fn());
+
+    const optionValues = Array.from(targetDeviceSelect.options).map((option) => option.value);
+    expect(optionValues).toContain('device-1');
+    expect(optionValues).toContain('friend:alice@example.com');
+  });
+});

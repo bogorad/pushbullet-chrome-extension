@@ -142,7 +142,7 @@ export interface SessionCache {
   userInfo: User | null;
   devices: Device[];
   recentPushes: Push[];
-  chats: Chat[]; // ← ADD THIS LINE
+  chats: Chat[];
   isAuthenticated: boolean;
   lastUpdated: number;
   autoOpenLinks: boolean;
@@ -267,7 +267,7 @@ export interface SessionDataResponse {
   userInfo: User | null;
   devices: Device[];
   recentPushes: Push[];
-  chats: Chat[]; // ← ADD THIS
+  chats: Chat[];
   autoOpenLinks: boolean;
   deviceNickname: string;
   websocketConnected?: boolean;
@@ -287,8 +287,18 @@ export interface SessionDataUpdatedMessage {
   userInfo?: User | null;
   devices?: Device[];
   recentPushes?: Push[];
+  chats?: Chat[];
   autoOpenLinks?: boolean;
   deviceNickname?: string;
+}
+
+export interface SettingsPayload {
+  deviceNickname?: string;
+  notificationTimeout?: number;
+  autoOpenLinks?: boolean;
+  autoOpenLinksOnReconnect?: boolean;
+  debugMode?: boolean;
+  onlyThisDevice?: boolean;
 }
 
 export interface PushesUpdatedMessage {
@@ -298,6 +308,7 @@ export interface PushesUpdatedMessage {
 
 export interface SettingsChangedMessage {
   action: MessageAction.SETTINGS_CHANGED;
+  settings?: SettingsPayload;
   autoOpenLinks?: boolean;
   notificationTimeout?: number;
   onlyThisDevice?: boolean;
@@ -383,4 +394,3 @@ export function isValidUser(user: unknown): user is User {
   const u = user as Partial<User>;
   return typeof u.iden === 'string' && u.iden.length > 0;
 }
-

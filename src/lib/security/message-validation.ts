@@ -4,6 +4,7 @@
  */
 
 import { debugLogger } from '../logging';
+import { MessageAction } from '../../types/domain';
 
 /**
  * Validate that message sender is from this extension
@@ -43,16 +44,19 @@ export function isValidSender(sender: chrome.runtime.MessageSender): boolean {
  * List of privileged actions that require sender validation
  */
 const PRIVILEGED_ACTIONS = new Set([
-  'apiKeyChanged',
-  'logout',
-  'settingsChanged',
-  'deviceNicknameChanged',
-  'autoOpenLinksChanged',
-  'encryptionPasswordChanged',
-  'debugModeChanged',
-  'pushNote',
-  'pushLink',
-  'pushFile'
+  MessageAction.API_KEY_CHANGED,
+  MessageAction.LOGOUT,
+  MessageAction.SETTINGS_CHANGED,
+  MessageAction.UPDATE_DEVICE_NICKNAME,
+  MessageAction.SEND_PUSH,
+  MessageAction.UPDATE_DEBUG_CONFIG,
+  MessageAction.CLEAR_ALL_LOGS,
+  MessageAction.EXPORT_DEBUG_DATA,
+  MessageAction.GET_DEBUG_SUMMARY,
+  MessageAction.AUTO_OPEN_LINKS_CHANGED,
+  MessageAction.ENCRYPTION_PASSWORD_CHANGED,
+  MessageAction.DEBUG_MODE_CHANGED,
+  'attemptReconnect',
 ]);
 
 /**
@@ -86,4 +90,3 @@ export function validatePrivilegedMessage(
 
   return true;
 }
-

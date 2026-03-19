@@ -1,5 +1,10 @@
 import { storageRepository } from '../infrastructure/storage/storage.repository';
-import { getUserInfoWithTimeoutRetry, fetchDevices } from '../app/api/client';
+import {
+  getUserInfoWithTimeoutRetry,
+  fetchChats,
+  fetchDevices,
+  fetchDisplayPushes,
+} from '../app/api/client';
 import { sessionCache, hydrateCutoff } from '../app/session';
 import { debugLogger } from '../lib/logging';
 import { startCriticalKeepalive, stopCriticalKeepalive } from './keepalive';
@@ -7,7 +12,6 @@ import { setApiKey } from './state';
 import { ensureDebugConfigLoadedOnce } from './index';
 import type { User } from '../types/domain';
 
-// *** ADD THESE 3 IMPORTS ***
 import {
   loadSessionCache,
   saveSessionCache,
@@ -144,13 +148,44 @@ export async function orchestrateInitialization(
         debugLogger.general('INFO', 'Devices fetched', { count: d.length });
       });
 
+      const displayPushesP = fetchDisplayPushes(apiKey, 50)
+        .catch((e: unknown) => {
+          debugLogger.api('WARN', 'Display pushes fetch failed during startup', {
+            error: String(e),
+          });
+          return sessionCache.recentPushes;
+        })
+        .then((pushes) => {
+          sessionCache.recentPushes = pushes;
+          debugLogger.general('INFO', 'Display pushes fetched', {
+            count: pushes.length,
+          });
+        });
+
+      const chatsP = fetchChats(apiKey)
+        .catch((e: unknown) => {
+          debugLogger.api('WARN', 'Chats fetch failed during startup', {
+            error: String(e),
+          });
+          return sessionCache.chats;
+        })
+        .then((chats) => {
+          sessionCache.chats = chats;
+          debugLogger.general('INFO', 'Chats fetched', { count: chats.length });
+        });
+
       // *** STEP 4: Start WebSocket immediately ***
       const wsP = Promise.resolve().then(() => connectWs());
 
-      // *** STEP 5: Await devices + ws for functional readiness ***
-      const results = await Promise.allSettled([devicesP, wsP]);
+      // *** STEP 5: Await popup session data + ws for functional readiness ***
+      const results = await Promise.allSettled([
+        devicesP,
+        displayPushesP,
+        chatsP,
+        wsP,
+      ]);
 
-      debugLogger.general('INFO', 'Functional ready: devices + ws initialized', {
+      debugLogger.general('INFO', 'Functional ready: popup session data + ws initialized', {
         trigger: trigger,
         results: results.map((r, i) => ({ index: i, status: r.status })),
       });
@@ -172,7 +207,7 @@ export async function orchestrateInitialization(
             deviceCount: sessionCache.devices.length,
             pushCount: sessionCache.recentPushes.length,
             chatCount: sessionCache.chats.length,
-            cachedAt: sessionCache.cachedAt, // ← Shows correct value
+            cachedAt: sessionCache.cachedAt,
           },
         );
       } catch (error) {

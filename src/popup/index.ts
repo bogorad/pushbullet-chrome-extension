@@ -2,43 +2,23 @@
  * Popup page - Full TypeScript implementation
  */
 
-import type { Push, Device, User, Chat, SessionDataResponse } from "../types/domain";
+import type {
+  Chat,
+  Device,
+  Push,
+  SessionDataResponse,
+  SessionDataUpdatedMessage,
+  User,
+} from "../types/domain";
 import { MessageAction, isMirrorPush } from "../types/domain";
 import {
   getElementById,
 } from "../lib/ui/dom";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 
-// Response type for API key save operations
-type SaveKeyResponse = SessionDataResponse | { success: false; error?: string };
-
-// API URLs - MOSTLY REMOVED
-// ARCHITECTURAL CHANGE: Popup no longer makes direct API calls
-// All API communication is centralized in the background script
-//
-// EXCEPTION: File upload still requires direct API access because:
-// - FormData cannot be serialized through chrome.runtime.sendMessage
-// - File upload involves two steps: upload-request + S3 upload
-// - The final push creation is still delegated to background
-//
-// Removed URLs (now handled by background):
-// - USER_INFO_URL (user info fetched by background)
-// - DEVICES_URL (devices fetched by background)
-// - PUSHES_URL (pushes sent via background)
-// - WEBSOCKET_URL (WebSocket managed by background)
-
-// Type definitions
-interface SessionData {
-  isAuthenticated: boolean;
-  userInfo: User | null;
-  devices: Device[];
-  recentPushes: Push[];
-  chats: Chat[]; // ← ADD THIS
-  autoOpenLinks: boolean;
-  websocketConnected?: boolean;
-  deviceNickname: string;
-  state?: string; // State machine state
-}
+type PopupSessionData = SessionDataResponse & { state?: string };
+type PopupSessionUpdate = SessionDataUpdatedMessage & { state?: string };
+type SaveKeyResponse = PopupSessionData | { success: false; error?: string };
 
 type PushType = "note" | "link" | "file";
 
@@ -101,24 +81,42 @@ const openDebugDashboardBtn = getElementById<HTMLButtonElement>(
 );
 
 // State variables
-let deviceNickname = "Chrome";
-const devices: Device[] = [];
+let devices: Device[] = [];
+let chats: Chat[] = [];
 let currentPushType: PushType = "note";
-// websocket variable removed - background script manages the single WebSocket connection
 
 /**
  * Initialize popup
  */
 function init(): void {
-  console.log("Popup initializing");
   setupEventListeners();
   checkStorageForApiKey();
+}
+
+function applySessionData(response: PopupSessionData | PopupSessionUpdate): void {
+  if (response.userInfo) {
+    updateUserInfo(response.userInfo);
+  }
+
+  if (response.devices) {
+    devices = response.devices;
+  }
+
+  if (response.chats) {
+    chats = response.chats;
+  }
+
+  populateDeviceDropdown();
+
+  if (response.recentPushes) {
+    displayPushes(response.recentPushes);
+  }
 }
 
 /**
  * Initialize from session data (from background)
  */
-async function initializeFromSessionData(response: SessionData): Promise<void> {
+async function initializeFromSessionData(response: PopupSessionData): Promise<void> {
   if (!response.isAuthenticated) {
     showSection("login");
     return;
@@ -130,22 +128,8 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
     return;
   }
 
-  // Update device nickname
-  deviceNickname = response.deviceNickname;
-  console.log("Device nickname:", deviceNickname);
+  applySessionData(response);
 
-  // Update user info
-  if (response.userInfo) {
-    updateUserInfo(response.userInfo);
-  }
-
-  // Populate device dropdown
-  populateDeviceDropdown(response.devices, response.chats);
-
-  // Display pushes
-  displayPushes(response.recentPushes);
-
-  // Get version from manifest
   const manifest = chrome.runtime.getManifest();
   const version = manifest.version;
 
@@ -155,11 +139,7 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
     sendPushHeading.innerHTML = `Send a Push <span class="version-text">(v.${version})</span>`;
   }
 
-  // Show main section
   showSection("main");
-
-  // Connection status is now shown via badge icon (no UI indicator needed)
-  // WebSocket connection is managed by background script - popup receives updates via chrome.runtime.onMessage
 }
 
 /**
@@ -168,13 +148,11 @@ async function initializeFromSessionData(response: SessionData): Promise<void> {
  * All data is fetched from background script's session cache.
  */
 function checkStorageForApiKey(): void {
-  console.log("Requesting session data from background");
   showSection("loading");
 
-  // Request session data from background script (single source of truth)
   chrome.runtime.sendMessage(
     { action: MessageAction.GET_SESSION_DATA },
-    async (response: SessionData) => {
+    async (response: PopupSessionData) => {
       if (chrome.runtime.lastError) {
         console.error("Error getting session data:", chrome.runtime.lastError);
         showSection("login");
@@ -204,7 +182,6 @@ function checkStorageForApiKey(): void {
  * Show section
  */
 function showSection(section: "loading" | "login" | "main" | "error"): void {
-  console.log("Showing section:", section);
   loadingSection.style.display = section === "loading" ? "flex" : "none";
   loginSection.style.display = section === "login" ? "block" : "none";
   mainSection.style.display = section === "main" ? "block" : "none";
@@ -376,8 +353,6 @@ async function saveApiKey(): Promise<void> {
     await storageRepository.setApiKey(newApiKey);
     await storageRepository.setDeviceNickname(newNickname);
 
-    deviceNickname = newNickname;
-
     // Notify background to validate and initialize
     // Background will respond AFTER initialization is complete (no setTimeout needed!)
     chrome.runtime.sendMessage(
@@ -505,7 +480,11 @@ function updateUserInfo(userInfo: User): void {
 /**
  * Populate device dropdown
  */
-function populateDeviceDropdown(devicesList: Device[], chatsList?: Chat[]): void {
+function populateDeviceDropdown(
+  devicesList: Device[] = devices,
+  chatsList: Chat[] = chats,
+): void {
+  const selectedValue = targetDeviceSelect.value;
   const devicesToUse = (devicesList || devices).filter(device =>
     device.nickname || device.model || device.manufacturer || device.type
   );
@@ -527,31 +506,28 @@ function populateDeviceDropdown(devicesList: Device[], chatsList?: Chat[]): void
     targetDeviceSelect.appendChild(option);
   });
 
-  // ========== ADD THIS ENTIRE SECTION ==========
-  // Add friends/contacts to dropdown
   const chatsToUse = chatsList || [];
   if (chatsToUse && chatsToUse.length > 0) {
-    // Add visual separator
     const friendSeparator = document.createElement("option");
     friendSeparator.disabled = true;
     friendSeparator.textContent = "--- Friends ---";
     targetDeviceSelect.appendChild(friendSeparator);
 
-    // Add each friend
     chatsToUse.forEach((chat) => {
       const option = document.createElement("option");
-
-      // Value: "friend:<email>" - lets us detect friend selection
       option.value = `friend:${chat.with.email}`;
-
-      // Display: "F: <name>" or "F: <email>" if no name
       const displayName = chat.with.name || chat.with.email;
       option.textContent = `F: ${displayName}`;
-
       targetDeviceSelect.appendChild(option);
     });
   }
-  // ========== END OF SECTION ==========
+
+  if (
+    selectedValue &&
+    Array.from(targetDeviceSelect.options).some((option) => option.value === selectedValue)
+  ) {
+    targetDeviceSelect.value = selectedValue;
+  }
 }
 
 /**
@@ -963,7 +939,7 @@ async function sendPush(): Promise<void> {
           showStatus("Push sent successfully!", "success");
           chrome.runtime.sendMessage(
             { action: MessageAction.GET_SESSION_DATA },
-            (sessionResponse: SessionData) => {
+            (sessionResponse: PopupSessionData) => {
               if (sessionResponse && sessionResponse.recentPushes) {
                 displayPushes(sessionResponse.recentPushes);
               }
@@ -1073,8 +1049,11 @@ function scrollToRecentPushes(): void {
  */
 chrome.runtime.onMessage.addListener((message, _, __) => {
   if (message.action === MessageAction.CONNECTION_STATE_CHANGED) {
-    // Connection state changes now shown via badge icon only
-    console.log("Connection state changed:", message.state);
+    return;
+  }
+
+  if (message.action === MessageAction.SESSION_DATA_UPDATED) {
+    applySessionData(message as PopupSessionUpdate);
   } else if (message.action === MessageAction.PUSHES_UPDATED) {
     if (message.pushes) {
       displayPushes(message.pushes as Push[]);

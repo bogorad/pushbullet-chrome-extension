@@ -1,10 +1,11 @@
-import type { SessionCache } from "../../types/domain";
+import type { Push, SessionCache } from "../../types/domain";
 import { debugLogger } from "../../lib/logging";
 import { performanceMonitor } from "../../lib/perf";
+import { MessageAction } from "../../types/domain";
 import {
   fetchChats,
   fetchDevices,
-  fetchDisplayPushes,  // ← ADD: Import new function
+  fetchDisplayPushes,
   fetchUserInfo,
   registerDevice,
 } from "../api/client";
@@ -18,14 +19,14 @@ export const sessionCache: SessionCache = {
   userInfo: null,
   devices: [],
   recentPushes: [],
-  chats: [], // ← ADD THIS LINE
+  chats: [],
   isAuthenticated: false,
   lastUpdated: 0,
   autoOpenLinks: true,
   deviceNickname: "Chrome",
   onlyThisDevice: false,
-  lastModifiedCutoff: 0,  // ← ADD: Initialize to 0
-  cachedAt: 0, // No cache initially
+  lastModifiedCutoff: 0,
+  cachedAt: 0,
 };
 
 /**
@@ -78,8 +79,24 @@ export function resetSessionCache(): void {
   sessionCache.lastUpdated = 0;
   sessionCache.autoOpenLinks = true;
   sessionCache.deviceNickname = "Chrome";
-  sessionCache.lastModifiedCutoff = 0;  // ← ADD: Reset cutoff on logout
+  sessionCache.lastModifiedCutoff = 0;
   sessionCache.cachedAt = 0;
+}
+
+async function persistSessionCache(): Promise<void> {
+  sessionCache.cachedAt = Date.now();
+  await saveSessionCache(sessionCache);
+}
+
+async function getPopupRecentPushes(pushes: Push[]): Promise<Push[]> {
+  const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
+  const deviceIden = await storageRepository.getDeviceIden();
+
+  if (!onlyThisDevice || !deviceIden) {
+    return pushes;
+  }
+
+  return pushes.filter((push) => push.target_device_iden === deviceIden);
 }
 
 /**
@@ -91,21 +108,30 @@ async function refreshSessionInBackground(apiKey: string): Promise<void> {
   debugLogger.general('INFO', "Starting background cache refresh");
 
   try {
+    let didRefreshUser = true;
+    let didRefreshDevices = true;
+    let didRefreshPushes = true;
+    let didRefreshChats = true;
+
     // Fetch fresh data from API
     const [userInfo, devices, displayPushes, chats] = await Promise.all([
       fetchUserInfo(apiKey).catch((e) => {
+        didRefreshUser = false;
         debugLogger.api('WARN', "Background user fetch failed", { error: String(e) });
         return sessionCache.userInfo; // Keep existing
       }),
       fetchDevices(apiKey).catch((e) => {
+        didRefreshDevices = false;
         debugLogger.api('WARN', "Background devices fetch failed", { error: String(e) });
         return sessionCache.devices; // Keep existing
       }),
       fetchDisplayPushes(apiKey, 50).catch((e) => {
+        didRefreshPushes = false;
         debugLogger.api('WARN', "Background pushes fetch failed", { error: String(e) });
         return sessionCache.recentPushes; // Keep existing
       }),
       fetchChats(apiKey).catch((e) => {
+        didRefreshChats = false;
         debugLogger.api('WARN', "Background chats fetch failed", { error: String(e) });
         return sessionCache.chats; // Keep existing
       }),
@@ -118,8 +144,18 @@ async function refreshSessionInBackground(apiKey: string): Promise<void> {
     sessionCache.chats = chats;
     sessionCache.lastUpdated = Date.now();
 
-    // Save updated cache back to IndexedDB
-    await saveSessionCache(sessionCache);
+    const popupPushes = await getPopupRecentPushes(displayPushes);
+
+    if (didRefreshUser && didRefreshDevices && didRefreshPushes && didRefreshChats) {
+      await persistSessionCache();
+    } else {
+      debugLogger.general('WARN', 'Skipping session cache persistence after partial background refresh', {
+        didRefreshUser,
+        didRefreshDevices,
+        didRefreshPushes,
+        didRefreshChats,
+      });
+    }
 
     debugLogger.general('INFO', "Background cache refresh completed", {
       deviceCount: devices.length,
@@ -129,11 +165,14 @@ async function refreshSessionInBackground(apiKey: string): Promise<void> {
 
     // Notify popup that data has been updated
     chrome.runtime.sendMessage({
-      action: "SESSION_DATA_UPDATED",
+      action: MessageAction.SESSION_DATA_UPDATED,
+      isAuthenticated: sessionCache.isAuthenticated,
       userInfo,
       devices,
-      recentPushes: displayPushes,
+      recentPushes: popupPushes,
       chats,
+      autoOpenLinks: sessionCache.autoOpenLinks,
+      deviceNickname: sessionCache.deviceNickname,
     }).catch(() => {
       // Popup might be closed, that's okay
       debugLogger.general('DEBUG', "Popup not available for background update notification");
@@ -434,8 +473,6 @@ export async function initializeSessionCache(
         // Store display pushes in session cache for popup consumption
         sessionCache.recentPushes = displayPushes;
 
-        // ========== ADD THIS ENTIRE BLOCK ==========
-        // Fetch chats (friends/contacts)
         try {
           const chats = await fetchChats(apiKeyValue);
           sessionCache.chats = chats;
@@ -449,9 +486,7 @@ export async function initializeSessionCache(
           });
           sessionCache.chats = [];
         }
-        // ========== END OF BLOCK ==========
 
-        // Update session cache
         sessionCache.isAuthenticated = true;
         sessionCache.lastUpdated = Date.now();
 
@@ -483,8 +518,7 @@ export async function initializeSessionCache(
         );
       }
 
-      // Save our freshly built session to the database for next time.
-      saveSessionCache(sessionCache);
+      await persistSessionCache();
       debugLogger.general("INFO", "Initialization completed successfully", {
         source,
         timestamp: new Date().toISOString(),
@@ -571,21 +605,26 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
         displayCount: displayPushes.length,
       });
 
-      // ========== ADD THIS ==========
-      // Refresh chats
+      let didRefreshChats = true;
       try {
         const chats = await fetchChats(apiKeyParam);
         sessionCache.chats = chats;
       } catch (error) {
+        didRefreshChats = false;
         debugLogger.general("WARN", "Failed to refresh chats", {
           error: (error as Error).message,
         });
       }
-      // ========== END ==========
 
-      // Update session cache
       sessionCache.isAuthenticated = true;
       sessionCache.lastUpdated = Date.now();
+      if (didRefreshChats) {
+        await persistSessionCache();
+      } else {
+        debugLogger.general("WARN", "Skipping session cache persistence after partial refresh", {
+          didRefreshChats,
+        });
+      }
 
       debugLogger.general("INFO", "Session cache refreshed successfully", {
         hasUserInfo: !!sessionCache.userInfo,
@@ -613,6 +652,5 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
   }
 }
 
-// *** ADD THESE 2 EXPORTS ***
 export { isCacheFresh };
 export { refreshSessionInBackground };
