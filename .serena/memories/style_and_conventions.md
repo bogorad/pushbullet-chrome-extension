@@ -1,1 +1,0 @@
-TypeScript strict mode, 2-space indentation, single quotes, semicolons required, ES2022 target. Use repository pattern for storage/API boundaries, event bus/state machine patterns in background, graceful degradation and non-fatal logging for background refresh paths.

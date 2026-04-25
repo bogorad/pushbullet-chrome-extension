@@ -1,1 +1,0 @@
-After code changes, run the relevant verification commands, usually `npm run typecheck`, `npm run lint`, and targeted or full `npm run test`. Build with `npm run build` when the change affects bundled extension entrypoints. Do not ignore LSP/type/lint issues.

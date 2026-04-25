@@ -3,7 +3,6 @@
 ## General
 
 Use beads instead of native task management.
-Use all functions of Serena-mcp.
 
 ## Build Commands
 

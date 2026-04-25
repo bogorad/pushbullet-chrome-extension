@@ -1,1 +1,0 @@
-After changes, run relevant Vitest tests plus npm run typecheck and npm run lint. Build with npm run build when extension bundles or entrypoints change.
