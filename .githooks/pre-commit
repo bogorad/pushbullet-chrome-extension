@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$repo_root" ]; then
+  echo "pre-commit: unable to find git repository root" >&2
+  exit 1
+fi
+
+cd "$repo_root" || {
+  echo "pre-commit: unable to enter repository root: $repo_root" >&2
+  exit 1
+}
+
+output_file=".beads/issues.jsonl"
+tmp_file="$output_file.tmp"
+
+bd export --no-memories -o "$tmp_file"
+export_status=$?
+if [ "$export_status" -ne 0 ]; then
+  rm -f "$tmp_file"
+  echo "pre-commit: bd export failed" >&2
+  exit "$export_status"
+fi
+
+mv "$tmp_file" "$output_file"
+move_status=$?
+if [ "$move_status" -ne 0 ]; then
+  rm -f "$tmp_file"
+  echo "pre-commit: failed to update $output_file" >&2
+  exit "$move_status"
+fi
+
+git add -f "$output_file"
+add_status=$?
+if [ "$add_status" -ne 0 ]; then
+  echo "pre-commit: failed to stage $output_file" >&2
+  exit "$add_status"
+fi
+
+exit 0
