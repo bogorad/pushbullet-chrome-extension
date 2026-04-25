@@ -107,6 +107,7 @@ const mocks = vi.hoisted(() => {
     fetchRecentPushes: vi.fn(),
     requestFileUpload: vi.fn(),
     sendFilePush: vi.fn(),
+    sendPush: vi.fn(),
     uploadFileToServer: vi.fn(),
     getApiKey: vi.fn(),
     getAutoOpenLinks: vi.fn(() => true),
@@ -127,6 +128,14 @@ const mocks = vi.hoisted(() => {
       setOnlyThisDevice: vi.fn().mockResolvedValue(undefined),
       setAutoOpenLinks: vi.fn().mockResolvedValue(undefined),
     },
+    performanceMonitor: {
+      exportPerformanceData: vi.fn(() => ({})),
+      getQualityMetrics: vi.fn(() => ({ consecutiveFailures: 0 })),
+      recordNotificationFailed: vi.fn(),
+      recordPushReceived: vi.fn(),
+      reset: vi.fn(),
+    },
+    clearSessionCache: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -137,12 +146,7 @@ vi.mock('../../src/lib/logging', () => ({
 }));
 
 vi.mock('../../src/lib/perf', () => ({
-  performanceMonitor: {
-    exportPerformanceData: vi.fn(() => ({})),
-    getQualityMetrics: vi.fn(() => ({ consecutiveFailures: 0 })),
-    recordNotificationFailed: vi.fn(),
-    recordPushReceived: vi.fn(),
-  },
+  performanceMonitor: mocks.performanceMonitor,
 }));
 
 vi.mock('../../src/lib/monitoring', () => ({
@@ -180,6 +184,7 @@ vi.mock('../../src/app/api/client', () => ({
   fetchRecentPushes: mocks.fetchRecentPushes,
   requestFileUpload: mocks.requestFileUpload,
   sendFilePush: mocks.sendFilePush,
+  sendPush: mocks.sendPush,
   uploadFileToServer: mocks.uploadFileToServer,
   updateDeviceNickname: vi.fn(),
 }));
@@ -277,7 +282,7 @@ vi.mock('../../src/background/keepalive', () => ({
 }));
 
 vi.mock('../../src/infrastructure/storage/indexed-db', () => ({
-  clearSessionCache: vi.fn().mockResolvedValue(undefined),
+  clearSessionCache: mocks.clearSessionCache,
   saveSessionCache: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -287,10 +292,17 @@ vi.mock('../../src/lib/events/event-bus', () => ({
 
 function installChromeMock(): void {
   const messageListeners: any[] = [];
+  const installedListeners: any[] = [];
+  const startupListeners: any[] = [];
 
   (globalThis as any).chrome = {
     alarms: {
       create: vi.fn(),
+      get: vi.fn(
+        (_name: string, callback: (alarm?: chrome.alarms.Alarm) => void) => {
+          callback(undefined);
+        },
+      ),
       onAlarm: { addListener: vi.fn() },
     },
     contextMenus: {
@@ -307,7 +319,14 @@ function installChromeMock(): void {
       getManifest: vi.fn(() => ({ version: '1.0.0' })),
       getURL: vi.fn((path: string) => `chrome-extension://test/${path}`),
       lastError: undefined,
-      onInstalled: { addListener: vi.fn() },
+      onInstalled: {
+        addListener: vi.fn((callback: any) => {
+          installedListeners.push(callback);
+        }),
+        callListeners: (...args: any[]) => {
+          installedListeners.forEach((callback) => callback(...args));
+        },
+      },
       onMessage: {
         addListener: vi.fn((callback: any) => {
           messageListeners.push(callback);
@@ -316,7 +335,14 @@ function installChromeMock(): void {
           messageListeners.forEach((callback) => callback(...args));
         },
       },
-      onStartup: { addListener: vi.fn() },
+      onStartup: {
+        addListener: vi.fn((callback: any) => {
+          startupListeners.push(callback);
+        }),
+        callListeners: (...args: any[]) => {
+          startupListeners.forEach((callback) => callback(...args));
+        },
+      },
       sendMessage: vi.fn().mockResolvedValue(undefined),
     },
     storage: {
@@ -365,6 +391,7 @@ function createDeferred<T>(): {
 async function loadGetSessionDataListener(): Promise<any> {
   vi.resetModules();
   installChromeMock();
+  delete (globalThis as any).exportDebugInfo;
   await import('../../src/background/index');
   await Promise.resolve();
 
@@ -373,8 +400,16 @@ async function loadGetSessionDataListener(): Promise<any> {
   )?.[0];
 }
 
+async function loadBackgroundRegistrations(): Promise<void> {
+  vi.resetModules();
+  installChromeMock();
+  delete (globalThis as any).exportDebugInfo;
+  await import('../../src/background/index');
+  await Promise.resolve();
+}
+
 async function waitForResponse(sendResponse: ReturnType<typeof vi.fn>): Promise<void> {
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 50; index += 1) {
     if (sendResponse.mock.calls.length > 0) {
       return;
     }
@@ -424,6 +459,15 @@ describe('background GET_SESSION_DATA session cache', () => {
       },
     });
     mocks.sendFilePush.mockResolvedValue(undefined);
+    mocks.sendPush.mockResolvedValue({
+      active: true,
+      created: 3,
+      dismissed: false,
+      direction: 'self',
+      iden: 'sent-push',
+      modified: 3,
+      type: 'note',
+    } satisfies Push);
     mocks.uploadFileToServer.mockResolvedValue(undefined);
     mocks.hydrateBackgroundConfig.mockResolvedValue(undefined);
     mocks.initializeSessionCache.mockResolvedValue(null);
@@ -433,6 +477,9 @@ describe('background GET_SESSION_DATA session cache', () => {
     mocks.stateMachine.transition.mockResolvedValue(undefined);
     mocks.storageRepository.getOnlyThisDevice.mockResolvedValue(false);
     mocks.storageRepository.getDeviceIden.mockResolvedValue('cached-device');
+    mocks.clearSessionCache.mockResolvedValue(undefined);
+    mocks.performanceMonitor.exportPerformanceData.mockReturnValue({});
+    mocks.performanceMonitor.getQualityMetrics.mockReturnValue({ consecutiveFailures: 0 });
   });
 
   it('responds from populated cache before device and chat refresh completes', async () => {
@@ -611,5 +658,173 @@ describe('background GET_SESSION_DATA session cache', () => {
         status: 400,
       },
     });
+  });
+
+  it('sends note pushes through the API client helper', async () => {
+    const listener = await loadGetSessionDataListener();
+    const sendResponse = vi.fn();
+
+    const keepChannelOpen = listener(
+      {
+        action: MessageAction.SEND_PUSH,
+        pushData: {
+          type: 'note',
+          title: 'Status',
+          body: 'Done',
+          device_iden: 'cached-device',
+        },
+      },
+      { id: chrome.runtime.id },
+      sendResponse,
+    );
+
+    expect(keepChannelOpen).toBe(true);
+    await waitForResponse(sendResponse);
+
+    expect(mocks.sendPush).toHaveBeenCalledWith('test-api-key', {
+      type: 'note',
+      title: 'Status',
+      body: 'Done',
+      device_iden: 'cached-device',
+    });
+    expect(mocks.fetchRecentPushes).not.toHaveBeenCalled();
+    expect(sendResponse).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('sends link pushes through the API client helper', async () => {
+    const listener = await loadGetSessionDataListener();
+    const sendResponse = vi.fn();
+
+    listener(
+      {
+        action: MessageAction.SEND_PUSH,
+        pushData: {
+          type: 'link',
+          title: 'Docs',
+          url: 'https://example.com/docs',
+          body: 'Reference',
+        },
+      },
+      { id: chrome.runtime.id },
+      sendResponse,
+    );
+
+    await waitForResponse(sendResponse);
+
+    expect(mocks.sendPush).toHaveBeenCalledWith('test-api-key', {
+      type: 'link',
+      title: 'Docs',
+      url: 'https://example.com/docs',
+      body: 'Reference',
+    });
+    expect(sendResponse).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('preserves SEND_PUSH API failure responses for the popup', async () => {
+    mocks.sendPush.mockRejectedValue(new Error('API rejected push'));
+
+    const listener = await loadGetSessionDataListener();
+    const sendResponse = vi.fn();
+
+    listener(
+      {
+        action: MessageAction.SEND_PUSH,
+        pushData: {
+          type: 'note',
+          title: 'Status',
+        },
+      },
+      { id: chrome.runtime.id },
+      sendResponse,
+    );
+
+    await waitForResponse(sendResponse);
+
+    expect(sendResponse).toHaveBeenCalledWith({
+      success: false,
+      error: 'API rejected push',
+    });
+  });
+
+  it('resets performance metrics after clearing session data on logout', async () => {
+    const listener = await loadGetSessionDataListener();
+    const sendResponse = vi.fn();
+
+    const keepChannelOpen = listener(
+      { action: MessageAction.LOGOUT },
+      { id: chrome.runtime.id },
+      sendResponse,
+    );
+
+    expect(keepChannelOpen).toBe(true);
+    await waitForResponse(sendResponse);
+
+    expect(mocks.stateMachine.transition).toHaveBeenCalledWith('LOGOUT');
+    expect(mocks.clearSessionCache).toHaveBeenCalled();
+    expect(mocks.performanceMonitor.reset).toHaveBeenCalled();
+    const clearSessionOrder = mocks.clearSessionCache.mock.invocationCallOrder[0];
+    const resetOrder = mocks.performanceMonitor.reset.mock.invocationCallOrder[0];
+    expect(clearSessionOrder).toBeDefined();
+    expect(resetOrder).toBeDefined();
+    expect(clearSessionOrder!).toBeLessThan(resetOrder!);
+    expect(sendResponse).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('registers one startup listener and no global debug export', async () => {
+    await loadBackgroundRegistrations();
+
+    expect(chrome.runtime.onStartup.addListener).toHaveBeenCalledTimes(1);
+    expect((globalThis as any).exportDebugInfo).toBeUndefined();
+  });
+
+  it('ensures long sleep recovery alarm exists on startup and install', async () => {
+    await loadBackgroundRegistrations();
+
+    chrome.runtime.onStartup.callListeners();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chrome.alarms.get).toHaveBeenCalledWith(
+      'longSleepRecovery',
+      expect.any(Function),
+    );
+    expect(chrome.alarms.create).toHaveBeenCalledWith('longSleepRecovery', {
+      periodInMinutes: 5,
+    });
+
+    vi.clearAllMocks();
+
+    chrome.runtime.onInstalled.callListeners();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chrome.alarms.get).toHaveBeenCalledWith(
+      'longSleepRecovery',
+      expect.any(Function),
+    );
+    expect(chrome.alarms.create).toHaveBeenCalledWith('longSleepRecovery', {
+      periodInMinutes: 5,
+    });
+
+    vi.clearAllMocks();
+    chrome.alarms.get.mockImplementation(
+      (_name: string, callback: (alarm?: chrome.alarms.Alarm) => void) => {
+        callback({
+          name: 'longSleepRecovery',
+          scheduledTime: Date.now(),
+          periodInMinutes: 5,
+        });
+      },
+    );
+
+    chrome.runtime.onInstalled.callListeners();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chrome.alarms.get).toHaveBeenCalledWith(
+      'longSleepRecovery',
+      expect.any(Function),
+    );
+    expect(chrome.alarms.create).not.toHaveBeenCalled();
   });
 });

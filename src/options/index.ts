@@ -62,12 +62,6 @@ async function loadSettings(): Promise<void> {
     autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
     onlyThisDeviceCheckbox.checked = onlyThisDevice;
 
-    // Save auto-open on reconnect
-    autoOpenLinksOnReconnectCheckbox.addEventListener('change', saveAutoOpenLinksOnReconnect);
-
-    // Save only this device filter
-    onlyThisDeviceCheckbox.addEventListener('change', saveOnlyThisDevice);
-
     // Set encryption password
     encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
 
@@ -326,7 +320,7 @@ function init(): void {
   saveSettingsButton.addEventListener('click', saveAllSettings);
   resetSettingsButton.addEventListener('click', resetToDefaults);
   forceWakeBtn.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ action: 'attemptReconnect' }).then(() => {
+    chrome.runtime.sendMessage({ action: MessageAction.ATTEMPT_RECONNECT }).then(() => {
       showStatus('Force wake sent, check extension popup for status', 'success');
     }).catch(() => {
       showStatus('Failed to send force wake', 'error');
@@ -343,6 +337,7 @@ function init(): void {
 
   autoOpenLinksCheckbox.addEventListener('change', saveAutoOpenLinks);
   autoOpenLinksOnReconnectCheckbox.addEventListener('change', saveAutoOpenLinksOnReconnect);
+  onlyThisDeviceCheckbox.addEventListener('change', saveOnlyThisDevice);
   encryptionPasswordInput.addEventListener('change', saveEncryptionPassword);
   debugModeCheckbox.addEventListener('change', saveDebugMode);
 

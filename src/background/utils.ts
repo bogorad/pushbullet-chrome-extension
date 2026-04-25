@@ -5,7 +5,7 @@
 import { debugLogger } from "../lib/logging";
 import { performanceMonitor } from "../lib/perf";
 import { sessionCache, hydrateCutoff, setLastModifiedCutoffSafe } from "../app/session";
-import { fetchIncrementalPushes } from "../app/api/client";
+import { fetchIncrementalPushes, sendPush } from "../app/api/client";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 import { hydrateBackgroundConfig } from "./config";
 import {
@@ -14,16 +14,39 @@ import {
   setPollingMode,
   isPollingMode,
 } from "./state";
-import type { Push } from "../types/domain";
+import type { FilePush, MirrorPush, Push, SmsChangedPush } from "../types/domain";
 import { createNotificationWithTimeout } from "../app/notifications";
 import { globalEventBus } from "../lib/events/event-bus";
 import { isTrustedImageUrl } from "../lib/security/trusted-image-url";
 import { ServiceWorkerState, type ServiceWorkerStateMachine } from "./state-machine";
 import { maybeAutoOpenLinkWithDismiss } from "./processing";
+import { summarizePushForLog } from "../app/push-summary";
 
 // Guard flag to prevent concurrent context menu setup
 // Ensures idempotent behavior when multiple startup events fire
 let isSettingUpContextMenu = false;
+
+const MAX_MIRROR_ICON_DECODED_BYTES = 256 * 1024;
+const MAX_MIRROR_ICON_ENCODED_LENGTH = Math.ceil(MAX_MIRROR_ICON_DECODED_BYTES / 3) * 4;
+
+type SmsNotification = NonNullable<SmsChangedPush['notifications']>[number];
+type SmsChangedPushWithNotification = SmsChangedPush & {
+  notifications: [SmsNotification, ...SmsNotification[]];
+};
+type FilePushWithMmsFields = FilePush & { title?: string };
+type MirrorPushWithImage = MirrorPush & { image_url?: string };
+type HealthCheckWebSocketClient = {
+  isConnected: () => boolean;
+  isConnectionHealthy: () => boolean;
+  ws?: { readyState?: number };
+};
+
+function getRuntimeLastErrorMessage(): string | null {
+  const runtime = chrome.runtime as typeof chrome.runtime & {
+    lastError?: { message?: string };
+  };
+  return runtime.lastError?.message ?? null;
+}
 
 /**
  * Connection status for icon updates
@@ -88,31 +111,63 @@ function sanitizeUrl(url: string): string {
   }
 }
 
-function hasStringValue(value: unknown): boolean {
-  return typeof value === "string" && value.length > 0;
+function isSmsChangedPush(push: Push): push is SmsChangedPush {
+  return push.type === "sms_changed";
 }
 
-function summarizePushForLog(push: Partial<Push>): Record<string, unknown> {
-  const pushRecord = push as Record<string, unknown>;
-  const notifications = Array.isArray(pushRecord.notifications)
-    ? pushRecord.notifications
-    : [];
+function isMirrorPush(push: Push): push is MirrorPush {
+  return push.type === "mirror";
+}
 
-  return {
-    iden: pushRecord.iden,
-    type: pushRecord.type,
-    encrypted: !!pushRecord.encrypted,
-    contentFlags: {
-      heading: hasStringValue(pushRecord.title),
-      message: hasStringValue(pushRecord.body),
-      link: hasStringValue(pushRecord.url),
-      fileLink: hasStringValue(pushRecord.file_url),
-      imageLink: hasStringValue(pushRecord.image_url),
-    },
-    notificationsCount: notifications.length,
-    created: pushRecord.created,
-    modified: pushRecord.modified,
-  };
+function isFilePush(push: Push): push is FilePush {
+  return push.type === "file";
+}
+
+function hasSmsNotification(push: SmsChangedPush): push is SmsChangedPushWithNotification {
+  return Array.isArray(push.notifications) && push.notifications.length > 0;
+}
+
+function getBase64DecodedLength(base64: string): number {
+  const paddingLength = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - paddingLength;
+}
+
+function getMirrorIconDataUrl(iconData: string | undefined, title: string): string | null {
+  if (!iconData) {
+    return null;
+  }
+
+  const normalizedIconData = iconData.replace(/\s/g, '');
+  if (!normalizedIconData.startsWith('/9j/')) {
+    return null;
+  }
+
+  if (normalizedIconData.length > MAX_MIRROR_ICON_ENCODED_LENGTH) {
+    debugLogger.notifications("WARN", "Ignoring oversized mirror notification icon", {
+      iconDataLength: normalizedIconData.length,
+      maxEncodedLength: MAX_MIRROR_ICON_ENCODED_LENGTH,
+      title,
+    });
+    return null;
+  }
+
+  const decodedLength = getBase64DecodedLength(normalizedIconData);
+  if (decodedLength > MAX_MIRROR_ICON_DECODED_BYTES) {
+    debugLogger.notifications("WARN", "Ignoring oversized mirror notification icon", {
+      decodedLength,
+      maxDecodedBytes: MAX_MIRROR_ICON_DECODED_BYTES,
+      title,
+    });
+    return null;
+  }
+
+  debugLogger.notifications("DEBUG", "Processing mirror notification icon", {
+    iconDataLength: normalizedIconData.length,
+    decodedLength,
+    title,
+  });
+
+  return `data:image/jpeg;base64,${normalizedIconData}`;
 }
 
 /**
@@ -351,10 +406,7 @@ export async function showPushNotification(
     // --- NEW GUARD CLAUSE: START ---
     // This specifically catches the empty push that follows an SMS deletion.
     // It checks for a push that is 'sms_changed' but has an empty or missing 'notifications' array.
-    if (
-      (push as any).type === "sms_changed" &&
-      (!(push as any).notifications || (push as any).notifications.length === 0)
-    ) {
+    if (isSmsChangedPush(push) && !hasSmsNotification(push)) {
       debugLogger.notifications(
         "INFO",
         "Ignoring sms_changed push with no notification content (deletion event).",
@@ -389,7 +441,7 @@ export async function showPushNotification(
         "INFO",
         "Showing notification for undecrypted push",
       );
-    } else if ((push as any).type === "sms_changed") {
+    } else if (isSmsChangedPush(push) && hasSmsNotification(push)) {
       // The condition is now much simpler because the guard clause at the top
       // has already guaranteed that if we get here, the 'notifications' array
       // exists and is not empty.
@@ -399,7 +451,7 @@ export async function showPushNotification(
         "SMS push summary received",
         { push: summarizePushForLog(push) },
       );
-      const sms = (push as any).notifications[0];
+      const sms = push.notifications[0];
 
       // This redundant check is now removed, as the guard clause handles all empty cases.
       // if (!sms.body) { ... }
@@ -516,7 +568,7 @@ export async function showPushNotification(
           title: title,
           message: message,
         };
-      } else if (push.type === "file") {
+      } else if (isFilePush(push)) {
         // Security validation for image URLs in file pushes
         debugLogger.notifications(
           "DEBUG",
@@ -526,30 +578,31 @@ export async function showPushNotification(
 
         let fileTitle = "New File";
         let fileMessage = "";
+        const filePush = push as FilePushWithMmsFields;
 
-        if ((push as any).title) {
+        if (filePush.title) {
           // MMS-style file push
-          fileTitle = (push as any).title;
+          fileTitle = filePush.title;
           fileMessage =
-            (push as any).body || `Image (${(push as any).file_type})`;
+            filePush.body || `Image (${filePush.file_type})`;
         } else {
           // Regular file push
-          fileTitle = `New File: ${(push as any).file_name || "unknown file"}`;
-          fileMessage = (push as any).body || (push as any).file_type || "";
+          fileTitle = `New File: ${filePush.file_name || "unknown file"}`;
+          fileMessage = filePush.body || filePush.file_type || "";
         }
 
         // Security validation for image URLs - check both image_url and file_url
-        const imageUrl = (push as any).image_url;
-        const fileUrl = (push as any).file_url;
+        const imageUrl = filePush.image_url;
+        const fileUrl = filePush.file_url;
 
         // Determine which URL to use for image preview
-        let previewUrl = null;
+        let previewUrl: string | null = null;
         if (imageUrl && isTrustedImageUrl(imageUrl)) {
           previewUrl = imageUrl;
         } else if (
           fileUrl &&
           isTrustedImageUrl(fileUrl) &&
-          (push as any).file_type?.startsWith("image/")
+          filePush.file_type?.startsWith("image/")
         ) {
           previewUrl = fileUrl;
         }
@@ -567,7 +620,7 @@ export async function showPushNotification(
             "INFO",
             "Showing image notification for trusted file push",
             {
-              fileName: (push as any).file_name,
+              fileName: filePush.file_name,
               previewUrl: previewUrl,
             },
           );
@@ -589,25 +642,17 @@ export async function showPushNotification(
             );
           }
         }
-      } else if (push.type === "mirror") {
+      } else if (isMirrorPush(push)) {
         // Format title as "AppName: SenderName" for better clarity
         const mirrorTitle =
           push.application_name && push.title
             ? `${push.application_name}: ${push.title}`
             : push.title || push.application_name || "Notification";
         const mirrorMessage = push.body || "";
-        const iconData = (push as any).icon;
+        const dataUrl = getMirrorIconDataUrl(push.icon, mirrorTitle);
 
         // Check if mirror has an icon (base64 image data)
-        if (iconData && typeof iconData === 'string' && iconData.startsWith('/9j/')) {
-          debugLogger.notifications("DEBUG", "Processing mirror notification icon", {
-            iconDataLength: iconData.length,
-            title: mirrorTitle,
-          });
-
-          // Icon is already base64 JPEG data, just add data URL prefix
-          const dataUrl = `data:image/jpeg;base64,${iconData}`;
-
+        if (dataUrl) {
           notificationOptions = {
             ...baseOptions,
             type: "basic",
@@ -623,7 +668,7 @@ export async function showPushNotification(
           });
         } else {
           // Security validation for image URLs (fallback)
-          const mirrorImageUrl = (push as any).image_url;
+          const mirrorImageUrl = (push as MirrorPushWithImage).image_url;
           if (mirrorImageUrl && isTrustedImageUrl(mirrorImageUrl)) {
             notificationOptions = {
               ...baseOptions,
@@ -769,7 +814,7 @@ export async function performPollingFetch(): Promise<void> {
  * Perform WebSocket health check
  */
 export function performWebSocketHealthCheck(
-  websocketClient: any,
+  websocketClient: HealthCheckWebSocketClient | null,
   connectFn: () => void,
   recoveryController?: WebSocketRecoveryController,
 ): void {
@@ -787,10 +832,7 @@ export function performWebSocketHealthCheck(
         websocketClient?.isConnected() ??
         false,
       readyState:
-        websocketClient?.[
-          "ws"
-        ]
-          ?.readyState ??
+        websocketClient?.ws?.readyState ??
         "N/A",
     },
   );
@@ -971,11 +1013,10 @@ export function setupContextMenu(): void {
           title: "Push this link",
           contexts: ["link"],
         });
-        if (chrome.runtime.lastError) {
-          const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || "Unknown error";
+        const pushLinkError = getRuntimeLastErrorMessage();
+        if (pushLinkError) {
           debugLogger.general("ERROR", "Failed to create push-link menu", {
-            error: errorMessage,
+            error: pushLinkError,
           });
         }
 
@@ -984,11 +1025,10 @@ export function setupContextMenu(): void {
           title: "Push this page",
           contexts: ["page"],
         });
-        if (chrome.runtime.lastError) {
-          const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || "Unknown error";
+        const pushPageError = getRuntimeLastErrorMessage();
+        if (pushPageError) {
           debugLogger.general("ERROR", "Failed to create push-page menu", {
-            error: errorMessage,
+            error: pushPageError,
           });
         }
 
@@ -997,11 +1037,10 @@ export function setupContextMenu(): void {
           title: "Push selected text",
           contexts: ["selection"],
         });
-        if (chrome.runtime.lastError) {
-          const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || "Unknown error";
+        const pushSelectionError = getRuntimeLastErrorMessage();
+        if (pushSelectionError) {
           debugLogger.general("ERROR", "Failed to create push-selection menu", {
-            error: errorMessage,
+            error: pushSelectionError,
           });
         }
 
@@ -1010,11 +1049,10 @@ export function setupContextMenu(): void {
           title: "Push this image",
           contexts: ["image"],
         });
-        if (chrome.runtime.lastError) {
-          const lastError = chrome.runtime.lastError as any;
-          const errorMessage = lastError.message || "Unknown error";
+        const pushImageError = getRuntimeLastErrorMessage();
+        if (pushImageError) {
           debugLogger.general("ERROR", "Failed to create push-image menu", {
-            error: errorMessage,
+            error: pushImageError,
           });
         }
 
@@ -1055,22 +1093,11 @@ export async function pushLink(url: string, title?: string): Promise<void> {
   }
 
   try {
-    const response = await fetch("https://api.pushbullet.com/v2/pushes", {
-      method: "POST",
-      headers: {
-        "Access-Token": apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "link",
-        title: sanitizedTitle,
-        url: sanitizedUrl,
-      }),
+    await sendPush(apiKey, {
+      type: "link",
+      title: sanitizedTitle,
+      url: sanitizedUrl,
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to push link: ${response.status}`);
-    }
 
     debugLogger.general("INFO", "Link pushed successfully", { url, title });
 
@@ -1105,22 +1132,11 @@ export async function pushNote(title: string, body: string): Promise<void> {
   const sanitizedBody = sanitizeText(body);
 
   try {
-    const response = await fetch("https://api.pushbullet.com/v2/pushes", {
-      method: "POST",
-      headers: {
-        "Access-Token": apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "note",
-        title: sanitizedTitle,
-        body: sanitizedBody,
-      }),
+    await sendPush(apiKey, {
+      type: "note",
+      title: sanitizedTitle,
+      body: sanitizedBody,
     });
-
-    if (!response.ok) {
-      throw new Error(`Failed to push note: ${response.status}`);
-    }
 
     debugLogger.general("INFO", "Note pushed successfully", { title });
 

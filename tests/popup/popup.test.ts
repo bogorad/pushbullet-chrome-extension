@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat, Device, SessionDataResponse } from '../../src/types/domain';
+import type { Chat, Device, Push, SessionDataResponse } from '../../src/types/domain';
 import { MessageAction } from '../../src/types/domain';
 import popupHtml from '../../popup.html?raw';
 
@@ -158,6 +158,58 @@ describe('Popup friend targets', () => {
       { value: 'friend:alice@example.com', text: 'F: Alice', disabled: false },
       { value: 'friend:bob@example.com', text: 'F: bob@example.com', disabled: false },
     ]);
+  });
+
+  it('renders the send push heading with text nodes and a version span', async () => {
+    chrome.runtime.getManifest.mockReturnValue({ version: '9.8.7' });
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(createSessionData());
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await loadPopup();
+
+    const heading = document.getElementById('send-push-heading') as HTMLHeadingElement;
+    const versionText = heading.querySelector('.version-text');
+
+    expect(heading.childNodes[0]?.textContent).toBe('Send a Push ');
+    expect(versionText?.textContent).toBe('(v.9.8.7)');
+    expect(versionText?.tagName).toBe('SPAN');
+    expect(heading.textContent).toBe('Send a Push (v.9.8.7)');
+  });
+
+  it('renders dynamic push links with safe new-tab attributes', async () => {
+    const recentPushes: Push[] = [
+      {
+        type: 'link',
+        iden: 'push-1',
+        active: true,
+        dismissed: false,
+        created: 1,
+        modified: 1,
+        title: 'Example',
+        body: 'Read this',
+        url: 'https://example.com/article',
+      },
+    ];
+
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(createSessionData({ recentPushes }));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await loadPopup();
+
+    const pushLink = document.querySelector<HTMLAnchorElement>('.push-url');
+
+    expect(pushLink).not.toBeNull();
+    expect(pushLink?.textContent).toBe('https://example.com/article');
+    expect(pushLink?.target).toBe('_blank');
+    expect(pushLink?.rel).toBe('noopener noreferrer');
   });
 
   it('sends friend targets as email pushes', async () => {

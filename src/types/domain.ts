@@ -248,7 +248,9 @@ export enum MessageAction {
   LOG = 'log',
   SEND_PUSH = 'sendPush',
   UPLOAD_AND_SEND_FILE = 'uploadAndSendFile',
+  GET_PUSH_DATA = 'GET_PUSH_DATA',
   GET_NOTIFICATION_DATA = 'getNotificationData',
+  ATTEMPT_RECONNECT = 'attemptReconnect',
   CLEAR_ALL_LOGS = 'clearAllLogs',
   UPDATE_DEBUG_CONFIG = 'updateDebugConfig',
   EXPORT_DEBUG_DATA = 'exportDebugData',
@@ -402,7 +404,7 @@ export function isNopMessage(msg: WebSocketMessage): msg is WebSocketNopMessage 
 export function isValidPush(push: unknown): push is Push {
   if (!push || typeof push !== 'object') return false;
   const p = push as Partial<Push>;
-  return typeof p.type === 'string' && ['link', 'note', 'file', 'mirror', 'dismissal'].includes(p.type);
+  return typeof p.type === 'string' && ['link', 'note', 'file', 'mirror', 'dismissal', 'sms_changed'].includes(p.type);
 }
 
 export function isValidDevice(device: unknown): device is Device {

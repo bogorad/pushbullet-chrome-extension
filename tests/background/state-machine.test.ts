@@ -1,27 +1,32 @@
 // tests/background/state-machine.test.ts
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MockInstance } from 'vitest';
 
 // Import the classes we are testing
-import { ServiceWorkerStateMachine, ServiceWorkerState } from '../../src/background/state-machine'
+import {
+  ServiceWorkerStateMachine,
+  ServiceWorkerState,
+  type StateMachineCallbacks
+} from '../../src/background/state-machine';
 
 // Import the logger so we can mock it
-import * as logging from '../../src/lib/logging'
+import * as logging from '../../src/lib/logging';
 
 // Mock the utility function that updates the UI
 vi.mock('../../src/background/utils', () => ({
   updateExtensionTooltip: vi.fn(),
   updateConnectionIcon: vi.fn()
-}))
+}));
 
 describe('ServiceWorkerStateMachine', () => {
-  let logSpy: any // This will be our spy on the logger
-  let mockCallbacks: any // Mock callbacks for the state machine
+  let logSpy: MockInstance<typeof logging.debugLogger.general>;
+  let mockCallbacks: StateMachineCallbacks;
 
   beforeEach(() => {
     // Create a spy on the 'general' method of the debugLogger.
     // This lets us watch what it's being called with, without actually logging.
-    logSpy = vi.spyOn(logging.debugLogger, 'general')
+    logSpy = vi.spyOn(logging.debugLogger, 'general');
 
     // Create mock functions for the state machine's side-effects.
     mockCallbacks = {
@@ -32,8 +37,8 @@ describe('ServiceWorkerStateMachine', () => {
       onShowError: vi.fn(),
       onClearData: vi.fn().mockResolvedValue(undefined),
       onDisconnectWebSocket: vi.fn()
-    }
-  })
+    };
+  });
 
   it('should transition from READY to DEGRADED on a WebSocket disconnect and log the transition', async () => {
     // =================================================================
@@ -41,32 +46,32 @@ describe('ServiceWorkerStateMachine', () => {
     // =================================================================
 
     // Create a new instance of the state machine with our mock callbacks.
-    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks);
 
     // Simulate the startup and connection flow to reach the READY state.
-    await stateMachine.transition('API_KEY_SET')
-    await stateMachine.transition('INIT_SUCCESS') // This will call onInitialize
-    await stateMachine.transition('WS_CONNECTED')
+    await stateMachine.transition('API_KEY_SET');
+    await stateMachine.transition('INIT_SUCCESS'); // This will call onInitialize
+    await stateMachine.transition('WS_CONNECTED');
 
     // Verify we are in the correct starting state.
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY);
 
     // Clear the log spy's history to ignore the logs from the setup steps.
-    logSpy.mockClear()
+    logSpy.mockClear();
 
     // =================================================================
     // ACT: Trigger the event that caused the bug.
     // =================================================================
 
     // Simulate the WebSocket disconnecting.
-    await stateMachine.transition('WS_DISCONNECTED')
+    await stateMachine.transition('WS_DISCONNECTED');
 
     // =================================================================
     // ASSERT: Verify the new state and the log output.
     // =================================================================
 
     // 1. Assert that the internal state is now DEGRADED.
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.DEGRADED)
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.DEGRADED);
 
     // 2. Assert that the logger was called with the correct transition message.
     //    This is the key verification step.
@@ -78,65 +83,65 @@ describe('ServiceWorkerStateMachine', () => {
         event: 'WS_DISCONNECTED',
         to: ServiceWorkerState.DEGRADED
       }
-    )
+    );
 
     // 3. (Bonus) Assert that the correct side-effect was triggered.
     //    This confirms that polling would have started.
-    expect(mockCallbacks.onStartPolling).toHaveBeenCalled()
-  })
+    expect(mockCallbacks.onStartPolling).toHaveBeenCalled();
+  });
 
   it('should wait for WS_CONNECTED before marking initialization as READY', async () => {
-    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks);
 
-    await stateMachine.transition('API_KEY_SET')
+    await stateMachine.transition('API_KEY_SET');
 
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.RECONNECTING)
-    expect(mockCallbacks.onConnectWebSocket).toHaveBeenCalledTimes(1)
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.RECONNECTING);
+    expect(mockCallbacks.onConnectWebSocket).toHaveBeenCalledTimes(1);
 
-    await stateMachine.transition('WS_CONNECTED')
+    await stateMachine.transition('WS_CONNECTED');
 
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
-  })
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY);
+  });
 
   it('should reinitialize a hydrated READY state on STARTUP when credentials are present', async () => {
-    const storageGet = chrome.storage.local.get as any
+    const storageGet = chrome.storage.local.get as ReturnType<typeof vi.fn>;
     storageGet.mockResolvedValue({
       lastKnownState: ServiceWorkerState.READY
-    })
-    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+    });
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks);
 
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY);
 
     await stateMachine.transition('STARTUP', {
       hasApiKey: true,
       apiKey: 'test-api-key'
-    })
+    });
 
     expect(mockCallbacks.onInitialize).toHaveBeenCalledWith({
       hasApiKey: true,
       apiKey: 'test-api-key'
-    })
-    expect(mockCallbacks.onConnectWebSocket).toHaveBeenCalledTimes(1)
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.RECONNECTING)
+    });
+    expect(mockCallbacks.onConnectWebSocket).toHaveBeenCalledTimes(1);
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.RECONNECTING);
 
-    await stateMachine.transition('WS_CONNECTED')
+    await stateMachine.transition('WS_CONNECTED');
 
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
-  })
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY);
+  });
 
   it('should send a permanent WebSocket error from READY to ERROR', async () => {
-    const storageGet = chrome.storage.local.get as any
+    const storageGet = chrome.storage.local.get as ReturnType<typeof vi.fn>;
     storageGet.mockResolvedValue({
       lastKnownState: ServiceWorkerState.READY
-    })
-    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+    });
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks);
 
-    await stateMachine.transition('WS_PERMANENT_ERROR', { error: 'auth failed' })
+    await stateMachine.transition('WS_PERMANENT_ERROR', { error: 'auth failed' });
 
-    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.ERROR)
-    expect(mockCallbacks.onShowError).toHaveBeenCalledWith('Service worker encountered an error')
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.ERROR);
+    expect(mockCallbacks.onShowError).toHaveBeenCalledWith('Service worker encountered an error');
     expect(chrome.alarms.create).toHaveBeenCalledWith('auto-recovery-from-error', {
       delayInMinutes: 0.5
-    })
-  })
-})
+    });
+  });
+});

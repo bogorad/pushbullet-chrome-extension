@@ -90,8 +90,8 @@ export class WebSocketClient {
       // CRITICAL: Log the exact URL being constructed (without exposing full API key)
       debugLogger.websocket("INFO", "WebSocket URL construction debug", {
         baseUrl: this.websocketUrl,
+        hasApiKey: apiKey.length > 0,
         apiKeyLength: apiKey.length,
-        apiKeyPrefix: apiKey.substring(0, 8) + "...",
         finalUrlLength: url.length,
         urlPattern: this.websocketUrl + "***",
       });
@@ -170,7 +170,23 @@ export class WebSocketClient {
       };
 
       this.socket.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
+        let parsedMessage: unknown;
+        try {
+          parsedMessage = JSON.parse(ev.data);
+        } catch (error) {
+          debugLogger.websocket("WARN", "Malformed WebSocket frame ignored", {
+            dataType: typeof ev.data,
+            errorType: error instanceof Error ? error.name : typeof error,
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
+        const msg = parsedMessage as {
+          type?: string;
+          subtype?: string;
+          push?: unknown;
+        };
         globalEventBus.emit("websocket:message", msg);
         if (msg.type === "nop") {
           this.lastNopAt = Date.now();

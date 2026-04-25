@@ -3,6 +3,7 @@
  */
 
 import type { Push } from '../types/domain';
+import { MessageAction } from '../types/domain';
 import { getElementById, querySelector, setText } from '../lib/ui/dom';
 import { isTrustedImageUrl } from '../lib/security/trusted-image-url';
 
@@ -30,7 +31,7 @@ function loadNotification(): void {
 
   // Request push data
   chrome.runtime.sendMessage(
-    { type: "GET_PUSH_DATA", notificationId },
+    { action: MessageAction.GET_PUSH_DATA, notificationId },
     (response) => {
       if (!response || !response.success || !response.push) {
         document.getElementById("message")!.textContent =

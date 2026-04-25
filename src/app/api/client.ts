@@ -33,6 +33,46 @@ export interface SendFilePushRequest {
   source_device_iden?: string;
 }
 
+interface SendPushTarget {
+  device_iden?: string;
+  email?: string;
+  channel_tag?: string;
+  client_iden?: string;
+  source_device_iden?: string;
+}
+
+export type SendPushRequest =
+  | (SendPushTarget & {
+      type: 'note';
+      title?: string;
+      body?: string;
+    })
+  | (SendPushTarget & {
+      type: 'link';
+      url: string;
+      title?: string;
+      body?: string;
+    })
+  | (SendPushTarget & {
+      type: 'file';
+      file_name: string;
+      file_type: string;
+      file_url: string;
+      body?: string;
+    });
+
+export class PushbulletApiError extends Error {
+  code: string;
+  status: number;
+
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = 'PushbulletApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 export class PushbulletUploadError extends Error {
   code: string;
   stage: UploadApiStage;
@@ -415,7 +455,20 @@ export async function ensureDeviceExists(apiKey: string, deviceIden: string): Pr
     `https://api.pushbullet.com/v2/devices/${deviceIden}`,
     { method: 'GET', headers: { 'Access-Token': apiKey } }
   );
-  return response.status !== 404;
+
+  if (response.ok) {
+    return true;
+  }
+
+  if (response.status === 404) {
+    return false;
+  }
+
+  const message = await getApiErrorMessage(
+    response,
+    `Failed to check device existence: ${response.status} ${response.statusText}`
+  );
+  throw new PushbulletApiError('device_lookup_failed', message, response.status);
 }
 
 export async function registerDevice(
@@ -471,7 +524,8 @@ export async function registerDevice(
               created: device.created,
               modified: device.modified,
               icon: device.icon || '(no icon)',
-              pushToken: device.push_token ? `${device.push_token.substring(0, 8)}...` : '(no push token)',
+              hasPushToken: !!device.push_token,
+              pushTokenLength: device.push_token?.length || 0,
               appVersion: device.app_version || '(no app version)',
               hasSms: device.has_sms || false
             });
@@ -790,6 +844,28 @@ export async function sendFilePush(
       response.status
     );
   }
+}
+
+export async function createPush(apiKey: string, push: SendPushRequest): Promise<Push> {
+  const response = await fetch(PUSHES_URL, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(apiKey),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(push),
+  });
+
+  if (!response.ok) {
+    const message = await getApiErrorMessage(response, 'Failed to send push');
+    throw new PushbulletApiError('push_send_failed', message, response.status);
+  }
+
+  return response.json();
+}
+
+export async function sendPush(apiKey: string, push: SendPushRequest): Promise<Push> {
+  return createPush(apiKey, push);
 }
 
 export async function dismissPush(iden: string, apiKey: string): Promise<void> {

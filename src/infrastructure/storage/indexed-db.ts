@@ -52,11 +52,14 @@ export async function saveSessionCache(session: SessionCache): Promise<void> {
     const transaction = db.transaction(STORE_NAME, "readwrite");
     const store = transaction.objectStore(STORE_NAME);
 
-    // *** ADD THESE 2 LINES BEFORE store.put ***
     const timestampedSession = { ...session, cachedAt: Date.now() };
     store.put(timestampedSession, CACHE_KEY);
 
-    await new Promise((resolve) => (transaction.oncomplete = resolve));
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
     debugLogger.storage("DEBUG", "Session cache saved to IndexedDB");
   } catch (error) {
     debugLogger.storage(
@@ -65,6 +68,7 @@ export async function saveSessionCache(session: SessionCache): Promise<void> {
       null,
       error as Error,
     );
+    throw error;
   }
 }
 

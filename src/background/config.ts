@@ -37,6 +37,20 @@ export async function hydrateBackgroundConfig(): Promise<void> {
 
 let loadDebugConfigOnce: Promise<void> | null = null;
 
+function getDebugConfigLoadErrorMetadata(error: unknown): Record<string, string> {
+  if (error instanceof Error) {
+    return {
+      errorName: error.name,
+      errorType: error.constructor.name,
+    };
+  }
+
+  return {
+    errorName: typeof error,
+    errorType: typeof error,
+  };
+}
+
 export function ensureDebugConfigLoadedOnce(): Promise<void> {
   if (!loadDebugConfigOnce) {
     loadDebugConfigOnce = (async () => {
@@ -50,8 +64,9 @@ export function ensureDebugConfigLoadedOnce(): Promise<void> {
         debugLogger.general(
           'WARN',
           'Failed to load debug configuration (single-flight)',
-          { error: (e as Error).message },
+          getDebugConfigLoadErrorMetadata(e),
         );
+        loadDebugConfigOnce = null;
       }
     })();
   }

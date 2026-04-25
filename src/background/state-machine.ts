@@ -48,6 +48,47 @@ export type ServiceWorkerEvent =
   | 'ATTEMPT_RECONNECT'  // Health check triggered reconnect attempt
   | 'LOGOUT';            // User logged out
 
+export interface InitializationTransitionPayload {
+  hasApiKey?: boolean;
+  apiKey?: string;
+  socketHealthy?: boolean;
+  reason?: string;
+}
+
+export interface StartupTransitionPayload extends InitializationTransitionPayload {
+  hasApiKey: boolean;
+}
+
+export interface ApiKeySetTransitionPayload extends InitializationTransitionPayload {
+  apiKey?: string;
+}
+
+export interface AttemptReconnectTransitionPayload extends InitializationTransitionPayload {
+  hasApiKey?: boolean;
+  socketHealthy?: boolean;
+  reason?: string;
+}
+
+export interface ErrorTransitionPayload {
+  error?: string;
+}
+
+interface TransitionPayloadByEvent {
+  STARTUP: StartupTransitionPayload;
+  API_KEY_SET: ApiKeySetTransitionPayload;
+  INIT_SUCCESS: undefined;
+  INIT_FAILURE: ErrorTransitionPayload;
+  WS_CONNECTED: undefined;
+  WS_DISCONNECTED: undefined;
+  WS_PERMANENT_ERROR: ErrorTransitionPayload;
+  ATTEMPT_RECONNECT: AttemptReconnectTransitionPayload;
+  LOGOUT: undefined;
+}
+
+type TransitionPayload<E extends ServiceWorkerEvent> = TransitionPayloadByEvent[E];
+type StateMachineTransitionPayload =
+  InitializationTransitionPayload & ErrorTransitionPayload;
+
 /**
  * State Machine Callbacks
  * 
@@ -56,7 +97,7 @@ export type ServiceWorkerEvent =
  * being tightly coupled to the background script.
  */
 export interface StateMachineCallbacks {
-  onInitialize?: (data?: any) => Promise<void>;
+  onInitialize?: (data?: InitializationTransitionPayload) => Promise<void>;
   onConnectWebSocket?: () => void;
   onStartPolling?: () => void;
   onStopPolling?: () => void;
@@ -186,7 +227,10 @@ export class ServiceWorkerStateMachine {
    * @param event - The event that triggers the transition
    * @param data - Optional data to pass to the state entry handler
    */
-  public async transition(event: ServiceWorkerEvent, data?: any): Promise<void> {
+  public async transition<E extends ServiceWorkerEvent>(
+    event: E,
+    data?: TransitionPayload<E>
+  ): Promise<void> {
     const nextState = this.getNextState(event, data);
 
     if (nextState !== this.currentState) {
@@ -231,7 +275,10 @@ export class ServiceWorkerStateMachine {
    *
    * This implements the state transition table from ADR 0005.
    */
-  private getNextState(event: ServiceWorkerEvent, data?: any): ServiceWorkerState {
+  private getNextState(
+    event: ServiceWorkerEvent,
+    data?: StateMachineTransitionPayload
+  ): ServiceWorkerState {
     // LOGOUT can happen from any state
     if (event === 'LOGOUT') {
       return ServiceWorkerState.IDLE;
@@ -353,9 +400,8 @@ export class ServiceWorkerStateMachine {
   private async onStateEnter(
     state: ServiceWorkerState,
     previousState: ServiceWorkerState,
-    data?: any
+    data?: StateMachineTransitionPayload
   ): Promise<void> {
-    // debugLogger.general('DEBUG', `[StateMachine] Entering state`, { state, previousState });
     debugLogger.general('DEBUG', `[StateMachine] Entering state: ${state} (from ${previousState})`, { state, previousState });
 
     // Update extension tooltip to show current state
@@ -379,13 +425,15 @@ export class ServiceWorkerStateMachine {
       // Start initialization process
       if (this.callbacks.onInitialize) {
         try {
-          await this.callbacks.onInitialize(data);
+          await this.callbacks.onInitialize(this.getInitializationPayload(data));
           // Initialization succeeded - connect WebSocket before entering READY.
           await this.transition('INIT_SUCCESS');
         } catch (error) {
           // Initialization failed - transition to ERROR
           debugLogger.general('ERROR', '[StateMachine] Initialization failed', null, error as Error);
-          await this.transition('INIT_FAILURE');
+          await this.transition('INIT_FAILURE', {
+            error: error instanceof Error ? error.message : String(error)
+          });
         }
       }
       break;
@@ -404,10 +452,6 @@ export class ServiceWorkerStateMachine {
       // Stop polling if we were in DEGRADED mode
       if (previousState === ServiceWorkerState.DEGRADED && this.callbacks.onStopPolling) {
         this.callbacks.onStopPolling();
-      }
-      // Connect WebSocket if coming from INITIALIZING
-      if (previousState === ServiceWorkerState.INITIALIZING && this.callbacks.onConnectWebSocket) {
-        this.callbacks.onConnectWebSocket();
       }
       break;
 
@@ -481,7 +525,6 @@ export class ServiceWorkerStateMachine {
     state: ServiceWorkerState,
     nextState: ServiceWorkerState
   ): Promise<void> {
-    // debugLogger.general('DEBUG', `[StateMachine] Exiting state`, { state, nextState });
     debugLogger.general('DEBUG', `[StateMachine] Exiting state: ${state} -> ${nextState}`, { state, nextState });
 
 
@@ -492,6 +535,32 @@ export class ServiceWorkerStateMachine {
         this.callbacks.onStopPolling();
       }
     }
+  }
+
+  private getInitializationPayload(
+    data?: StateMachineTransitionPayload
+  ): InitializationTransitionPayload | undefined {
+    if (!data) {
+      return undefined;
+    }
+
+    const { hasApiKey, apiKey, socketHealthy, reason } = data;
+
+    if (
+      hasApiKey === undefined &&
+      apiKey === undefined &&
+      socketHealthy === undefined &&
+      reason === undefined
+    ) {
+      return undefined;
+    }
+
+    return {
+      hasApiKey,
+      apiKey,
+      socketHealthy,
+      reason
+    };
   }
 
   /**

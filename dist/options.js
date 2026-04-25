@@ -28,9 +28,40 @@
   var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
   var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
   var ENCRYPTION_PASSWORD_KEY = "encryptionPassword";
+  var PROCESSED_PUSHES_KEY = "processedPushes";
+  var MAX_PROCESSED_PUSH_MARKERS = 500;
+  var getProcessedPushMarkers = (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return {};
+    }
+    const markers = {};
+    for (const [iden, modified] of Object.entries(value)) {
+      if (typeof modified === "number" && Number.isFinite(modified)) {
+        markers[iden] = modified;
+      }
+    }
+    return markers;
+  };
+  var pruneProcessedPushMarkers = (markers) => Object.fromEntries(
+    Object.entries(markers).sort(([, leftModified], [, rightModified]) => rightModified - leftModified).slice(0, MAX_PROCESSED_PUSH_MARKERS)
+  );
   var ChromeStorageRepository = class {
+    fallbackEncryptionPassword = null;
     getSessionStorage() {
       return chrome.storage.session;
+    }
+    async removeLegacyEncryptionPassword() {
+      try {
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        const result = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+        if (getStringOrNull(result[ENCRYPTION_PASSWORD_KEY]) !== null) {
+          console.warn("Storage: Failed to remove legacy encryption password from local storage");
+        }
+      } catch (error) {
+        console.warn("Storage: Failed to clean up legacy encryption password from local storage", {
+          errorType: error instanceof Error ? error.name : typeof error
+        });
+      }
     }
     /**
      * Get API Key from local storage
@@ -139,26 +170,32 @@
       const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
       if (localPassword && sessionStorage) {
         await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await this.removeLegacyEncryptionPassword();
+      }
+      if (!sessionStorage) {
+        return localPassword ?? this.fallbackEncryptionPassword;
       }
       return localPassword;
     }
     /**
      * Set Encryption Password in session storage when available.
-     * Falls back to local storage only on browsers without storage.session.
+     * Falls back to memory only on browsers without storage.session.
      */
     async setEncryptionPassword(password) {
       const sessionStorage = this.getSessionStorage();
       if (password === null) {
+        this.fallbackEncryptionPassword = null;
         await Promise.all([
           sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
           chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
         ]);
       } else if (sessionStorage) {
+        this.fallbackEncryptionPassword = null;
         await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await this.removeLegacyEncryptionPassword();
       } else {
-        await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+        this.fallbackEncryptionPassword = password;
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
       }
     }
     /**
@@ -216,6 +253,31 @@
      */
     async removeLastModifiedCutoff() {
       await chrome.storage.local.remove("lastModifiedCutoff");
+    }
+    /**
+     * Check whether a push version has already completed side effects.
+     */
+    async wasPushProcessed(iden, modified) {
+      if (!iden || !Number.isFinite(modified)) {
+        return false;
+      }
+      const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+      const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+      return (markers[iden] ?? 0) >= modified;
+    }
+    /**
+     * Mark a push version as completed after notification and auto-open work.
+     */
+    async markPushProcessed(iden, modified) {
+      if (!iden || !Number.isFinite(modified)) {
+        return;
+      }
+      const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+      const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+      markers[iden] = Math.max(markers[iden] ?? 0, modified);
+      await chrome.storage.local.set({
+        [PROCESSED_PUSHES_KEY]: pruneProcessedPushMarkers(markers)
+      });
     }
     /**
      * Get Last Auto Open Cutoff from local storage
@@ -365,8 +427,6 @@
       autoOpenLinksCheckbox.checked = autoOpenLinks;
       autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
       onlyThisDeviceCheckbox.checked = onlyThisDevice;
-      autoOpenLinksOnReconnectCheckbox.addEventListener("change", saveAutoOpenLinksOnReconnect);
-      onlyThisDeviceCheckbox.addEventListener("change", saveOnlyThisDevice);
       encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
       debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
       const manifest = chrome.runtime.getManifest();
@@ -415,8 +475,10 @@
     try {
       await storageRepository.setAutoOpenLinks(enabled);
       chrome.runtime.sendMessage({
-        action: "autoOpenLinksChanged" /* AUTO_OPEN_LINKS_CHANGED */,
-        autoOpenLinks: enabled
+        action: "settingsChanged" /* SETTINGS_CHANGED */,
+        settings: {
+          autoOpenLinks: enabled
+        }
       });
       showStatus2("Auto-open links setting updated", "success");
     } catch (error) {
@@ -452,10 +514,6 @@
     const password = encryptionPasswordInput.value.trim();
     try {
       await storageRepository.setEncryptionPassword(password);
-      chrome.runtime.sendMessage({
-        action: "encryptionPasswordChanged" /* ENCRYPTION_PASSWORD_CHANGED */,
-        hasPassword: password.length > 0
-      });
       if (password.length > 0) {
         showStatus2("Encryption password saved for this browser session", "success");
       } else {
@@ -469,14 +527,13 @@
   async function saveDebugMode() {
     const enabled = debugModeCheckbox.checked;
     try {
-      const result = await chrome.storage.local.get(["debugConfig"]);
-      const debugConfig = result.debugConfig || {};
-      debugConfig.enabled = enabled;
-      await chrome.storage.local.set({ debugConfig });
-      chrome.runtime.sendMessage({
-        action: "debugModeChanged" /* DEBUG_MODE_CHANGED */,
-        enabled
+      const response = await chrome.runtime.sendMessage({
+        action: "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */,
+        config: { enabled }
       });
+      if (response?.success === false) {
+        throw new Error(response.error || "Failed to update debug config");
+      }
       showStatus2("Debug mode updated", "success");
     } catch (error) {
       console.error("Error saving debug mode:", error);
@@ -507,11 +564,16 @@
         settings: {
           deviceNickname: nickname,
           notificationTimeout: seconds * 1e3,
-          autoOpenLinks: autoOpen,
-          autoOpenLinksOnReconnect: autoOpenOnReconnect,
-          debugMode: debug
+          autoOpenLinks: autoOpen
         }
       });
+      const debugResponse = await chrome.runtime.sendMessage({
+        action: "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */,
+        config: { enabled: debug }
+      });
+      if (debugResponse?.success === false) {
+        throw new Error(debugResponse.error || "Failed to update debug config");
+      }
       showStatus2("All settings saved successfully!", "success");
     } catch (error) {
       console.error("Error saving settings:", error);
@@ -539,7 +601,7 @@
     saveSettingsButton.addEventListener("click", saveAllSettings);
     resetSettingsButton.addEventListener("click", resetToDefaults);
     forceWakeBtn.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ action: "attemptReconnect" }).then(() => {
+      chrome.runtime.sendMessage({ action: "attemptReconnect" /* ATTEMPT_RECONNECT */ }).then(() => {
         showStatus2("Force wake sent, check extension popup for status", "success");
       }).catch(() => {
         showStatus2("Failed to send force wake", "error");
@@ -553,6 +615,7 @@
     });
     autoOpenLinksCheckbox.addEventListener("change", saveAutoOpenLinks);
     autoOpenLinksOnReconnectCheckbox.addEventListener("change", saveAutoOpenLinksOnReconnect);
+    onlyThisDeviceCheckbox.addEventListener("change", saveOnlyThisDevice);
     encryptionPasswordInput.addEventListener("change", saveEncryptionPassword);
     debugModeCheckbox.addEventListener("change", saveDebugMode);
     loadSettings();

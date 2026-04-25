@@ -43,18 +43,20 @@ export function isValidSender(sender: chrome.runtime.MessageSender): boolean {
 /**
  * List of privileged actions that require sender validation
  */
-const PRIVILEGED_ACTIONS = new Set([
+const PRIVILEGED_ACTIONS = new Set<string>([
   MessageAction.API_KEY_CHANGED,
   MessageAction.LOGOUT,
   MessageAction.SETTINGS_CHANGED,
   MessageAction.UPDATE_DEVICE_NICKNAME,
   MessageAction.SEND_PUSH,
   MessageAction.UPLOAD_AND_SEND_FILE,
+  MessageAction.GET_PUSH_DATA,
+  MessageAction.GET_NOTIFICATION_DATA,
+  MessageAction.ATTEMPT_RECONNECT,
   MessageAction.UPDATE_DEBUG_CONFIG,
   MessageAction.CLEAR_ALL_LOGS,
   MessageAction.EXPORT_DEBUG_DATA,
   MessageAction.GET_DEBUG_SUMMARY,
-  'attemptReconnect',
 ]);
 
 /**

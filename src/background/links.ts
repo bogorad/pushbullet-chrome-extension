@@ -104,7 +104,6 @@ export async function autoOpenOfflineLinks(
 
   // Pre-loop optimization (added in Step 4C)
   const shouldDismiss = await storageRepository.getDismissAfterAutoOpen();
-  const dismissApiKey = getApiKey();
 
   for (const p of candidates) {
     if (openedThisRun >= safetyCap) {
@@ -130,13 +129,21 @@ export async function autoOpenOfflineLinks(
       });
 
       // Dismiss after auto-open (matches real-time behavior)
-      if (shouldDismiss && dismissApiKey && p.iden) {
+      if (shouldDismiss && p.iden) {
         try {
-          await dismissPush(p.iden, dismissApiKey);
-          debugLogger.websocket(
-            "INFO",
-            `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`,
-          );
+          const dismissApiKey = getApiKey();
+          if (!dismissApiKey) {
+            debugLogger.websocket(
+              "WARN",
+              `Offline AutoOpen: dismiss skipped for iden=${p.iden}; API key unavailable`,
+            );
+          } else {
+            await dismissPush(p.iden, dismissApiKey);
+            debugLogger.websocket(
+              "INFO",
+              `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`,
+            );
+          }
         } catch (e) {
           debugLogger.websocket(
             "WARN",
@@ -158,4 +165,3 @@ export async function autoOpenOfflineLinks(
     debugLogger.websocket("INFO", "Advanced lastAutoOpenCutoff", { old: lastAuto, new: maxCreated });
   }
 }
-

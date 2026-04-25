@@ -86,6 +86,15 @@ function closeSocket(code: number, reason = 'test close'): void {
   } as CloseEvent);
 }
 
+function sendMessage(data: string): void {
+  const socket = MockWebSocket.instances[0];
+  if (!socket?.onmessage) {
+    throw new Error('Mock WebSocket message handler was not installed');
+  }
+
+  socket.onmessage({ data } as MessageEvent);
+}
+
 describe('WebSocketClient close handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -145,5 +154,87 @@ describe('WebSocketClient close handling', () => {
       'websocket:disconnected',
       'websocket:state',
     ]);
+  });
+});
+
+describe('WebSocketClient message handling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    MockWebSocket.instances = [];
+    installMockWebSocket();
+  });
+
+  it('does not log API key prefixes when connecting', () => {
+    const apiKey = 'test-api-key-with-visible-prefix';
+    const client = new WebSocketClient('wss://example.test/', () => apiKey);
+
+    client.connect();
+
+    expect(mocks.websocketLog).toHaveBeenCalledWith(
+      'INFO',
+      'WebSocket URL construction debug',
+      {
+        baseUrl: 'wss://example.test/',
+        hasApiKey: true,
+        apiKeyLength: apiKey.length,
+        finalUrlLength: 'wss://example.test/'.length + apiKey.length,
+        urlPattern: 'wss://example.test/***',
+      },
+    );
+    expect(JSON.stringify(mocks.websocketLog.mock.calls)).not.toContain(
+      apiKey.substring(0, 8),
+    );
+  });
+
+  it('logs malformed non-JSON frames without throwing or emitting message data', () => {
+    createClient();
+
+    expect(() => sendMessage('not-json-api-key-fragment')).not.toThrow();
+
+    expect(mocks.emit).not.toHaveBeenCalled();
+    expect(mocks.websocketLog).toHaveBeenCalledWith(
+      'WARN',
+      'Malformed WebSocket frame ignored',
+      expect.objectContaining({
+        dataType: 'string',
+        errorType: 'SyntaxError',
+        timestamp: expect.any(String),
+      }),
+    );
+    expect(JSON.stringify(mocks.websocketLog.mock.calls)).not.toContain(
+      'not-json-api-key-fragment',
+    );
+  });
+
+  it('keeps nop handling unchanged', () => {
+    createClient();
+
+    sendMessage('{"type":"nop"}');
+
+    expect(mocks.emit).toHaveBeenCalledWith('websocket:message', {
+      type: 'nop',
+    });
+    expect(mocks.websocketLog).toHaveBeenCalledWith(
+      'DEBUG',
+      'Server nop received',
+      {
+        timestamp: expect.any(String),
+      },
+    );
+  });
+
+  it.each([
+    ['push', 'websocket:tickle:push'],
+    ['device', 'websocket:tickle:device'],
+  ])('keeps %s tickle handling unchanged', (subtype, eventName) => {
+    createClient();
+
+    sendMessage(JSON.stringify({ type: 'tickle', subtype }));
+
+    expect(mocks.emit).toHaveBeenCalledWith('websocket:message', {
+      type: 'tickle',
+      subtype,
+    });
+    expect(mocks.emit).toHaveBeenCalledWith(eventName);
   });
 });

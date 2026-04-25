@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MessageAction } from '../../src/types/domain';
+
 declare const chrome: any;
 
 function setupNotificationDetailDom(): void {
@@ -62,6 +64,13 @@ describe('notification detail image URL trust', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(document.getElementById('message')?.textContent).toBe('Hello');
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      {
+        action: MessageAction.GET_PUSH_DATA,
+        notificationId: 'test-notification',
+      },
+      expect.any(Function),
+    );
   });
 
   it('fetches a trusted HTTPS SMS image URL', async () => {

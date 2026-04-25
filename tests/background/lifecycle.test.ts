@@ -100,6 +100,7 @@ describe('lifecycle coordinator bootstrap', () => {
       getCurrentState: vi.fn(() => 'initializing'),
       transition: vi.fn(() => Promise.resolve()),
     };
+    const { debugLogger } = await import('../../src/lib/logging');
     const { createLifecycleCoordinator } = await import('../../src/background/lifecycle');
     const coordinator = createLifecycleCoordinator({
       hydrateConfig: vi.fn(() => Promise.resolve()),
@@ -118,6 +119,30 @@ describe('lifecycle coordinator bootstrap', () => {
     expect(stateMachine.transition).toHaveBeenCalledWith('STARTUP', {
       hasApiKey: true,
     });
+
+    const generalLog = vi.mocked(debugLogger.general);
+    const configLogCall = generalLog.mock.calls.find(
+      ([, message]) => message === '[BOOTSTRAP_DEBUG] Config state after ensureConfigLoaded',
+    );
+
+    if (!configLogCall) {
+      throw new Error('Expected bootstrap config state log');
+    }
+
+    expect(configLogCall[2]).toEqual({
+      hasApiKey: true,
+      apiKeyLength: 'stored-api-key'.length,
+      hasDeviceIden: true,
+      autoOpenLinks: true,
+    });
+    expect(configLogCall[2]).not.toHaveProperty('apiKeyPrefix');
+    expect(configLogCall[2]).not.toHaveProperty('deviceIden');
+    expect(configLogCall[2]).not.toHaveProperty('deviceNickname');
+
+    const serializedLogs = JSON.stringify(generalLog.mock.calls);
+    expect(serializedLogs).not.toContain('stored-api-key');
+    expect(serializedLogs).not.toContain('stored-device');
+    expect(serializedLogs).not.toContain('Stored Chrome');
   });
 
   it('routes wake reconciliation through the state machine when the socket is unhealthy', async () => {

@@ -178,4 +178,21 @@ describe('orchestrateInitialization', () => {
       }),
     );
   });
+
+  it('logs and continues when startup cache persistence fails', async () => {
+    const connectWs = vi.fn();
+    const cacheError = new Error('indexeddb write failed');
+    const { debugLogger } = await import('../../src/lib/logging');
+    indexedDbMock.saveSessionCache.mockRejectedValue(cacheError);
+
+    await expect(orchestrateInitialization('startup', connectWs)).resolves.toBeUndefined();
+
+    expect(connectWs).toHaveBeenCalledTimes(1);
+    expect(debugLogger.general).toHaveBeenCalledWith(
+      'WARN',
+      'Failed to save session cache to IndexedDB',
+      null,
+      cacheError,
+    );
+  });
 });

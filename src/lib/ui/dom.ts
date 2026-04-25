@@ -57,21 +57,12 @@ export function setText(element: HTMLElement, text: string): void {
 }
 
 /**
- * Set HTML content safely (sanitized)
- */
-export function setHTML(element: HTMLElement, html: string): void {
-  // Basic sanitization - remove script tags
-  const sanitized = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-  element.innerHTML = sanitized;
-}
-
-/**
  * Add event listener with type safety
  */
-export function on<K extends keyof HTMLElementEventMap>(
+export function on(
   element: HTMLElement,
-  event: K,
-  handler: (this: HTMLElement, ev: HTMLElementEventMap[K]) => void
+  event: Parameters<HTMLElement['addEventListener']>[0],
+  handler: Parameters<HTMLElement['addEventListener']>[1]
 ): void {
   element.addEventListener(event, handler);
 }
@@ -122,4 +113,3 @@ export function clearChildren(element: HTMLElement): void {
     element.removeChild(element.firstChild);
   }
 }
-

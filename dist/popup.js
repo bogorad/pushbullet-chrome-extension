@@ -19,9 +19,40 @@
   var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
   var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
   var ENCRYPTION_PASSWORD_KEY = "encryptionPassword";
+  var PROCESSED_PUSHES_KEY = "processedPushes";
+  var MAX_PROCESSED_PUSH_MARKERS = 500;
+  var getProcessedPushMarkers = (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return {};
+    }
+    const markers = {};
+    for (const [iden, modified] of Object.entries(value)) {
+      if (typeof modified === "number" && Number.isFinite(modified)) {
+        markers[iden] = modified;
+      }
+    }
+    return markers;
+  };
+  var pruneProcessedPushMarkers = (markers) => Object.fromEntries(
+    Object.entries(markers).sort(([, leftModified], [, rightModified]) => rightModified - leftModified).slice(0, MAX_PROCESSED_PUSH_MARKERS)
+  );
   var ChromeStorageRepository = class {
+    fallbackEncryptionPassword = null;
     getSessionStorage() {
       return chrome.storage.session;
+    }
+    async removeLegacyEncryptionPassword() {
+      try {
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        const result = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+        if (getStringOrNull(result[ENCRYPTION_PASSWORD_KEY]) !== null) {
+          console.warn("Storage: Failed to remove legacy encryption password from local storage");
+        }
+      } catch (error) {
+        console.warn("Storage: Failed to clean up legacy encryption password from local storage", {
+          errorType: error instanceof Error ? error.name : typeof error
+        });
+      }
     }
     /**
      * Get API Key from local storage
@@ -130,26 +161,32 @@
       const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
       if (localPassword && sessionStorage) {
         await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await this.removeLegacyEncryptionPassword();
+      }
+      if (!sessionStorage) {
+        return localPassword ?? this.fallbackEncryptionPassword;
       }
       return localPassword;
     }
     /**
      * Set Encryption Password in session storage when available.
-     * Falls back to local storage only on browsers without storage.session.
+     * Falls back to memory only on browsers without storage.session.
      */
     async setEncryptionPassword(password) {
       const sessionStorage = this.getSessionStorage();
       if (password === null) {
+        this.fallbackEncryptionPassword = null;
         await Promise.all([
           sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
           chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
         ]);
       } else if (sessionStorage) {
+        this.fallbackEncryptionPassword = null;
         await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await this.removeLegacyEncryptionPassword();
       } else {
-        await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+        this.fallbackEncryptionPassword = password;
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
       }
     }
     /**
@@ -207,6 +244,31 @@
      */
     async removeLastModifiedCutoff() {
       await chrome.storage.local.remove("lastModifiedCutoff");
+    }
+    /**
+     * Check whether a push version has already completed side effects.
+     */
+    async wasPushProcessed(iden, modified) {
+      if (!iden || !Number.isFinite(modified)) {
+        return false;
+      }
+      const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+      const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+      return (markers[iden] ?? 0) >= modified;
+    }
+    /**
+     * Mark a push version as completed after notification and auto-open work.
+     */
+    async markPushProcessed(iden, modified) {
+      if (!iden || !Number.isFinite(modified)) {
+        return;
+      }
+      const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+      const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+      markers[iden] = Math.max(markers[iden] ?? 0, modified);
+      await chrome.storage.local.set({
+        [PROCESSED_PUSHES_KEY]: pruneProcessedPushMarkers(markers)
+      });
     }
     /**
      * Get Last Auto Open Cutoff from local storage
@@ -386,7 +448,11 @@
     const version = manifest.version;
     const sendPushHeading = document.getElementById("send-push-heading");
     if (sendPushHeading) {
-      sendPushHeading.innerHTML = `Send a Push <span class="version-text">(v.${version})</span>`;
+      sendPushHeading.textContent = "Send a Push ";
+      const versionText = document.createElement("span");
+      versionText.className = "version-text";
+      versionText.textContent = `(v.${version})`;
+      sendPushHeading.appendChild(versionText);
     }
     showSection("main");
   }
@@ -495,7 +561,7 @@
     });
     manualReconnectBtn.addEventListener("click", async () => {
       await chrome.runtime.sendMessage({
-        action: "attemptReconnect"
+        action: "attemptReconnect" /* ATTEMPT_RECONNECT */
       });
       window.close();
     });
@@ -678,6 +744,7 @@
         const urlEl = document.createElement("a");
         urlEl.href = url;
         urlEl.target = "_blank";
+        urlEl.rel = "noopener noreferrer";
         urlEl.className = "push-url";
         urlEl.textContent = url || "";
         pushItem.appendChild(urlEl);
@@ -757,6 +824,49 @@
       fileForm.style.display = "block";
     }
   }
+  function getSendResponseErrorMessage(response, fallback) {
+    if (!response?.error) {
+      return fallback;
+    }
+    if (typeof response.error === "string") {
+      return response.error;
+    }
+    return response.error.message || fallback;
+  }
+  function handlePushSendResponse(response) {
+    logToBackground(
+      "INFO",
+      "[sendPush] Received response from background script.",
+      response
+    );
+    if (response?.success) {
+      clearPushForm();
+      showStatus("Push sent successfully!", "success");
+      chrome.runtime.sendMessage(
+        { action: "getSessionData" /* GET_SESSION_DATA */ },
+        (sessionResponse) => {
+          if (sessionResponse && sessionResponse.recentPushes) {
+            displayPushes(sessionResponse.recentPushes);
+          }
+        }
+      );
+    } else {
+      showStatus(
+        `Error: ${getSendResponseErrorMessage(response, "Failed to send push")}`,
+        "error"
+      );
+    }
+  }
+  async function fileToBase64(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const chunkSize = 32768;
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  }
   async function sendPush() {
     logToBackground("INFO", "[sendPush] Function initiated.");
     try {
@@ -821,51 +931,44 @@
             showStatus("Please select a file to attach.", "error");
             return;
           }
-          const uploadApiKey = await storageRepository.getApiKey();
-          if (!uploadApiKey) {
-            logToBackground(
-              "WARN",
-              "[sendPush] Exiting: Cannot upload file, user is not logged in."
-            );
-            showStatus("Not logged in. Please log in first.", "error");
-            return;
-          }
-          const uploadRequestResponse = await fetch(
-            "https://api.pushbullet.com/v2/upload-request",
+          const fileBody = document.getElementById("file-body").value.trim();
+          const fileBase64 = await fileToBase64(file);
+          logToBackground(
+            "INFO",
+            "[sendPush] Sending file upload message to background script.",
             {
-              method: "POST",
-              headers: {
-                "Access-Token": uploadApiKey,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                file_name: file.name,
-                file_type: file.type || "application/octet-stream"
-              })
+              targetKind: pushData.email ? "email" : pushData.device_iden ? "device" : "broadcast",
+              hasBody: fileBody.length > 0,
+              fileType: file.type || "application/octet-stream",
+              fileSize: file.size
             }
           );
-          if (!uploadRequestResponse.ok) {
-            throw new Error("Failed to request file upload authorization");
-          }
-          const uploadData = await uploadRequestResponse.json();
-          const formData = new FormData();
-          Object.keys(uploadData.data).forEach((key) => {
-            formData.append(key, uploadData.data[key]);
-          });
-          formData.append("file", file);
-          const uploadResponse = await fetch(uploadData.upload_url, {
-            method: "POST",
-            body: formData
-          });
-          if (!uploadResponse.ok) {
-            throw new Error("Failed to upload file to server");
-          }
-          pushData.type = "file";
-          pushData.file_name = uploadData.file_name;
-          pushData.file_type = uploadData.file_type;
-          pushData.file_url = uploadData.file_url;
-          pushData.body = document.getElementById("file-body").value.trim();
-          showStatus("File uploaded, sending push...", "info");
+          chrome.runtime.sendMessage(
+            {
+              action: "uploadAndSendFile" /* UPLOAD_AND_SEND_FILE */,
+              fileBase64,
+              fileName: file.name,
+              fileType: file.type || "application/octet-stream",
+              fileSize: file.size,
+              body: fileBody,
+              device_iden: pushData.device_iden,
+              email: pushData.email,
+              source_device_iden: pushData.source_device_iden
+            },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                logToBackground(
+                  "ERROR",
+                  "[sendPush] Error sending file upload message to background.",
+                  { error: chrome.runtime.lastError }
+                );
+                showStatus("Error: Could not send push", "error");
+                return;
+              }
+              handlePushSendResponse(response);
+            }
+          );
+          return;
         } catch (uploadError) {
           logToBackground("ERROR", "[sendPush] File upload error.", {
             error: uploadError.message
@@ -880,7 +983,14 @@
       logToBackground(
         "INFO",
         "[sendPush] Validation passed. Preparing to send message to background script.",
-        pushData
+        {
+          type: pushData.type,
+          targetKind: pushData.email ? "email" : pushData.device_iden ? "device" : "broadcast",
+          hasTitle: typeof pushData.title === "string" && pushData.title.length > 0,
+          hasBody: typeof pushData.body === "string" && pushData.body.length > 0,
+          hasUrl: typeof pushData.url === "string" && pushData.url.length > 0,
+          hasFileUrl: typeof pushData.file_url === "string" && pushData.file_url.length > 0
+        }
       );
       chrome.runtime.sendMessage(
         {
@@ -897,28 +1007,7 @@
             showStatus("Error: Could not send push", "error");
             return;
           }
-          logToBackground(
-            "INFO",
-            "[sendPush] Received response from background script.",
-            response
-          );
-          if (response.success) {
-            clearPushForm();
-            showStatus("Push sent successfully!", "success");
-            chrome.runtime.sendMessage(
-              { action: "getSessionData" /* GET_SESSION_DATA */ },
-              (sessionResponse) => {
-                if (sessionResponse && sessionResponse.recentPushes) {
-                  displayPushes(sessionResponse.recentPushes);
-                }
-              }
-            );
-          } else {
-            showStatus(
-              `Error: ${response.error || "Failed to send push"}`,
-              "error"
-            );
-          }
+          handlePushSendResponse(response);
         }
       );
     } catch (error) {

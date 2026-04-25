@@ -5,6 +5,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const { mockFetchIncrementalPushes, mockSendPush } = vi.hoisted(() => ({
+  mockFetchIncrementalPushes: vi.fn(),
+  mockSendPush: vi.fn(),
+}));
+
 // Chrome API is mocked globally in tests/setup.ts
 declare const chrome: any;
 
@@ -53,6 +58,11 @@ vi.mock('../../src/app/reconnect', () => ({
   ensureConfigLoaded: vi.fn()
 }));
 
+vi.mock('../../src/app/api/client', () => ({
+  fetchIncrementalPushes: mockFetchIncrementalPushes,
+  sendPush: mockSendPush
+}));
+
 vi.mock('../../src/lib/events/event-bus', () => ({
   globalEventBus: {
     on: vi.fn(),
@@ -81,6 +91,8 @@ describe('setupContextMenu - Idempotent Guard Pattern', () => {
   beforeEach(async () => {
     // Reset module state by re-importing
     vi.resetModules();
+    mockSendPush.mockReset();
+    mockFetchIncrementalPushes.mockReset();
     
     // Re-import the module to get fresh state
     const module = await import('../../src/background/utils');
@@ -387,6 +399,28 @@ describe('showPushNotification - Notification Creation', () => {
     expect(notificationOptions.iconUrl).toBeDefined();
   });
 
+  it('should reject oversized mirror icon data before creating a data URL', async () => {
+    // Arrange
+    const push = {
+      type: 'mirror',
+      title: 'Mirrored Title',
+      application_name: 'TestApp',
+      body: 'Mirrored body',
+      icon: `/9j/${'A'.repeat(350000)}`
+    };
+
+    // Act
+    await showPushNotification(push);
+
+    // Assert
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
+
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('TestApp: Mirrored Title');
+    expect(notificationOptions.iconUrl).toBe('chrome-extension://fake-id/icons/icon128.png');
+  });
+
   it('should create a basic notification for a file push', async () => {
     // Arrange
     const push = { 
@@ -518,6 +552,9 @@ describe('push sent notifications - timeout behavior', () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    mockSendPush.mockReset();
+    mockSendPush.mockResolvedValue({ type: 'note' });
+    mockFetchIncrementalPushes.mockReset();
     chrome.runtime.getURL = vi.fn((path: string) => `chrome-extension://fake-id/${path}`);
     chrome.notifications.create.mockImplementation(
       (
@@ -551,6 +588,30 @@ describe('push sent notifications - timeout behavior', () => {
     expect(chrome.notifications.clear).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(chrome.notifications.clear).toHaveBeenCalledWith('sent-notification-id', expect.any(Function));
+  });
+
+  it('should send link pushes through the API client helper', async () => {
+    await pushLink('https://example.com', 'Example');
+
+    expect(mockSendPush).toHaveBeenCalledWith('test-api-key', {
+      type: 'link',
+      title: 'Example',
+      url: 'https://example.com'
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('should send note pushes through the API client helper', async () => {
+    await pushNote('Example note', 'Body');
+
+    expect(mockSendPush).toHaveBeenCalledWith('test-api-key', {
+      type: 'note',
+      title: 'Example note',
+      body: 'Body'
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
   });
 
   it('should keep note-sent notifications on the wrapper default timeout', async () => {

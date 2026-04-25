@@ -56,7 +56,6 @@ export function createLifecycleCoordinator(deps: LifecycleCoordinatorDeps) {
     const apiKey = deps.getApiKey();
     const deviceIden = deps.getDeviceIden();
     const autoOpenLinks = deps.getAutoOpenLinks();
-    const deviceNickname = deps.getDeviceNickname();
 
     debugLogger.general(
       'INFO',
@@ -64,11 +63,8 @@ export function createLifecycleCoordinator(deps: LifecycleCoordinatorDeps) {
       {
         hasApiKey: !!apiKey,
         apiKeyLength: apiKey?.length || 0,
-        apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : 'null',
         hasDeviceIden: !!deviceIden,
-        deviceIden: deviceIden || 'null',
         autoOpenLinks,
-        deviceNickname: deviceNickname || 'null',
       },
     );
 

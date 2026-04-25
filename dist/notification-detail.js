@@ -54,7 +54,7 @@
       return;
     }
     chrome.runtime.sendMessage(
-      { type: "GET_PUSH_DATA", notificationId },
+      { action: "GET_PUSH_DATA" /* GET_PUSH_DATA */, notificationId },
       (response) => {
         if (!response || !response.success || !response.push) {
           document.getElementById("message").textContent = "Notification not found";

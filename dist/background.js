@@ -3,6 +3,12 @@
   // src/lib/logging/index.ts
   var STORAGE_KEY = "persistentDebugLogs";
   var MAX_PERSISTENT_LOGS = 5e3;
+  var MAX_TRACKED_ERRORS = 500;
+  var REDACTED_VALUE = "[redacted]";
+  var SENSITIVE_KEY_PATTERN = /token|key|password|secret|authorization|body|title|url|email|phone|address|street|postal|zipcode|zip_code/i;
+  var URL_VALUE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+  var EMAIL_VALUE_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  var PHONE_VALUE_PATTERN = /^\+?[0-9][0-9 .().-]{6,}[0-9]$/;
   var DEBUG_CONFIG = {
     enabled: false,
     categories: {
@@ -22,17 +28,25 @@
     logs = [];
     startTime = Date.now();
     performanceMarkers = /* @__PURE__ */ new Map();
+    rehydratePromise = null;
     /**
      * Rehydrate logs from persistent storage on startup
      * This method loads logs from the previous session
      */
     async rehydrate() {
+      if (!this.rehydratePromise) {
+        this.rehydratePromise = this.rehydrateFromStorage();
+      }
+      await this.rehydratePromise;
+    }
+    async rehydrateFromStorage() {
       try {
         const result = await chrome.storage.local.get(STORAGE_KEY);
         if (result[STORAGE_KEY] && Array.isArray(result[STORAGE_KEY])) {
-          this.logs = result[STORAGE_KEY];
+          const storedLogs = result[STORAGE_KEY];
+          this.logs = [...storedLogs, ...this.logs].slice(-MAX_PERSISTENT_LOGS);
           console.log(
-            `[Logger] Rehydrated ${this.logs.length} logs from persistent storage.`
+            `[Logger] Rehydrated ${storedLogs.length} logs from persistent storage.`
           );
         }
       } catch (error) {
@@ -62,22 +76,26 @@
       await this.flush();
       this.log("GENERAL", "INFO", "Log buffer has been cleared by the user.");
     }
-    sanitize(data) {
+    sanitize(data, seen = /* @__PURE__ */ new WeakSet()) {
       if (!DEBUG_CONFIG.sanitizeData) return data;
       if (typeof data === "string") {
+        if (URL_VALUE_PATTERN.test(data) || EMAIL_VALUE_PATTERN.test(data) || PHONE_VALUE_PATTERN.test(data)) {
+          return REDACTED_VALUE;
+        }
         if (data.length > 20 && /^[a-zA-Z0-9_-]+$/.test(data)) {
           return data.substring(0, 4) + "***" + data.substring(data.length - 4);
         }
         return data;
       }
       if (data && typeof data === "object") {
-        const sanitized = Array.isArray(data) ? [] : {};
-        for (const key in data) {
-          if (key.toLowerCase().includes("token") || key.toLowerCase().includes("key") || key.toLowerCase().includes("password")) {
-            sanitized[key] = this.sanitize(data[key]);
-          } else {
-            sanitized[key] = data[key];
-          }
+        if (seen.has(data)) return "[circular]";
+        seen.add(data);
+        if (Array.isArray(data)) {
+          return data.map((item) => this.sanitize(item, seen));
+        }
+        const sanitized = {};
+        for (const [key, value] of Object.entries(data)) {
+          sanitized[key] = SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_VALUE : this.sanitize(value, seen);
         }
         return sanitized;
       }
@@ -346,9 +364,17 @@
         context
       };
       this.errors.push(entry);
+      if (this.errors.length > MAX_TRACKED_ERRORS) {
+        this.errors = this.errors.slice(-MAX_TRACKED_ERRORS);
+      }
       const count = (this.errorCounts.get(category) || 0) + 1;
       this.errorCounts.set(category, count);
-      if (count >= 5) this.criticalErrors.push(entry);
+      if (count >= 5) {
+        this.criticalErrors.push(entry);
+        if (this.criticalErrors.length > MAX_TRACKED_ERRORS) {
+          this.criticalErrors = this.criticalErrors.slice(-MAX_TRACKED_ERRORS);
+        }
+      }
     }
     getErrorSummary() {
       const byCat = {};
@@ -481,152 +507,18 @@
     exportPerformanceData() {
       return { summary: this.getPerformanceSummary(), timeline: this.notificationTimeline.slice(-200) };
     }
+    reset() {
+      this.metrics = /* @__PURE__ */ new Map();
+      this.notificationTimeline = [];
+      this.websocketMetrics = { connectionAttempts: 0, successfulConnections: 0, messagesReceived: 0, messagesProcessed: 0, reconnectionAttempts: 0, lastConnectionTime: null, totalDowntime: 0 };
+      this.notificationMetrics = { pushesReceived: 0, notificationsCreated: 0, notificationsFailed: 0, unknownTypes: 0 };
+      this.healthChecks = { success: 0, failure: 0, lastCheck: null };
+      this.quality = { disconnections: 0, permanentErrors: 0, consecutiveFailures: 0 };
+      this.recoveryMetrics = { invalidCursorRecoveries: 0, lastRecoveryTime: null };
+      this.timers = {};
+    }
   };
   var performanceMonitor = new PerformanceMonitor();
-
-  // src/lib/monitoring/index.ts
-  var InitializationTracker = class {
-    initializations = [];
-    stats = { onInstalled: 0, onStartup: 0, onAlarm: 0, onMessage: 0, manual: 0 };
-    recordInitialization(source) {
-      this.initializations.push({ source, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
-      if (this.stats[source] !== void 0) this.stats[source]++;
-    }
-    exportData() {
-      return { initializations: this.initializations.slice(-100), stats: { ...this.stats } };
-    }
-  };
-  var initTracker = new InitializationTracker();
-  var WebSocketStateMonitor = class {
-    stateHistory = [];
-    lastStateCheck = Date.now();
-    monitoringInterval = null;
-    alertThresholds = { slowReceive: 15e3 };
-    recordStateChange(newState) {
-      const now = Date.now();
-      const prev = this.stateHistory[this.stateHistory.length - 1];
-      const duration = prev ? now - prev.timestamp : 0;
-      this.stateHistory.push({ timestamp: now, state: newState, duration });
-      if (this.stateHistory.length > 200) this.stateHistory.shift();
-    }
-    getStateReport() {
-      const currentState = globalThis.websocket && typeof globalThis.websocket.readyState === "number" ? ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][globalThis.websocket.readyState] : "NULL";
-      return { currentState, lastCheck: new Date(this.lastStateCheck).toISOString(), historyLength: this.stateHistory.length };
-    }
-    startMonitoring() {
-      if (this.monitoringInterval) return;
-      this.monitoringInterval = setInterval(() => {
-        this.lastStateCheck = Date.now();
-        const state = globalThis.websocket ? globalThis.websocket.readyState : null;
-        try {
-          globalThis.debugLogger?.websocket("DEBUG", "WebSocket state check", { state });
-        } catch (error) {
-          debugLogger.general("WARN", "Failed to log WebSocket state check", null, error);
-        }
-      }, 3e4);
-    }
-    stopMonitoring() {
-      if (this.monitoringInterval) {
-        clearInterval(this.monitoringInterval);
-        this.monitoringInterval = null;
-      }
-    }
-  };
-  var wsStateMonitor = new WebSocketStateMonitor();
-
-  // src/types/domain.ts
-  function isLinkPush(push) {
-    return push.type === "link";
-  }
-
-  // src/app/notifications/index.ts
-  function createNotificationWithTimeout(notificationId, options, callback, timeoutMs) {
-    const iconUrl = chrome.runtime.getURL("icons/icon128.png");
-    const safeOptions = {
-      type: "basic",
-      iconUrl,
-      // Use absolute URL
-      title: options.title || "Pushbullet",
-      message: options.message || "",
-      priority: options.priority || 1
-    };
-    debugLogger.notifications(
-      "DEBUG",
-      "Creating notification with safe options",
-      {
-        notificationId,
-        iconUrl,
-        title: safeOptions.title,
-        messageLength: safeOptions.message?.length || 0
-      }
-    );
-    chrome.notifications.create(notificationId, safeOptions, (createdId) => {
-      if (chrome.runtime.lastError) {
-        debugLogger.notifications("ERROR", "Notification creation error", {
-          error: chrome.runtime.lastError.message,
-          notificationId
-        });
-      }
-      if (callback) callback(createdId);
-      try {
-        const timeout = timeoutMs !== void 0 ? timeoutMs : 1e4;
-        if (typeof timeout === "number" && timeout > 0) {
-          setTimeout(() => {
-            chrome.notifications.clear(createdId || notificationId, () => {
-            });
-          }, timeout);
-        }
-      } catch (error) {
-        debugLogger.notifications(
-          "ERROR",
-          "Failed to set notification timeout",
-          {
-            error: error.message
-          },
-          error
-        );
-      }
-    });
-  }
-  function showPermanentWebSocketError(closeInfo) {
-    const title = "Pushbullet requires attention";
-    const message = `Real-time connection stopped (code ${closeInfo.code}). ${closeInfo.reason || ""}`.trim();
-    createNotificationWithTimeout(
-      "pushbullet-permanent-error",
-      {
-        type: "basic",
-        iconUrl: "icons/icon128.png",
-        title,
-        message,
-        priority: 2
-      },
-      () => {
-      }
-    );
-    try {
-      chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
-      chrome.action.setBadgeText({ text: "ERR" });
-    } catch (error) {
-      debugLogger.general(
-        "WARN",
-        "Failed to set error badge",
-        null,
-        error
-      );
-    }
-  }
-  function clearErrorBadge() {
-    try {
-      chrome.action.setBadgeText({ text: " " });
-    } catch (error) {
-      debugLogger.general(
-        "WARN",
-        "Failed to clear error badge",
-        null,
-        error
-      );
-    }
-  }
 
   // src/lib/events/event-bus.ts
   var EventBus = class {
@@ -778,6 +670,183 @@
   };
   var globalEventBus = new EventBus();
 
+  // src/lib/monitoring/index.ts
+  var InitializationTracker = class {
+    initializations = [];
+    stats = { onInstalled: 0, onStartup: 0, onAlarm: 0, onMessage: 0, manual: 0 };
+    recordInitialization(source) {
+      this.initializations.push({ source, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+      if (this.stats[source] !== void 0) this.stats[source]++;
+    }
+    exportData() {
+      return { initializations: this.initializations.slice(-100), stats: { ...this.stats } };
+    }
+  };
+  var initTracker = new InitializationTracker();
+  var READY_STATE_NAMES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+  var EVENT_STATE_NAMES = {
+    connected: "OPEN",
+    disconnected: "CLOSED",
+    "permanent-error": "CLOSED"
+  };
+  var WebSocketStateMonitor = class {
+    constructor(stateSource) {
+      this.stateSource = stateSource;
+    }
+    stateHistory = [];
+    lastStateCheck = Date.now();
+    monitoringInterval = null;
+    alertThresholds = { slowReceive: 15e3 };
+    currentState = null;
+    recordStateChange(newState) {
+      const now = Date.now();
+      const prev = this.stateHistory[this.stateHistory.length - 1];
+      const duration = prev ? now - prev.timestamp : 0;
+      const state = this.normalizeState(newState);
+      this.currentState = state;
+      this.stateHistory.push({ timestamp: now, state, duration });
+      if (this.stateHistory.length > 200) this.stateHistory.shift();
+    }
+    setCurrentState(newState) {
+      this.recordStateChange(newState);
+    }
+    getStateReport() {
+      const currentState = this.getCurrentState();
+      return { currentState, lastCheck: new Date(this.lastStateCheck).toISOString(), historyLength: this.stateHistory.length };
+    }
+    startMonitoring() {
+      if (this.monitoringInterval) return;
+      this.monitoringInterval = setInterval(() => {
+        this.lastStateCheck = Date.now();
+        const state = this.getCurrentState();
+        try {
+          debugLogger.websocket("DEBUG", "WebSocket state check", { state });
+        } catch (error) {
+          debugLogger.general("WARN", "Failed to log WebSocket state check", null, error);
+        }
+      }, 3e4);
+    }
+    stopMonitoring() {
+      if (this.monitoringInterval) {
+        clearInterval(this.monitoringInterval);
+        this.monitoringInterval = null;
+      }
+    }
+    getCurrentState() {
+      if (this.stateSource) return this.normalizeState(this.stateSource()) ?? "NULL";
+      return this.currentState ?? "NULL";
+    }
+    normalizeState(state) {
+      if (state === null) return null;
+      if (typeof state === "number") return READY_STATE_NAMES[state] ?? "NULL";
+      return EVENT_STATE_NAMES[state] ?? state;
+    }
+  };
+  var wsStateMonitor = new WebSocketStateMonitor();
+  globalEventBus.on("websocket:state", (state) => {
+    wsStateMonitor.recordStateChange(state);
+  });
+
+  // src/types/domain.ts
+  function isLinkPush(push) {
+    return push.type === "link";
+  }
+
+  // src/app/notifications/index.ts
+  function createNotificationWithTimeout(notificationId, options, callback, timeoutMs) {
+    const iconUrl = chrome.runtime.getURL("icons/icon128.png");
+    const safeOptions = {
+      type: options.type || "basic",
+      iconUrl: options.iconUrl || iconUrl,
+      // Use absolute URL
+      title: options.title || "Pushbullet",
+      message: options.message || "",
+      priority: options.priority || 1
+    };
+    if (options.imageUrl) {
+      safeOptions.imageUrl = options.imageUrl;
+    }
+    debugLogger.notifications(
+      "DEBUG",
+      "Creating notification with safe options",
+      {
+        notificationId,
+        iconUrl,
+        title: safeOptions.title,
+        messageLength: safeOptions.message?.length || 0
+      }
+    );
+    return new Promise((resolve) => {
+      chrome.notifications.create(notificationId, safeOptions, (createdId) => {
+        if (chrome.runtime.lastError) {
+          debugLogger.notifications("ERROR", "Notification creation error", {
+            error: chrome.runtime.lastError.message,
+            notificationId
+          });
+        }
+        if (callback) callback(createdId);
+        try {
+          const timeout = timeoutMs !== void 0 ? timeoutMs : 1e4;
+          if (typeof timeout === "number" && timeout > 0) {
+            setTimeout(() => {
+              chrome.notifications.clear(createdId || notificationId, () => {
+              });
+            }, timeout);
+          }
+        } catch (error) {
+          debugLogger.notifications(
+            "ERROR",
+            "Failed to set notification timeout",
+            {
+              error: error.message
+            },
+            error
+          );
+        }
+        resolve();
+      });
+    });
+  }
+  function showPermanentWebSocketError(closeInfo) {
+    const title = "Pushbullet requires attention";
+    const message = `Real-time connection stopped (code ${closeInfo.code}). ${closeInfo.reason || ""}`.trim();
+    createNotificationWithTimeout(
+      "pushbullet-permanent-error",
+      {
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title,
+        message,
+        priority: 2
+      },
+      () => {
+      }
+    );
+    try {
+      chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
+      chrome.action.setBadgeText({ text: "ERR" });
+    } catch (error) {
+      debugLogger.general(
+        "WARN",
+        "Failed to set error badge",
+        null,
+        error
+      );
+    }
+  }
+  function clearErrorBadge() {
+    try {
+      chrome.action.setBadgeText({ text: " " });
+    } catch (error) {
+      debugLogger.general(
+        "WARN",
+        "Failed to clear error badge",
+        null,
+        error
+      );
+    }
+  }
+
   // src/app/ws/client.ts
   var WebSocketClient = class {
     constructor(websocketUrl, getApiKey2) {
@@ -825,8 +894,8 @@
         const url = this.websocketUrl + apiKey2;
         debugLogger.websocket("INFO", "WebSocket URL construction debug", {
           baseUrl: this.websocketUrl,
+          hasApiKey: apiKey2.length > 0,
           apiKeyLength: apiKey2.length,
-          apiKeyPrefix: apiKey2.substring(0, 8) + "...",
           finalUrlLength: url.length,
           urlPattern: this.websocketUrl + "***"
         });
@@ -884,7 +953,18 @@
           globalEventBus.emit("websocket:state", "connected");
         };
         this.socket.onmessage = (ev) => {
-          const msg = JSON.parse(ev.data);
+          let parsedMessage;
+          try {
+            parsedMessage = JSON.parse(ev.data);
+          } catch (error) {
+            debugLogger.websocket("WARN", "Malformed WebSocket frame ignored", {
+              dataType: typeof ev.data,
+              errorType: error instanceof Error ? error.name : typeof error,
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            });
+            return;
+          }
+          const msg = parsedMessage;
           globalEventBus.emit("websocket:message", msg);
           if (msg.type === "nop") {
             this.lastNopAt = Date.now();
@@ -1035,9 +1115,40 @@
   var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
   var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
   var ENCRYPTION_PASSWORD_KEY = "encryptionPassword";
+  var PROCESSED_PUSHES_KEY = "processedPushes";
+  var MAX_PROCESSED_PUSH_MARKERS = 500;
+  var getProcessedPushMarkers = (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return {};
+    }
+    const markers = {};
+    for (const [iden, modified] of Object.entries(value)) {
+      if (typeof modified === "number" && Number.isFinite(modified)) {
+        markers[iden] = modified;
+      }
+    }
+    return markers;
+  };
+  var pruneProcessedPushMarkers = (markers) => Object.fromEntries(
+    Object.entries(markers).sort(([, leftModified], [, rightModified]) => rightModified - leftModified).slice(0, MAX_PROCESSED_PUSH_MARKERS)
+  );
   var ChromeStorageRepository = class {
+    fallbackEncryptionPassword = null;
     getSessionStorage() {
       return chrome.storage.session;
+    }
+    async removeLegacyEncryptionPassword() {
+      try {
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        const result = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+        if (getStringOrNull(result[ENCRYPTION_PASSWORD_KEY]) !== null) {
+          console.warn("Storage: Failed to remove legacy encryption password from local storage");
+        }
+      } catch (error) {
+        console.warn("Storage: Failed to clean up legacy encryption password from local storage", {
+          errorType: error instanceof Error ? error.name : typeof error
+        });
+      }
     }
     /**
      * Get API Key from local storage
@@ -1146,26 +1257,32 @@
       const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
       if (localPassword && sessionStorage) {
         await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await this.removeLegacyEncryptionPassword();
+      }
+      if (!sessionStorage) {
+        return localPassword ?? this.fallbackEncryptionPassword;
       }
       return localPassword;
     }
     /**
      * Set Encryption Password in session storage when available.
-     * Falls back to local storage only on browsers without storage.session.
+     * Falls back to memory only on browsers without storage.session.
      */
     async setEncryptionPassword(password) {
       const sessionStorage = this.getSessionStorage();
       if (password === null) {
+        this.fallbackEncryptionPassword = null;
         await Promise.all([
           sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
           chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
         ]);
       } else if (sessionStorage) {
+        this.fallbackEncryptionPassword = null;
         await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await this.removeLegacyEncryptionPassword();
       } else {
-        await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+        this.fallbackEncryptionPassword = password;
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
       }
     }
     /**
@@ -1223,6 +1340,31 @@
      */
     async removeLastModifiedCutoff() {
       await chrome.storage.local.remove("lastModifiedCutoff");
+    }
+    /**
+     * Check whether a push version has already completed side effects.
+     */
+    async wasPushProcessed(iden, modified) {
+      if (!iden || !Number.isFinite(modified)) {
+        return false;
+      }
+      const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+      const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+      return (markers[iden] ?? 0) >= modified;
+    }
+    /**
+     * Mark a push version as completed after notification and auto-open work.
+     */
+    async markPushProcessed(iden, modified) {
+      if (!iden || !Number.isFinite(modified)) {
+        return;
+      }
+      const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+      const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+      markers[iden] = Math.max(markers[iden] ?? 0, modified);
+      await chrome.storage.local.set({
+        [PROCESSED_PUSHES_KEY]: pruneProcessedPushMarkers(markers)
+      });
     }
     /**
      * Get Last Auto Open Cutoff from local storage
@@ -1362,6 +1504,34 @@
     return false;
   }
 
+  // src/app/push-summary.ts
+  function hasStringValue(value) {
+    return typeof value === "string" && value.length > 0;
+  }
+  function summarizePushForLog(push) {
+    if (!push || typeof push !== "object") {
+      return void 0;
+    }
+    const pushRecord = push;
+    const notifications = Array.isArray(pushRecord.notifications) ? pushRecord.notifications : [];
+    return {
+      iden: pushRecord.iden,
+      type: pushRecord.type,
+      encrypted: !!pushRecord.encrypted,
+      contentFlags: {
+        heading: hasStringValue(pushRecord.title),
+        message: hasStringValue(pushRecord.body),
+        link: hasStringValue(pushRecord.url),
+        fileLink: hasStringValue(pushRecord.file_url),
+        imageLink: hasStringValue(pushRecord.image_url),
+        ciphertext: hasStringValue(pushRecord.ciphertext)
+      },
+      notificationsCount: notifications.length,
+      created: pushRecord.created,
+      modified: pushRecord.modified
+    };
+  }
+
   // src/app/push-types.ts
   var SUPPORTED_PUSH_TYPES = [
     "note",
@@ -1404,8 +1574,7 @@
         category: typeCheck.category,
         reason: "This is a new or unrecognized push type",
         supportedTypes: SUPPORTED_PUSH_TYPES,
-        // Include full push data for unknown types
-        fullPushData: fullPush
+        pushSummary: summarizePushForLog(fullPush)
       });
     }
   }
@@ -1415,10 +1584,48 @@
   var PUSHES_URL = `${API_BASE_URL}/pushes`;
   var DEVICES_URL = `${API_BASE_URL}/devices`;
   var USER_INFO_URL = `${API_BASE_URL}/users/me`;
+  var UPLOAD_REQUEST_URL = `${API_BASE_URL}/upload-request`;
   var MAX_INCREMENTAL_PUSH_PAGES = 11;
+  var PushbulletApiError = class extends Error {
+    code;
+    status;
+    constructor(code, message, status) {
+      super(message);
+      this.name = "PushbulletApiError";
+      this.code = code;
+      this.status = status;
+    }
+  };
+  var PushbulletUploadError = class extends Error {
+    code;
+    stage;
+    status;
+    constructor(code, stage, message, status) {
+      super(message);
+      this.name = "PushbulletUploadError";
+      this.code = code;
+      this.stage = stage;
+      this.status = status;
+    }
+  };
   var registrationPromise = null;
   function authHeaders(apiKey2) {
     return { "Access-Token": apiKey2 };
+  }
+  function parseApiErrorMessage(errorText, fallback) {
+    try {
+      const errorData = JSON.parse(errorText);
+      return errorData.error?.message || errorData.message || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  async function getApiErrorMessage(response, fallback) {
+    const errorText = await response.text().catch(() => "");
+    if (!errorText) {
+      return fallback;
+    }
+    return parseApiErrorMessage(errorText, fallback);
   }
   async function fetchUserInfoWithTimeout(apiKey2) {
     const response = await fetchWithTimeout(USER_INFO_URL, { headers: authHeaders(apiKey2) }, 5e3);
@@ -1682,7 +1889,17 @@
       `https://api.pushbullet.com/v2/devices/${deviceIden2}`,
       { method: "GET", headers: { "Access-Token": apiKey2 } }
     );
-    return response.status !== 404;
+    if (response.ok) {
+      return true;
+    }
+    if (response.status === 404) {
+      return false;
+    }
+    const message = await getApiErrorMessage(
+      response,
+      `Failed to check device existence: ${response.status} ${response.statusText}`
+    );
+    throw new PushbulletApiError("device_lookup_failed", message, response.status);
   }
   async function registerDevice(apiKey2, deviceIden2, deviceNickname2) {
     if (registrationPromise) {
@@ -1720,11 +1937,10 @@
                 created: device2.created,
                 modified: device2.modified,
                 icon: device2.icon || "(no icon)",
-                pushToken: device2.push_token ? `${device2.push_token.substring(0, 8)}...` : "(no push token)",
+                hasPushToken: !!device2.push_token,
+                pushTokenLength: device2.push_token?.length || 0,
                 appVersion: device2.app_version || "(no app version)",
-                hasSms: device2.has_sms || false,
-                // Include ALL raw device data
-                rawDevice: device2
+                hasSms: device2.has_sms || false
               });
             });
             const currentDevice = devices.find((d) => d.iden === existingDeviceIden);
@@ -1901,6 +2117,91 @@
       throw error;
     }
   }
+  async function requestFileUpload(apiKey2, fileName, fileType) {
+    const response = await fetch(UPLOAD_REQUEST_URL, {
+      method: "POST",
+      headers: {
+        ...authHeaders(apiKey2),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        file_name: fileName,
+        file_type: fileType
+      })
+    });
+    if (!response.ok) {
+      const message = await getApiErrorMessage(
+        response,
+        "Failed to request file upload authorization"
+      );
+      throw new PushbulletUploadError(
+        "upload_request_failed",
+        "upload-request",
+        message,
+        response.status
+      );
+    }
+    return response.json();
+  }
+  async function uploadFileToServer(uploadData, file) {
+    const formData = new FormData();
+    Object.entries(uploadData.data).forEach(([key, value]) => {
+      formData.append(key, value);
+    });
+    formData.append("file", file, uploadData.file_name);
+    const response = await fetch(uploadData.upload_url, {
+      method: "POST",
+      body: formData
+    });
+    if (!response.ok) {
+      throw new PushbulletUploadError(
+        "file_upload_failed",
+        "file-upload",
+        "Failed to upload file to server",
+        response.status
+      );
+    }
+  }
+  async function sendFilePush(apiKey2, filePush) {
+    const response = await fetch(PUSHES_URL, {
+      method: "POST",
+      headers: {
+        ...authHeaders(apiKey2),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "file",
+        ...filePush
+      })
+    });
+    if (!response.ok) {
+      const message = await getApiErrorMessage(response, "Failed to send file push");
+      throw new PushbulletUploadError(
+        "file_push_failed",
+        "file-push",
+        message,
+        response.status
+      );
+    }
+  }
+  async function createPush(apiKey2, push) {
+    const response = await fetch(PUSHES_URL, {
+      method: "POST",
+      headers: {
+        ...authHeaders(apiKey2),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(push)
+    });
+    if (!response.ok) {
+      const message = await getApiErrorMessage(response, "Failed to send push");
+      throw new PushbulletApiError("push_send_failed", message, response.status);
+    }
+    return response.json();
+  }
+  async function sendPush(apiKey2, push) {
+    return createPush(apiKey2, push);
+  }
   async function dismissPush(iden, apiKey2) {
     const url = `https://api.pushbullet.com/v2/pushes/${encodeURIComponent(iden)}`;
     const response = await fetch(url, {
@@ -1950,7 +2251,11 @@
       const store = transaction.objectStore(STORE_NAME);
       const timestampedSession = { ...session, cachedAt: Date.now() };
       store.put(timestampedSession, CACHE_KEY);
-      await new Promise((resolve) => transaction.oncomplete = resolve);
+      await new Promise((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
       debugLogger.storage("DEBUG", "Session cache saved to IndexedDB");
     } catch (error) {
       debugLogger.storage(
@@ -1959,6 +2264,7 @@
         null,
         error
       );
+      throw error;
     }
   }
   async function loadSessionCache() {
@@ -2082,10 +2388,9 @@
     const pushes = await fetchIncrementalPushes(apiKey2, storedCutoff, 100);
     const maxModified = await computeMaxModified(pushes);
     if (maxModified > storedCutoff) {
-      await setLastModifiedCutoffSafe(maxModified);
-      debugLogger.general("DEBUG", "Pipeline 1 Updated cutoff via safe setter", {
+      debugLogger.general("DEBUG", "Pipeline 1 fetched pushes awaiting processing", {
         old: storedCutoff,
-        new: maxModified
+        candidate: maxModified
       });
     }
     return { pushes, isSeedRun: false };
@@ -2185,7 +2490,16 @@
       sessionCache.lastUpdated = Date.now();
       const popupPushes = await getPopupRecentPushes(displayPushes);
       if (didRefreshUser && didRefreshDevices && didRefreshPushes && didRefreshChats) {
-        await persistSessionCache();
+        try {
+          await persistSessionCache();
+        } catch (error) {
+          debugLogger.general(
+            "WARN",
+            "Failed to persist session cache after background refresh",
+            null,
+            error
+          );
+        }
       } else {
         debugLogger.general("WARN", "Skipping session cache persistence after partial background refresh", {
           didRefreshUser,
@@ -2485,7 +2799,16 @@
         sessionCache.isAuthenticated = true;
         sessionCache.lastUpdated = Date.now();
         if (didRefreshChats) {
-          await persistSessionCache();
+          try {
+            await persistSessionCache();
+          } catch (error) {
+            debugLogger.general(
+              "WARN",
+              "Failed to persist session cache after refresh",
+              null,
+              error
+            );
+          }
         } else {
           debugLogger.general("WARN", "Skipping session cache persistence after partial refresh", {
             didRefreshChats
@@ -2520,6 +2843,7 @@
   // src/infrastructure/storage/opened-mru.repository.ts
   var OPENED_MRU_KEY = "openedPushMRU";
   var MRU_CAP = 500;
+  var openedMRUWriteQueue = Promise.resolve();
   async function loadMRU() {
     const raw = await chrome.storage.local.get(OPENED_MRU_KEY);
     const mru = raw[OPENED_MRU_KEY];
@@ -2528,21 +2852,28 @@
   async function saveMRU(mru) {
     await chrome.storage.local.set({ [OPENED_MRU_KEY]: mru });
   }
+  async function enqueueMRUWrite(operation) {
+    const queued = openedMRUWriteQueue.then(operation, operation);
+    openedMRUWriteQueue = queued.catch(() => void 0);
+    return queued;
+  }
   async function hasOpenedIden(iden) {
     const mru = await loadMRU();
     return mru.idens.includes(iden);
   }
   async function markOpened(iden, created) {
-    const mru = await loadMRU();
-    if (!mru.idens.includes(iden)) {
-      mru.idens.unshift(iden);
-      if (mru.idens.length > MRU_CAP) mru.idens.length = MRU_CAP;
-    }
-    if (Number.isFinite(created) && created > mru.maxOpenedCreated) {
-      mru.maxOpenedCreated = created;
-    }
-    await saveMRU(mru);
-    debugLogger.general("DEBUG", `MRU: marked opened iden=${iden}, maxOpenedCreated=${mru.maxOpenedCreated}`);
+    await enqueueMRUWrite(async () => {
+      const mru = await loadMRU();
+      if (!mru.idens.includes(iden)) {
+        mru.idens.unshift(iden);
+        if (mru.idens.length > MRU_CAP) mru.idens.length = MRU_CAP;
+      }
+      if (Number.isFinite(created) && created > mru.maxOpenedCreated) {
+        mru.maxOpenedCreated = created;
+      }
+      await saveMRU(mru);
+      debugLogger.general("DEBUG", `MRU: marked opened iden=${iden}, maxOpenedCreated=${mru.maxOpenedCreated}`);
+    });
   }
   async function getMaxOpenedCreated() {
     const mru = await loadMRU();
@@ -2554,24 +2885,104 @@
     });
   }
 
+  // src/lib/security/message-validation.ts
+  function isValidSender(sender) {
+    if (!sender) {
+      debugLogger.general("WARN", "Message received with no sender");
+      return false;
+    }
+    if (sender.id !== chrome.runtime.id) {
+      debugLogger.general("WARN", "Message received from external extension", {
+        senderId: sender.id,
+        expectedId: chrome.runtime.id
+      });
+      return false;
+    }
+    if (sender.url) {
+      const extensionUrl = chrome.runtime.getURL("");
+      if (!sender.url.startsWith(extensionUrl)) {
+        debugLogger.general("WARN", "Message received from non-extension URL", {
+          senderUrl: sender.url,
+          expectedPrefix: extensionUrl
+        });
+        return false;
+      }
+    }
+    return true;
+  }
+  var PRIVILEGED_ACTIONS = /* @__PURE__ */ new Set([
+    "apiKeyChanged" /* API_KEY_CHANGED */,
+    "logout" /* LOGOUT */,
+    "settingsChanged" /* SETTINGS_CHANGED */,
+    "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */,
+    "sendPush" /* SEND_PUSH */,
+    "uploadAndSendFile" /* UPLOAD_AND_SEND_FILE */,
+    "GET_PUSH_DATA" /* GET_PUSH_DATA */,
+    "getNotificationData" /* GET_NOTIFICATION_DATA */,
+    "attemptReconnect" /* ATTEMPT_RECONNECT */,
+    "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */,
+    "clearAllLogs" /* CLEAR_ALL_LOGS */,
+    "exportDebugData" /* EXPORT_DEBUG_DATA */,
+    "getDebugSummary" /* GET_DEBUG_SUMMARY */
+  ]);
+  function isPrivilegedAction(action) {
+    return PRIVILEGED_ACTIONS.has(action);
+  }
+  function validatePrivilegedMessage(action, sender) {
+    if (!isPrivilegedAction(action)) {
+      return true;
+    }
+    if (!isValidSender(sender)) {
+      debugLogger.general("ERROR", "Rejected privileged action from invalid sender", {
+        action,
+        senderId: sender?.id,
+        senderUrl: sender?.url
+      });
+      return false;
+    }
+    return true;
+  }
+
   // src/background/diagnostics.ts
-  var DEV_ENABLED = true;
+  function isDiagnosticsMessage(msg) {
+    if (!msg || typeof msg !== "object") {
+      return false;
+    }
+    const { type } = msg;
+    return type === "diag:dump-autoopen" || type === "diag:clear-mru";
+  }
+  function areDiagnosticsEnabled() {
+    return debugConfigManager.getConfig().enabled;
+  }
   function installDiagnosticsMessageHandler() {
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (!DEV_ENABLED) return;
-      (async () => {
-        if (msg?.type === "diag:dump-autoopen") {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (!isDiagnosticsMessage(msg)) {
+        return false;
+      }
+      if (!isValidSender(sender)) {
+        sendResponse({ ok: false, error: "unauthorized" });
+        return false;
+      }
+      if (!areDiagnosticsEnabled()) {
+        sendResponse({ ok: false, error: "diagnostics_disabled" });
+        return false;
+      }
+      void (async () => {
+        if (msg.type === "diag:dump-autoopen") {
           const snap = await storageRepository.getAutoOpenDebugSnapshot();
           debugLogger.general("INFO", "DIAG auto-open snapshot", snap);
           sendResponse({ ok: true, snap });
-        } else if (msg?.type === "diag:clear-mru") {
+        } else if (msg.type === "diag:clear-mru") {
           await clearOpenedMRU();
           debugLogger.general("WARN", "DIAG MRU cleared by developer action");
           const snap = await storageRepository.getAutoOpenDebugSnapshot();
           debugLogger.general("INFO", "DIAG auto-open snapshot (post-clear)", snap);
           sendResponse({ ok: true, snap });
         }
-      })();
+      })().catch((error) => {
+        debugLogger.general("ERROR", "DIAG command failed", { type: msg.type }, error);
+        sendResponse({ ok: false, error: "diagnostics_failed" });
+      });
       return true;
     });
   }
@@ -2657,6 +3068,207 @@
         console.warn("Failed to log ensureConfigLoaded error:", error);
       }
     }
+  }
+
+  // src/background/state.ts
+  var API_BASE_URL2 = "https://api.pushbullet.com/v2";
+  var PUSHES_URL2 = `${API_BASE_URL2}/pushes`;
+  var DEVICES_URL2 = `${API_BASE_URL2}/devices`;
+  var USER_INFO_URL2 = `${API_BASE_URL2}/users/me`;
+  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
+  var apiKey = null;
+  var deviceIden = null;
+  var deviceNickname = "Chrome";
+  var autoOpenLinks = true;
+  var notificationTimeout = 1e4;
+  var websocketClient = null;
+  var pollingMode = false;
+  function getApiKey() {
+    return apiKey;
+  }
+  function setApiKey(key) {
+    apiKey = key;
+  }
+  function getDeviceIden() {
+    return deviceIden;
+  }
+  function setDeviceIden(iden) {
+    deviceIden = iden;
+  }
+  function getDeviceNickname() {
+    return deviceNickname;
+  }
+  function setDeviceNickname(nickname) {
+    deviceNickname = nickname;
+  }
+  function getAutoOpenLinks() {
+    return autoOpenLinks;
+  }
+  function setAutoOpenLinks(value) {
+    autoOpenLinks = value;
+  }
+  function getNotificationTimeout() {
+    return notificationTimeout;
+  }
+  function setNotificationTimeout(timeout) {
+    notificationTimeout = timeout;
+  }
+  function setWebSocketClient(client) {
+    websocketClient = client;
+  }
+  function isPollingMode() {
+    return pollingMode;
+  }
+  function setPollingMode(mode) {
+    pollingMode = mode;
+  }
+
+  // src/background/config.ts
+  async function hydrateBackgroundConfig() {
+    await ensureConfigLoaded(
+      {
+        setApiKey,
+        setDeviceIden,
+        setAutoOpenLinks,
+        setDeviceNickname,
+        setNotificationTimeout
+      },
+      {
+        getApiKey,
+        getDeviceIden,
+        getAutoOpenLinks,
+        getDeviceNickname,
+        getNotificationTimeout
+      }
+    );
+  }
+  var loadDebugConfigOnce = null;
+  function getDebugConfigLoadErrorMetadata(error) {
+    if (error instanceof Error) {
+      return {
+        errorName: error.name,
+        errorType: error.constructor.name
+      };
+    }
+    return {
+      errorName: typeof error,
+      errorType: typeof error
+    };
+  }
+  function ensureDebugConfigLoadedOnce() {
+    if (!loadDebugConfigOnce) {
+      loadDebugConfigOnce = (async () => {
+        try {
+          await debugConfigManager.loadConfig();
+          debugLogger.general(
+            "INFO",
+            "Debug configuration loaded (single-flight)"
+          );
+        } catch (e) {
+          debugLogger.general(
+            "WARN",
+            "Failed to load debug configuration (single-flight)",
+            getDebugConfigLoadErrorMetadata(e)
+          );
+          loadDebugConfigOnce = null;
+        }
+      })();
+    }
+    return loadDebugConfigOnce;
+  }
+
+  // src/background/lifecycle.ts
+  function createLifecycleCoordinator(deps) {
+    async function reconcileWake2(reason) {
+      await deps.hydrateConfig();
+      await deps.stateMachineReady;
+      const apiKey2 = deps.getApiKey();
+      const socketHealthy = deps.isSocketHealthy();
+      const stateMachine2 = deps.getStateMachine();
+      debugLogger.general("DEBUG", "[Wake] Reconcile wake state", {
+        reason,
+        hasApiKey: !!apiKey2,
+        socketHealthy,
+        currentState: stateMachine2.getCurrentState()
+      });
+      if (apiKey2 && !socketHealthy) {
+        await stateMachine2.transition("ATTEMPT_RECONNECT", {
+          hasApiKey: true,
+          socketHealthy: false,
+          reason
+        });
+      }
+    }
+    async function bootstrap2(trigger) {
+      debugLogger.general("INFO", "Bootstrap start", { trigger });
+      await deps.hydrateConfig().catch((error) => {
+        debugLogger.general(
+          "ERROR",
+          "Failed to load config before STARTUP",
+          null,
+          error
+        );
+      });
+      debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
+      const apiKey2 = deps.getApiKey();
+      const deviceIden2 = deps.getDeviceIden();
+      const autoOpenLinks2 = deps.getAutoOpenLinks();
+      debugLogger.general(
+        "INFO",
+        "[BOOTSTRAP_DEBUG] Config state after ensureConfigLoaded",
+        {
+          hasApiKey: !!apiKey2,
+          apiKeyLength: apiKey2?.length || 0,
+          hasDeviceIden: !!deviceIden2,
+          autoOpenLinks: autoOpenLinks2
+        }
+      );
+      await deps.stateMachineReady;
+      const stateMachine2 = deps.getStateMachine();
+      debugLogger.general("INFO", "[BOOTSTRAP_DEBUG] Triggering STARTUP event", {
+        hasApiKey: !!apiKey2,
+        apiKeyLength: apiKey2?.length || 0,
+        trigger
+      });
+      await stateMachine2.transition("STARTUP", { hasApiKey: !!apiKey2 });
+      debugLogger.general(
+        "INFO",
+        "[BOOTSTRAP_DEBUG] STARTUP transition completed",
+        {
+          newState: stateMachine2.getCurrentState()
+        }
+      );
+      if (apiKey2 && stateMachine2.getCurrentState() === "idle") {
+        debugLogger.general(
+          "WARN",
+          "[Bootstrap] Detected orphaned session: have API key but state is IDLE. Triggering recovery."
+        );
+        try {
+          await stateMachine2.transition("ATTEMPT_RECONNECT", {
+            hasApiKey: true
+          });
+        } catch (error) {
+          debugLogger.general(
+            "ERROR",
+            "[Bootstrap] Failed to recover orphaned session",
+            null,
+            error
+          );
+        }
+      }
+      debugLogger.general(
+        "INFO",
+        "Bootstrap completed",
+        {
+          finalState: stateMachine2.getCurrentState(),
+          trigger
+        }
+      );
+    }
+    return {
+      bootstrap: bootstrap2,
+      reconcileWake: reconcileWake2
+    };
   }
 
   // src/lib/crypto/index.ts
@@ -2767,59 +3379,6 @@
     }
   };
 
-  // src/background/state.ts
-  var API_BASE_URL2 = "https://api.pushbullet.com/v2";
-  var PUSHES_URL2 = `${API_BASE_URL2}/pushes`;
-  var DEVICES_URL2 = `${API_BASE_URL2}/devices`;
-  var USER_INFO_URL2 = `${API_BASE_URL2}/users/me`;
-  var WEBSOCKET_URL = "wss://stream.pushbullet.com/websocket/";
-  var apiKey = null;
-  var deviceIden = null;
-  var deviceNickname = "Chrome";
-  var autoOpenLinks = true;
-  var notificationTimeout = 1e4;
-  var websocketClient = null;
-  var pollingMode = false;
-  function getApiKey() {
-    return apiKey;
-  }
-  function setApiKey(key) {
-    apiKey = key;
-  }
-  function getDeviceIden() {
-    return deviceIden;
-  }
-  function setDeviceIden(iden) {
-    deviceIden = iden;
-  }
-  function getDeviceNickname() {
-    return deviceNickname;
-  }
-  function setDeviceNickname(nickname) {
-    deviceNickname = nickname;
-  }
-  function getAutoOpenLinks() {
-    return autoOpenLinks;
-  }
-  function setAutoOpenLinks(value) {
-    autoOpenLinks = value;
-  }
-  function getNotificationTimeout() {
-    return notificationTimeout;
-  }
-  function setNotificationTimeout(timeout) {
-    notificationTimeout = timeout;
-  }
-  function setWebSocketClient(client) {
-    websocketClient = client;
-  }
-  function isPollingMode() {
-    return pollingMode;
-  }
-  function setPollingMode(mode) {
-    pollingMode = mode;
-  }
-
   // src/lib/security/trusted-image-url.ts
   function isTrustedPushbulletHost(hostname) {
     return hostname === "pushbullet.com" || hostname.endsWith(".pushbullet.com") || hostname === "pushbulletusercontent.com" || hostname.endsWith(".pushbulletusercontent.com");
@@ -2907,7 +3466,6 @@
     const openedCreated = [];
     let openedThisRun = 0;
     const shouldDismiss = await storageRepository.getDismissAfterAutoOpen();
-    const dismissApiKey = getApiKey();
     for (const p of candidates) {
       if (openedThisRun >= safetyCap) {
         debugLogger.websocket("WARN", "Auto-open links capped", {
@@ -2928,13 +3486,21 @@
           iden: p.iden,
           created: p.created ?? 0
         });
-        if (shouldDismiss && dismissApiKey && p.iden) {
+        if (shouldDismiss && p.iden) {
           try {
-            await dismissPush(p.iden, dismissApiKey);
-            debugLogger.websocket(
-              "INFO",
-              `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`
-            );
+            const dismissApiKey = getApiKey();
+            if (!dismissApiKey) {
+              debugLogger.websocket(
+                "WARN",
+                `Offline AutoOpen: dismiss skipped for iden=${p.iden}; API key unavailable`
+              );
+            } else {
+              await dismissPush(p.iden, dismissApiKey);
+              debugLogger.websocket(
+                "INFO",
+                `Offline AutoOpen: dismissed iden=${p.iden} after auto-open`
+              );
+            }
           } catch (e) {
             debugLogger.websocket(
               "WARN",
@@ -3011,6 +3577,8 @@
   }
 
   // src/background/utils.ts
+  var MAX_MIRROR_ICON_DECODED_BYTES = 256 * 1024;
+  var MAX_MIRROR_ICON_ENCODED_LENGTH = Math.ceil(MAX_MIRROR_ICON_DECODED_BYTES / 3) * 4;
   function sanitizeText(text) {
     if (!text) return "";
     let sanitized = text.replace(/<[^>]*>/g, "");
@@ -3031,6 +3599,54 @@
       debugLogger.general("WARN", "Invalid URL provided", { url });
       return "";
     }
+  }
+  function isSmsChangedPush(push) {
+    return push.type === "sms_changed";
+  }
+  function isMirrorPush(push) {
+    return push.type === "mirror";
+  }
+  function isFilePush(push) {
+    return push.type === "file";
+  }
+  function hasSmsNotification(push) {
+    return Array.isArray(push.notifications) && push.notifications.length > 0;
+  }
+  function getBase64DecodedLength(base64) {
+    const paddingLength = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+    return Math.floor(base64.length * 3 / 4) - paddingLength;
+  }
+  function getMirrorIconDataUrl(iconData, title) {
+    if (!iconData) {
+      return null;
+    }
+    const normalizedIconData = iconData.replace(/\s/g, "");
+    if (!normalizedIconData.startsWith("/9j/")) {
+      return null;
+    }
+    if (normalizedIconData.length > MAX_MIRROR_ICON_ENCODED_LENGTH) {
+      debugLogger.notifications("WARN", "Ignoring oversized mirror notification icon", {
+        iconDataLength: normalizedIconData.length,
+        maxEncodedLength: MAX_MIRROR_ICON_ENCODED_LENGTH,
+        title
+      });
+      return null;
+    }
+    const decodedLength = getBase64DecodedLength(normalizedIconData);
+    if (decodedLength > MAX_MIRROR_ICON_DECODED_BYTES) {
+      debugLogger.notifications("WARN", "Ignoring oversized mirror notification icon", {
+        decodedLength,
+        maxDecodedBytes: MAX_MIRROR_ICON_DECODED_BYTES,
+        title
+      });
+      return null;
+    }
+    debugLogger.notifications("DEBUG", "Processing mirror notification icon", {
+      iconDataLength: normalizedIconData.length,
+      decodedLength,
+      title
+    });
+    return `data:image/jpeg;base64,${normalizedIconData}`;
   }
   function updateExtensionTooltip(stateDescription) {
     try {
@@ -3082,8 +3698,11 @@
     const updated = Array.from(map.values()).sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 200);
     return [updated, newOnes];
   }
+  function getPushModified(push) {
+    return typeof push.modified === "number" ? push.modified : 0;
+  }
   async function refreshPushes(notificationDataStore2) {
-    await ensureConfigLoaded();
+    await hydrateBackgroundConfig();
     const apiKey2 = getApiKey();
     if (!apiKey2) {
       debugLogger.general("WARN", "Cannot refresh pushes - no API key");
@@ -3101,18 +3720,6 @@
         debugLogger.general("INFO", "Pipeline 1: No new pushes to process");
         return;
       }
-      const maxModified = Math.max(
-        cutoff,
-        ...incrementalPushes.map((p) => typeof p.modified === "number" ? p.modified : 0)
-      );
-      if (maxModified > cutoff) {
-        sessionCache.lastModifiedCutoff = maxModified;
-        await setLastModifiedCutoffSafe(maxModified);
-        debugLogger.general("INFO", "Pipeline 1 Updated cutoff via safe setter", {
-          old: cutoff,
-          new: maxModified
-        });
-      }
       debugLogger.general("DEBUG", "Pipeline 2: Updating display pushes");
       const [updatedDisplayPushes, newPushes] = upsertPushes(
         sessionCache.recentPushes ?? [],
@@ -3126,34 +3733,57 @@
       });
       let openedThisRun = 0;
       const cap = await storageRepository.getMaxAutoOpenPerReconnect();
-      for (const push of newPushes) {
+      let processedCutoff = cutoff;
+      const pushesForProcessing = [...incrementalPushes].sort(
+        (left, right) => getPushModified(left) - getPushModified(right)
+      );
+      for (const push of pushesForProcessing) {
+        const modified = getPushModified(push);
+        if (modified <= 0) {
+          debugLogger.general("WARN", "Skipping push with invalid modified timestamp", {
+            pushIden: push.iden
+          });
+          continue;
+        }
+        if (!push.iden) {
+          debugLogger.general("WARN", "Skipping push with missing iden");
+          continue;
+        }
+        if (await storageRepository.wasPushProcessed(push.iden, modified)) {
+          if (modified > processedCutoff) {
+            await setLastModifiedCutoffSafe(modified);
+            processedCutoff = modified;
+          }
+          continue;
+        }
         debugLogger.general("INFO", "Processing new push", {
           pushIden: push.iden,
           pushType: push.type
         });
-        void showPushNotification(push, notificationDataStore2).catch((error) => {
-          debugLogger.general("ERROR", "Failed to show notification", {
-            pushIden: push.iden
-          }, error);
-        });
+        await showPushNotification(push, notificationDataStore2);
         if (openedThisRun >= cap) {
           debugLogger.general("WARN", "Auto-open links capped", {
             opened: openedThisRun,
-            total: newPushes.length,
+            total: pushesForProcessing.length,
             cap
           });
-          continue;
-        }
-        const opened = await maybeAutoOpenLinkWithDismiss(push);
-        if (opened) {
-          openedThisRun += 1;
-          if (openedThisRun >= cap) {
-            debugLogger.general("WARN", "Auto-open links capped", {
-              opened: openedThisRun,
-              total: newPushes.length,
-              cap
-            });
+        } else {
+          const opened = await maybeAutoOpenLinkWithDismiss(push);
+          if (opened) {
+            openedThisRun += 1;
+            if (openedThisRun >= cap) {
+              debugLogger.general("WARN", "Auto-open links capped", {
+                opened: openedThisRun,
+                total: pushesForProcessing.length,
+                cap
+              });
+            }
           }
+        }
+        await storageRepository.markPushProcessed(push.iden, modified);
+        if (modified > processedCutoff) {
+          await setLastModifiedCutoffSafe(modified);
+          processedCutoff = modified;
         }
       }
       chrome.runtime.sendMessage({
@@ -3168,7 +3798,7 @@
   var counter = 0;
   async function showPushNotification(push, notificationDataStore2) {
     try {
-      if (push.type === "sms_changed" && (!push.notifications || push.notifications.length === 0)) {
+      if (isSmsChangedPush(push) && !hasSmsNotification(push)) {
         debugLogger.notifications(
           "INFO",
           "Ignoring sms_changed push with no notification content (deletion event).",
@@ -3197,11 +3827,11 @@
           "INFO",
           "Showing notification for undecrypted push"
         );
-      } else if (push.type === "sms_changed") {
+      } else if (isSmsChangedPush(push) && hasSmsNotification(push)) {
         debugLogger.notifications(
           "DEBUG",
-          "Complete sms_changed push object received",
-          { push }
+          "SMS push summary received",
+          { push: summarizePushForLog(push) }
         );
         const sms = push.notifications[0];
         const title = sms.title || "New SMS";
@@ -3297,27 +3927,28 @@
             title,
             message
           };
-        } else if (push.type === "file") {
+        } else if (isFilePush(push)) {
           debugLogger.notifications(
             "DEBUG",
-            "Complete file push object received",
-            { push }
+            "File push summary received",
+            { push: summarizePushForLog(push) }
           );
           let fileTitle = "New File";
           let fileMessage = "";
-          if (push.title) {
-            fileTitle = push.title;
-            fileMessage = push.body || `Image (${push.file_type})`;
+          const filePush = push;
+          if (filePush.title) {
+            fileTitle = filePush.title;
+            fileMessage = filePush.body || `Image (${filePush.file_type})`;
           } else {
-            fileTitle = `New File: ${push.file_name || "unknown file"}`;
-            fileMessage = push.body || push.file_type || "";
+            fileTitle = `New File: ${filePush.file_name || "unknown file"}`;
+            fileMessage = filePush.body || filePush.file_type || "";
           }
-          const imageUrl = push.image_url;
-          const fileUrl = push.file_url;
+          const imageUrl = filePush.image_url;
+          const fileUrl = filePush.file_url;
           let previewUrl = null;
           if (imageUrl && isTrustedImageUrl(imageUrl)) {
             previewUrl = imageUrl;
-          } else if (fileUrl && isTrustedImageUrl(fileUrl) && push.file_type?.startsWith("image/")) {
+          } else if (fileUrl && isTrustedImageUrl(fileUrl) && filePush.file_type?.startsWith("image/")) {
             previewUrl = fileUrl;
           }
           if (previewUrl) {
@@ -3332,7 +3963,7 @@
               "INFO",
               "Showing image notification for trusted file push",
               {
-                fileName: push.file_name,
+                fileName: filePush.file_name,
                 previewUrl
               }
             );
@@ -3353,16 +3984,11 @@
               );
             }
           }
-        } else if (push.type === "mirror") {
+        } else if (isMirrorPush(push)) {
           const mirrorTitle = push.application_name && push.title ? `${push.application_name}: ${push.title}` : push.title || push.application_name || "Notification";
           const mirrorMessage = push.body || "";
-          const iconData = push.icon;
-          if (iconData && typeof iconData === "string" && iconData.startsWith("/9j/")) {
-            debugLogger.notifications("DEBUG", "Processing mirror notification icon", {
-              iconDataLength: iconData.length,
-              title: mirrorTitle
-            });
-            const dataUrl = `data:image/jpeg;base64,${iconData}`;
+          const dataUrl = getMirrorIconDataUrl(push.icon, mirrorTitle);
+          if (dataUrl) {
             notificationOptions = {
               ...baseOptions,
               type: "basic",
@@ -3427,7 +4053,12 @@
       if (notificationOptions.imageUrl) {
         finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
       }
-      await chrome.notifications.create(notificationId, finalNotificationOptions);
+      await createNotificationWithTimeout(
+        notificationId,
+        finalNotificationOptions,
+        void 0,
+        getNotificationTimeout()
+      );
       if (notificationDataStore2) {
         notificationDataStore2.set(notificationId, push);
       }
@@ -3444,6 +4075,7 @@
         { pushIden: push.iden },
         error
       );
+      throw error;
     }
   }
   function checkPollingMode() {
@@ -3480,7 +4112,7 @@
     debugLogger.general("DEBUG", "Performing polling fetch (incremental)");
     await refreshPushes();
   }
-  function performWebSocketHealthCheck(websocketClient3, connectFn) {
+  function performWebSocketHealthCheck(websocketClient3, connectFn, recoveryController) {
     const apiKey2 = getApiKey();
     debugLogger.websocket(
       "DEBUG",
@@ -3489,7 +4121,7 @@
         hasClient: !!websocketClient3,
         hasApiKey: !!apiKey2,
         isConnected: websocketClient3?.isConnected() ?? false,
-        readyState: websocketClient3?.["ws"]?.readyState ?? "N/A"
+        readyState: websocketClient3?.ws?.readyState ?? "N/A"
       }
     );
     if (!websocketClient3 || !websocketClient3.isConnected()) {
@@ -3498,20 +4130,26 @@
         "[HealthCheck] WebSocket is null or disconnected",
         {
           hasApiKey: !!apiKey2,
-          currentState: stateMachine.getCurrentState()
+          currentState: recoveryController?.getCurrentState() ?? "unknown"
         }
       );
       if (apiKey2) {
-        const currentState = stateMachine.getCurrentState();
-        if (currentState === "idle" /* IDLE */) {
+        const currentState = recoveryController?.getCurrentState();
+        const shouldRecoverViaStateMachine = recoveryController && (currentState === "idle" /* IDLE */ || currentState === "ready" /* READY */);
+        const shouldReconnectDirectly = !recoveryController || currentState === "degraded" /* DEGRADED */ || currentState === "reconnecting" /* RECONNECTING */;
+        if (shouldRecoverViaStateMachine) {
           debugLogger.websocket(
             "WARN",
-            "[HealthCheck] Detected IDLE state with API key - triggering recovery"
+            "[HealthCheck] Detected stale state with API key - triggering recovery",
+            {
+              currentState
+            }
           );
-          stateMachine.transition(
+          recoveryController.transition(
             "ATTEMPT_RECONNECT",
             {
-              hasApiKey: true
+              hasApiKey: true,
+              socketHealthy: false
             }
           ).catch(
             (error) => {
@@ -3524,7 +4162,7 @@
               connectFn();
             }
           );
-        } else if (currentState === "degraded" /* DEGRADED */ || currentState === "reconnecting" /* RECONNECTING */) {
+        } else if (shouldReconnectDirectly) {
           connectFn();
         } else {
           debugLogger.websocket(
@@ -3544,10 +4182,35 @@
       return;
     }
     if (!websocketClient3.isConnectionHealthy()) {
+      const currentState = recoveryController?.getCurrentState() ?? "unknown";
       debugLogger.websocket(
         "WARN",
-        "[HealthCheck] Connection unhealthy - emitting disconnect event"
+        "[HealthCheck] Connection unhealthy - triggering recovery",
+        {
+          currentState,
+          hasApiKey: !!apiKey2
+        }
       );
+      if (apiKey2 && recoveryController) {
+        recoveryController.transition(
+          "ATTEMPT_RECONNECT",
+          {
+            hasApiKey: true,
+            socketHealthy: false
+          }
+        ).catch(
+          (error) => {
+            debugLogger.websocket(
+              "ERROR",
+              "[HealthCheck] Failed to trigger recovery for unhealthy connection",
+              null,
+              error
+            );
+            connectFn();
+          }
+        );
+        return;
+      }
       globalEventBus.emit(
         "websocket:disconnected"
       );
@@ -3573,21 +4236,11 @@
       return;
     }
     try {
-      const response = await fetch("https://api.pushbullet.com/v2/pushes", {
-        method: "POST",
-        headers: {
-          "Access-Token": apiKey2,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          type: "link",
-          title: sanitizedTitle,
-          url: sanitizedUrl
-        })
+      await sendPush(apiKey2, {
+        type: "link",
+        title: sanitizedTitle,
+        url: sanitizedUrl
       });
-      if (!response.ok) {
-        throw new Error(`Failed to push link: ${response.status}`);
-      }
       debugLogger.general("INFO", "Link pushed successfully", { url, title });
       createNotificationWithTimeout("pushbullet-link-sent", {
         type: "basic",
@@ -3613,21 +4266,11 @@
     const sanitizedTitle = sanitizeText(title);
     const sanitizedBody = sanitizeText(body);
     try {
-      const response = await fetch("https://api.pushbullet.com/v2/pushes", {
-        method: "POST",
-        headers: {
-          "Access-Token": apiKey2,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          type: "note",
-          title: sanitizedTitle,
-          body: sanitizedBody
-        })
+      await sendPush(apiKey2, {
+        type: "note",
+        title: sanitizedTitle,
+        body: sanitizedBody
       });
-      if (!response.ok) {
-        throw new Error(`Failed to push note: ${response.status}`);
-      }
       debugLogger.general("INFO", "Note pushed successfully", { title });
       createNotificationWithTimeout("pushbullet-note-sent", {
         type: "basic",
@@ -3805,13 +4448,16 @@
           return "idle" /* IDLE */;
         case "initializing" /* INITIALIZING */:
           if (event === "INIT_SUCCESS") {
-            return "ready" /* READY */;
+            return "reconnecting" /* RECONNECTING */;
           }
           if (event === "INIT_FAILURE") {
             return "error" /* ERROR */;
           }
           break;
         case "ready" /* READY */:
+          if (event === "ATTEMPT_RECONNECT" && data?.hasApiKey === true && data?.socketHealthy === false) {
+            return "reconnecting" /* RECONNECTING */;
+          }
           if (event === "WS_DISCONNECTED") {
             return "degraded" /* DEGRADED */;
           }
@@ -3876,11 +4522,13 @@
           updateConnectionIcon("connecting");
           if (this.callbacks.onInitialize) {
             try {
-              await this.callbacks.onInitialize(data);
+              await this.callbacks.onInitialize(this.getInitializationPayload(data));
               await this.transition("INIT_SUCCESS");
             } catch (error) {
               debugLogger.general("ERROR", "[StateMachine] Initialization failed", null, error);
-              await this.transition("INIT_FAILURE");
+              await this.transition("INIT_FAILURE", {
+                error: error instanceof Error ? error.message : String(error)
+              });
             }
           }
           break;
@@ -3894,9 +4542,6 @@
           }
           if (previousState === "degraded" /* DEGRADED */ && this.callbacks.onStopPolling) {
             this.callbacks.onStopPolling();
-          }
-          if (previousState === "initializing" /* INITIALIZING */ && this.callbacks.onConnectWebSocket) {
-            this.callbacks.onConnectWebSocket();
           }
           break;
         case "degraded" /* DEGRADED */:
@@ -3953,6 +4598,21 @@
           this.callbacks.onStopPolling();
         }
       }
+    }
+    getInitializationPayload(data) {
+      if (!data) {
+        return void 0;
+      }
+      const { hasApiKey, apiKey: apiKey2, socketHealthy, reason } = data;
+      if (hasApiKey === void 0 && apiKey2 === void 0 && socketHealthy === void 0 && reason === void 0) {
+        return void 0;
+      }
+      return {
+        hasApiKey,
+        apiKey: apiKey2,
+        socketHealthy,
+        reason
+      };
     }
     /**
      * Get a human-readable description of the current state
@@ -4175,85 +4835,137 @@
     }
   }
 
-  // src/lib/security/message-validation.ts
-  function isValidSender(sender) {
-    if (!sender) {
-      debugLogger.general("WARN", "Message received with no sender");
-      return false;
-    }
-    if (sender.id !== chrome.runtime.id) {
-      debugLogger.general("WARN", "Message received from external extension", {
-        senderId: sender.id,
-        expectedId: chrome.runtime.id
-      });
-      return false;
-    }
-    if (sender.url) {
-      const extensionUrl = chrome.runtime.getURL("");
-      if (!sender.url.startsWith(extensionUrl)) {
-        debugLogger.general("WARN", "Message received from non-extension URL", {
-          senderUrl: sender.url,
-          expectedPrefix: extensionUrl
-        });
-        return false;
-      }
-    }
-    return true;
-  }
-  var PRIVILEGED_ACTIONS = /* @__PURE__ */ new Set([
-    "apiKeyChanged" /* API_KEY_CHANGED */,
-    "logout" /* LOGOUT */,
-    "settingsChanged" /* SETTINGS_CHANGED */,
-    "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */,
-    "sendPush" /* SEND_PUSH */,
-    "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */,
-    "clearAllLogs" /* CLEAR_ALL_LOGS */,
-    "exportDebugData" /* EXPORT_DEBUG_DATA */,
-    "getDebugSummary" /* GET_DEBUG_SUMMARY */,
-    "autoOpenLinksChanged" /* AUTO_OPEN_LINKS_CHANGED */,
-    "encryptionPasswordChanged" /* ENCRYPTION_PASSWORD_CHANGED */,
-    "debugModeChanged" /* DEBUG_MODE_CHANGED */,
-    "attemptReconnect"
-  ]);
-  function isPrivilegedAction(action) {
-    return PRIVILEGED_ACTIONS.has(action);
-  }
-  function validatePrivilegedMessage(action, sender) {
-    if (!isPrivilegedAction(action)) {
-      return true;
-    }
-    if (!isValidSender(sender)) {
-      debugLogger.general("ERROR", "Rejected privileged action from invalid sender", {
-        action,
-        senderId: sender?.id,
-        senderUrl: sender?.url
-      });
-      return false;
-    }
-    return true;
-  }
-
   // src/background/index.ts
-  var loadDebugConfigOnce = null;
-  function ensureDebugConfigLoadedOnce() {
-    if (!loadDebugConfigOnce) {
-      loadDebugConfigOnce = (async () => {
-        try {
-          await debugConfigManager.loadConfig();
-          debugLogger.general(
-            "INFO",
-            "Debug configuration loaded (single-flight)"
-          );
-        } catch (e) {
-          debugLogger.general(
-            "WARN",
-            "Failed to load debug configuration (single-flight)",
-            { error: e.message }
-          );
-        }
-      })();
+  var DEFAULT_FILE_TYPE = "application/octet-stream";
+  var MAX_FILE_NAME_LENGTH = 255;
+  var MAX_FILE_TYPE_LENGTH = 255;
+  var LONG_SLEEP_RECOVERY_ALARM = "longSleepRecovery";
+  var LONG_SLEEP_RECOVERY_PERIOD_MINUTES = 5;
+  function buildUploadError(code, stage, message, status) {
+    return {
+      code,
+      stage,
+      message,
+      ...status === void 0 ? {} : { status }
+    };
+  }
+  function validateUploadMetadata(message, maxUploadSize) {
+    const fileName = typeof message.fileName === "string" ? message.fileName.trim() : "";
+    const fileType = typeof message.fileType === "string" && message.fileType.trim() ? message.fileType.trim() : DEFAULT_FILE_TYPE;
+    const fileSize = typeof message.fileSize === "number" ? message.fileSize : 0;
+    if (!fileName) {
+      throw buildUploadError(
+        "invalid_file_name",
+        "metadata",
+        "File name is required."
+      );
     }
-    return loadDebugConfigOnce;
+    if (fileName.length > MAX_FILE_NAME_LENGTH) {
+      throw buildUploadError(
+        "invalid_file_name",
+        "metadata",
+        "File name is too long."
+      );
+    }
+    if (fileType.length > MAX_FILE_TYPE_LENGTH) {
+      throw buildUploadError(
+        "invalid_file_type",
+        "metadata",
+        "File type is too long."
+      );
+    }
+    if (fileSize <= 0) {
+      throw buildUploadError(
+        "invalid_file",
+        "metadata",
+        "File data is required."
+      );
+    }
+    if (typeof maxUploadSize === "number" && maxUploadSize > 0 && fileSize > maxUploadSize) {
+      throw buildUploadError(
+        "file_too_large",
+        "metadata",
+        "File exceeds the account upload limit."
+      );
+    }
+    if (typeof message.fileBase64 !== "string" || !message.fileBase64) {
+      throw buildUploadError(
+        "invalid_file",
+        "metadata",
+        "File data is required."
+      );
+    }
+    const fileBytes = decodeBase64File(message.fileBase64);
+    if (fileBytes.byteLength !== fileSize) {
+      throw buildUploadError(
+        "invalid_file",
+        "metadata",
+        "File data did not match the declared size."
+      );
+    }
+    return {
+      fileName,
+      fileType,
+      fileBytes
+    };
+  }
+  function decodeBase64File(fileBase64) {
+    try {
+      const binary = atob(fileBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    } catch {
+      throw buildUploadError(
+        "invalid_file",
+        "metadata",
+        "File data is not valid base64."
+      );
+    }
+  }
+  function toArrayBuffer(bytes) {
+    const buffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(buffer).set(bytes);
+    return buffer;
+  }
+  function getAlarm(name) {
+    return new Promise((resolve) => {
+      chrome.alarms.get(name, (alarm) => {
+        resolve(alarm);
+      });
+    });
+  }
+  async function ensureLongSleepRecoveryAlarm() {
+    const alarm = await getAlarm(LONG_SLEEP_RECOVERY_ALARM);
+    if (alarm) {
+      return;
+    }
+    chrome.alarms.create(LONG_SLEEP_RECOVERY_ALARM, {
+      periodInMinutes: LONG_SLEEP_RECOVERY_PERIOD_MINUTES
+    });
+  }
+  function isStructuredUploadError(error) {
+    return typeof error === "object" && error !== null && "code" in error && "stage" in error && "message" in error;
+  }
+  function toStructuredUploadError(error) {
+    if (isStructuredUploadError(error)) {
+      return error;
+    }
+    if (error instanceof PushbulletUploadError) {
+      return buildUploadError(
+        error.code,
+        error.stage,
+        error.message,
+        error.status
+      );
+    }
+    return buildUploadError(
+      "upload_failed",
+      "unknown",
+      error instanceof Error ? error.message : "File upload failed."
+    );
   }
   var notificationDataStore = /* @__PURE__ */ new Map();
   var MAX_NOTIFICATION_STORE_SIZE = 100;
@@ -4322,7 +5034,7 @@
     }
   });
   globalEventBus.on("websocket:push", async (push) => {
-    await ensureConfigLoaded();
+    await hydrateBackgroundConfig();
     performanceMonitor.recordPushReceived();
     let decryptedPush = push;
     let decryptionFailed = false;
@@ -4342,8 +5054,8 @@
           debugLogger.general("INFO", "Push decrypted successfully", {
             pushType: decryptedPush.type
           });
-          debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
-            completeData: decryptedPush
+          debugLogger.general("DEBUG", "Decrypted push summary", {
+            push: summarizePushForLog(decryptedPush)
           });
         } else {
           debugLogger.general(
@@ -4373,10 +5085,11 @@
       );
       return;
     }
-    if (!decryptedPush.type) {
+    const pushWithOptionalType = decryptedPush;
+    if (!pushWithOptionalType.type) {
       debugLogger.general("ERROR", "Push has no type field after decryption", {
-        pushIden: decryptedPush.iden,
-        pushData: decryptedPush
+        pushIden: pushWithOptionalType.iden,
+        pushSummary: summarizePushForLog(decryptedPush)
       });
       return;
     }
@@ -4397,8 +5110,7 @@
           category: typeCheck.category,
           reason: "This is a new or unrecognized push type",
           supportedTypes: SUPPORTED_PUSH_TYPES,
-          // Include full push data for investigation
-          fullPushData: decryptedPush
+          pushSummary: summarizePushForLog(decryptedPush)
         });
       }
       return;
@@ -4408,8 +5120,8 @@
       pushIden: decryptedPush.iden
     });
     if (decryptedPush.type === "mirror") {
-      debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
-        completeMirrorData: decryptedPush
+      debugLogger.general("DEBUG", "Mirror push summary", {
+        push: summarizePushForLog(decryptedPush)
       });
     }
     if (sessionCache.recentPushes) {
@@ -4484,6 +5196,9 @@
         });
       }
     },
+    onConnectWebSocket: () => {
+      connectWebSocket();
+    },
     onStartPolling: () => {
       checkPollingMode();
     },
@@ -4512,6 +5227,81 @@
       }
     );
   });
+  var { bootstrap, reconcileWake } = createLifecycleCoordinator({
+    hydrateConfig: hydrateBackgroundConfig,
+    stateMachineReady,
+    getStateMachine: () => stateMachine,
+    getApiKey,
+    getDeviceIden,
+    getAutoOpenLinks,
+    getDeviceNickname,
+    isSocketHealthy: () => !!websocketClient2?.isConnected?.() && !!websocketClient2?.isConnectionHealthy?.()
+  });
+  async function getPopupRecentPushes2() {
+    const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
+    const deviceIden2 = await storageRepository.getDeviceIden();
+    if (!onlyThisDevice || !deviceIden2) {
+      return sessionCache.recentPushes ?? [];
+    }
+    return (sessionCache.recentPushes ?? []).filter(
+      (push) => push.target_device_iden === deviceIden2
+    );
+  }
+  async function buildSessionDataResponse(apiKey2) {
+    const filteredPushes = await getPopupRecentPushes2();
+    debugLogger.general("INFO", "Recent pushes filtered for display", {
+      total: sessionCache.recentPushes?.length ?? 0,
+      filtered: filteredPushes.length
+    });
+    return {
+      isAuthenticated: !!apiKey2,
+      userInfo: sessionCache.userInfo,
+      devices: sessionCache.devices,
+      recentPushes: filteredPushes,
+      chats: sessionCache.chats,
+      autoOpenLinks: getAutoOpenLinks(),
+      deviceNickname: getDeviceNickname(),
+      websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false,
+      state: stateMachine.getCurrentState()
+    };
+  }
+  async function refreshPopupTargetsInBackground(apiKey2) {
+    debugLogger.general("INFO", "Refreshing popup targets in background");
+    const [devicesResult, chatsResult] = await Promise.allSettled([
+      fetchDevices(apiKey2),
+      fetchChats(apiKey2)
+    ]);
+    let refreshed = false;
+    if (devicesResult.status === "fulfilled") {
+      sessionCache.devices = devicesResult.value;
+      refreshed = true;
+    } else {
+      debugLogger.general("WARN", "Failed to refresh devices for popup", {
+        error: devicesResult.reason.message
+      });
+    }
+    if (chatsResult.status === "fulfilled") {
+      sessionCache.chats = chatsResult.value;
+      refreshed = true;
+    } else {
+      debugLogger.general("WARN", "Failed to refresh chats for popup", {
+        error: chatsResult.reason.message
+      });
+    }
+    if (!refreshed) {
+      return;
+    }
+    sessionCache.lastUpdated = Date.now();
+    chrome.runtime.sendMessage({
+      action: "sessionDataUpdated" /* SESSION_DATA_UPDATED */,
+      ...await buildSessionDataResponse(apiKey2)
+    }).catch(() => {
+      debugLogger.general(
+        "DEBUG",
+        "Popup not available for background target refresh"
+      );
+    });
+  }
   installDiagnosticsMessageHandler();
   function connectWebSocket() {
     if (websocketClient2) {
@@ -4565,22 +5355,7 @@
       const apiKey2 = getApiKey();
       if (!apiKey2) {
         debugLogger.general("WARN", "Keepalive: API key missing, reloading");
-        await ensureConfigLoaded(
-          {
-            setApiKey,
-            setDeviceIden,
-            setAutoOpenLinks,
-            setDeviceNickname,
-            setNotificationTimeout
-          },
-          {
-            getApiKey,
-            getDeviceIden,
-            getAutoOpenLinks,
-            getDeviceNickname,
-            getNotificationTimeout
-          }
-        );
+        await hydrateBackgroundConfig();
       }
       return;
     }
@@ -4593,25 +5368,16 @@
         "INFO",
         "[Alarm] Auto-recovery timer fired, attempting to reconnect"
       );
-      const apiKey2 = getApiKey();
-      if (apiKey2) {
-        await stateMachine.transition("ATTEMPT_RECONNECT", {
-          hasApiKey: true
-        });
-      } else {
-        debugLogger.general("WARN", "[Alarm] Cannot auto-recover - no API key");
-      }
+      await reconcileWake("auto-recovery-from-error");
     }
     await stateMachineReady;
-    if (alarm.name === "longSleepRecovery") {
-      const apiKey2 = getApiKey();
-      if (apiKey2 && (await stateMachineReady, stateMachine.isInState("idle" /* IDLE */) || stateMachine.isInState("error" /* ERROR */))) {
-        debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
-        await stateMachine.transition("ATTEMPT_RECONNECT", { hasApiKey: true });
-      }
+    if (alarm.name === LONG_SLEEP_RECOVERY_ALARM) {
+      debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
+      await reconcileWake(LONG_SLEEP_RECOVERY_ALARM);
       return;
     }
     if (alarm.name === "websocketHealthCheck") {
+      await reconcileWake("websocketHealthCheck");
       const currentState = stateMachine.getCurrentState();
       debugLogger.general(
         "DEBUG",
@@ -4650,12 +5416,12 @@
           );
         }
       } else {
-        performWebSocketHealthCheck(websocketClient2, connectWebSocket);
+        performWebSocketHealthCheck(websocketClient2, connectWebSocket, stateMachine);
       }
     }
   });
   chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    await ensureConfigLoaded();
+    await hydrateBackgroundConfig();
     if (!getApiKey()) {
       chrome.notifications.create("pushbullet-no-api-key", {
         type: "basic",
@@ -4727,7 +5493,7 @@
         sender: sender.id
       });
     }
-    if (message.type === "GET_PUSH_DATA") {
+    if (message.action === "GET_PUSH_DATA" /* GET_PUSH_DATA */) {
       debugLogger.general("DEBUG", "GET_PUSH_DATA request received", {
         notificationId: message.notificationId
       });
@@ -4751,22 +5517,7 @@
       (async () => {
         try {
           await ensureDebugConfigLoadedOnce();
-          await ensureConfigLoaded(
-            {
-              setApiKey,
-              setDeviceIden,
-              setAutoOpenLinks,
-              setDeviceNickname,
-              setNotificationTimeout
-            },
-            {
-              getApiKey,
-              getDeviceIden,
-              getAutoOpenLinks,
-              getDeviceNickname,
-              getNotificationTimeout
-            }
-          );
+          await reconcileWake("popup-open");
           const apiKey2 = getApiKey();
           const isWakeUp = apiKey2 && !sessionCache.isAuthenticated;
           if (isWakeUp) {
@@ -4818,40 +5569,10 @@
               count: sessionCache.recentPushes?.length ?? 0
             });
           }
+          sendResponse(await buildSessionDataResponse(apiKey2));
           if (apiKey2) {
-            debugLogger.general("INFO", "Force refreshing popup targets");
-            const [devices, chats] = await Promise.all([
-              fetchDevices(apiKey2),
-              fetchChats(apiKey2).catch((chatError) => {
-                debugLogger.general("WARN", "Failed to refresh chats for popup", {
-                  error: chatError.message
-                });
-                return sessionCache.chats;
-              })
-            ]);
-            sessionCache.devices = devices;
-            sessionCache.chats = chats;
+            void refreshPopupTargetsInBackground(apiKey2);
           }
-          const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
-          const deviceIden2 = await storageRepository.getDeviceIden();
-          const filteredPushes = onlyThisDevice && deviceIden2 ? sessionCache.recentPushes.filter((p) => p.target_device_iden === deviceIden2) : sessionCache.recentPushes;
-          debugLogger.general("INFO", "Recent pushes filtered for display", {
-            total: sessionCache.recentPushes.length,
-            filtered: filteredPushes.length,
-            onlyThisDevice,
-            hasDeviceIden: !!deviceIden2
-          });
-          sendResponse({
-            isAuthenticated: !!apiKey2,
-            userInfo: sessionCache.userInfo,
-            devices: sessionCache.devices,
-            recentPushes: filteredPushes,
-            chats: sessionCache.chats,
-            autoOpenLinks: getAutoOpenLinks(),
-            deviceNickname: getDeviceNickname(),
-            websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false,
-            state: stateMachine.getCurrentState()
-          });
         } catch (error) {
           debugLogger.general("ERROR", "Failed to handle GETSESSIONDATA", {
             error: error.message
@@ -4913,6 +5634,8 @@
       }).then(() => {
         return clearSessionCache();
       }).then(() => {
+        performanceMonitor.reset();
+      }).then(() => {
         sendResponse({ success: true });
       }).catch((error) => {
         debugLogger.general("ERROR", "Error during logout", null, error);
@@ -4922,7 +5645,7 @@
     } else if (message.action === "refreshSession" /* REFRESH_SESSION */) {
       (async () => {
         await ensureDebugConfigLoadedOnce();
-        await ensureConfigLoaded();
+        await hydrateBackgroundConfig();
         const apiKey2 = getApiKey();
         if (apiKey2) {
           refreshSessionCache(apiKey2).then(() => {
@@ -4982,6 +5705,10 @@
           storageRepository.setNotificationTimeout(settings.notificationTimeout)
         );
       }
+      if (settings.onlyThisDevice !== void 0) {
+        sessionCache.onlyThisDevice = settings.onlyThisDevice;
+        promises.push(storageRepository.setOnlyThisDevice(settings.onlyThisDevice));
+      }
       Promise.all(promises).then(() => {
         sendResponse({ success: true });
       }).catch((error) => {
@@ -4992,7 +5719,7 @@
     } else if (message.action === "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */) {
       (async () => {
         await ensureDebugConfigLoadedOnce();
-        await ensureConfigLoaded();
+        await hydrateBackgroundConfig();
         const apiKey2 = getApiKey();
         const deviceIden2 = getDeviceIden();
         if (apiKey2 && deviceIden2 && message.nickname) {
@@ -5151,18 +5878,89 @@
         sendResponse({ success: false, error: "Notification not found" });
       }
       return false;
-    } else if (message.action === "attemptReconnect") {
+    } else if (message.action === "attemptReconnect" /* ATTEMPT_RECONNECT */) {
       debugLogger.general("INFO", "Manual reconnection requested from popup");
       (async () => {
-        await stateMachine.transition("ATTEMPT_RECONNECT");
+        await reconcileWake("manual-attemptReconnect");
         sendResponse({ success: true });
+      })();
+      return true;
+    } else if (message.action === "uploadAndSendFile" /* UPLOAD_AND_SEND_FILE */) {
+      (async () => {
+        try {
+          await ensureDebugConfigLoadedOnce();
+          await hydrateBackgroundConfig();
+          const apiKey2 = getApiKey();
+          if (!apiKey2) {
+            sendResponse({
+              success: false,
+              error: buildUploadError(
+                "not_authenticated",
+                "metadata",
+                "Not logged in. Please try again."
+              )
+            });
+            return;
+          }
+          const uploadMessage = message;
+          const { fileName, fileType, fileBytes } = validateUploadMetadata(
+            uploadMessage,
+            sessionCache.userInfo?.max_upload_size
+          );
+          const uploadData = await requestFileUpload(apiKey2, fileName, fileType);
+          await uploadFileToServer(
+            uploadData,
+            new Blob([toArrayBuffer(fileBytes)], { type: fileType })
+          );
+          await sendFilePush(apiKey2, {
+            file_name: uploadData.file_name,
+            file_type: uploadData.file_type,
+            file_url: uploadData.file_url,
+            body: uploadMessage.body?.trim() || void 0,
+            device_iden: uploadMessage.device_iden,
+            email: uploadMessage.email,
+            source_device_iden: uploadMessage.source_device_iden
+          });
+          try {
+            await refreshPushes(notificationDataStore);
+          } catch (error) {
+            if (error.name === "InvalidCursorError") {
+              debugLogger.general(
+                "WARN",
+                "Caught invalid cursor error during file push send - triggering recovery"
+              );
+              await handleInvalidCursorRecovery(apiKey2, connectWebSocket);
+            } else {
+              debugLogger.general(
+                "ERROR",
+                "Error refreshing pushes after file send",
+                null,
+                error
+              );
+            }
+          }
+          sendResponse({ success: true });
+        } catch (error) {
+          const structuredError = toStructuredUploadError(error);
+          debugLogger.general(
+            "ERROR",
+            "Failed to upload and send file",
+            {
+              code: structuredError.code,
+              stage: structuredError.stage,
+              status: structuredError.status
+            },
+            error instanceof Error ? error : void 0
+          );
+          sendResponse({ success: false, error: structuredError });
+        }
       })();
       return true;
     } else if (message.action === "sendPush" /* SEND_PUSH */) {
       (async () => {
         try {
           await ensureDebugConfigLoadedOnce();
-          await ensureConfigLoaded();
+          await hydrateBackgroundConfig();
           const apiKey2 = getApiKey();
           if (!apiKey2) {
             sendResponse({
@@ -5176,26 +5974,7 @@
             sendResponse({ success: false, error: "Invalid push data" });
             return;
           }
-          const response = await fetch("https://api.pushbullet.com/v2/pushes", {
-            method: "POST",
-            headers: {
-              "Access-Token": apiKey2,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(pushData)
-          });
-          if (!response.ok) {
-            const errorText = await response.text();
-            let errorMessage = "Failed to send push";
-            try {
-              const errorData = JSON.parse(errorText);
-              if (errorData.error?.message) {
-                errorMessage = errorData.error.message;
-              }
-            } catch {
-            }
-            throw new Error(errorMessage);
-          }
+          await sendPush(apiKey2, pushData);
           try {
             await refreshPushes(notificationDataStore);
           } catch (error) {
@@ -5282,122 +6061,18 @@
     );
     chrome.notifications.clear(notificationId);
   });
-  globalThis.exportDebugInfo = function() {
-    return {
-      debugLogs: debugLogger.exportLogs(),
-      performanceData: performanceMonitor.exportPerformanceData(),
-      websocketState: wsStateMonitor.getStateReport(),
-      initializationData: initTracker.exportData(),
-      sessionCache: {
-        isAuthenticated: sessionCache.isAuthenticated,
-        lastUpdated: sessionCache.lastUpdated ? new Date(sessionCache.lastUpdated).toISOString() : "never",
-        userInfo: sessionCache.userInfo ? { email: sessionCache.userInfo.email?.substring(0, 3) + "***" } : null,
-        deviceCount: sessionCache.devices?.length || 0,
-        pushCount: sessionCache.recentPushes?.length || 0
-      },
-      websocketConnected: websocketClient2 ? websocketClient2.isConnected() : false
-    };
-  };
   debugLogger.general("INFO", "Background service worker initialized", {
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
-  async function bootstrap(trigger) {
-    debugLogger.general("INFO", "Bootstrap start", { trigger });
-    await ensureConfigLoaded(
-      {
-        setApiKey,
-        setDeviceIden,
-        setAutoOpenLinks,
-        setDeviceNickname,
-        setNotificationTimeout
-      },
-      {
-        getApiKey,
-        getDeviceIden,
-        getAutoOpenLinks,
-        getDeviceNickname,
-        getNotificationTimeout
-      }
-    ).catch((error) => {
-      debugLogger.general(
-        "ERROR",
-        "Failed to load config before STARTUP",
-        null,
-        error
-      );
-    });
-    debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
-    const apiKey2 = getApiKey();
-    const deviceIden2 = getDeviceIden();
-    const autoOpenLinks2 = getAutoOpenLinks();
-    const deviceNickname2 = getDeviceNickname();
-    debugLogger.general(
-      "INFO",
-      "[BOOTSTRAP_DEBUG] Config state after ensureConfigLoaded",
-      {
-        hasApiKey: !!apiKey2,
-        apiKeyLength: apiKey2?.length || 0,
-        apiKeyPrefix: apiKey2 ? `${apiKey2.substring(0, 8)}...` : "null",
-        hasDeviceIden: !!deviceIden2,
-        deviceIden: deviceIden2 || "null",
-        autoOpenLinks: autoOpenLinks2,
-        deviceNickname: deviceNickname2 || "null"
-      }
-    );
-    await stateMachineReady;
-    debugLogger.general("INFO", "[BOOTSTRAP_DEBUG] Triggering STARTUP event", {
-      hasApiKey: !!apiKey2,
-      apiKeyLength: apiKey2?.length || 0,
-      trigger
-    });
-    await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey2 });
-    debugLogger.general(
-      "INFO",
-      "[BOOTSTRAP_DEBUG] STARTUP transition completed",
-      {
-        newState: stateMachine.getCurrentState()
-      }
-    );
-    if (apiKey2 && stateMachine.isInState(
-      "idle" /* IDLE */
-    )) {
-      debugLogger.general(
-        "WARN",
-        "[Bootstrap] Detected orphaned session: have API key but state is IDLE. Triggering recovery."
-      );
-      try {
-        await stateMachine.transition(
-          "ATTEMPT_RECONNECT",
-          {
-            hasApiKey: true
-          }
-        );
-      } catch (error) {
-        debugLogger.general(
-          "ERROR",
-          "[Bootstrap] Failed to recover orphaned session",
-          null,
-          error
-        );
-      }
-    }
-    debugLogger.general(
-      "INFO",
-      "Bootstrap completed",
-      {
-        finalState: stateMachine.getCurrentState(),
-        trigger
-      }
-    );
-    void orchestrateInitialization(trigger, connectWebSocket);
-  }
   chrome.runtime.onStartup.addListener(async () => {
     await ensureDebugConfigLoadedOnce();
-    chrome.alarms.create("longSleepRecovery", { periodInMinutes: 5 });
+    await ensureLongSleepRecoveryAlarm();
     void bootstrap("startup");
+    setTimeout(checkExtensionHealth, 5e3);
   });
   chrome.runtime.onInstalled.addListener(async () => {
     await ensureDebugConfigLoadedOnce();
+    await ensureLongSleepRecoveryAlarm();
     void bootstrap("install");
   });
   async function checkExtensionHealth() {
@@ -5435,9 +6110,5 @@
       "[Diagnostic] Extension state is consistent"
     );
   }
-  chrome.runtime.onStartup.addListener(async () => {
-    await ensureDebugConfigLoadedOnce();
-    setTimeout(checkExtensionHealth, 5e3);
-  });
 })();
 //# sourceMappingURL=background.js.map

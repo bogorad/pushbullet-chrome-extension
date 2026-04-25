@@ -96,6 +96,46 @@ describe('options message actions', () => {
     );
   });
 
+  it('saves auto-open links on reconnect once per change', async () => {
+    await loadOptions();
+
+    const checkbox = document.getElementById('auto-open-links-on-reconnect') as HTMLInputElement;
+    checkbox.checked = true;
+    changeInput(checkbox);
+
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setAutoOpenLinksOnReconnect).toHaveBeenCalledWith(true);
+    });
+
+    expect(storageRepositoryMock.setAutoOpenLinksOnReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves only-this-device once after settings reload', async () => {
+    await loadOptions();
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const resetButton = document.getElementById('reset-settings') as HTMLButtonElement;
+    resetButton.click();
+
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.getDeviceNickname).toHaveBeenCalledTimes(2);
+    });
+
+    storageRepositoryMock.setOnlyThisDevice.mockClear();
+
+    const checkbox = document.getElementById('only-this-device') as HTMLInputElement;
+    checkbox.checked = true;
+    changeInput(checkbox);
+
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setOnlyThisDevice).toHaveBeenCalledWith(true);
+    });
+
+    expect(storageRepositoryMock.setOnlyThisDevice).toHaveBeenCalledTimes(1);
+    confirmSpy.mockRestore();
+  });
+
   it('does not send a no-op encryption password message', async () => {
     await loadOptions();
 

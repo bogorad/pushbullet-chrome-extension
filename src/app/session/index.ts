@@ -147,7 +147,16 @@ async function refreshSessionInBackground(apiKey: string): Promise<void> {
     const popupPushes = await getPopupRecentPushes(displayPushes);
 
     if (didRefreshUser && didRefreshDevices && didRefreshPushes && didRefreshChats) {
-      await persistSessionCache();
+      try {
+        await persistSessionCache();
+      } catch (error) {
+        debugLogger.general(
+          'WARN',
+          'Failed to persist session cache after background refresh',
+          null,
+          error as Error,
+        );
+      }
     } else {
       debugLogger.general('WARN', 'Skipping session cache persistence after partial background refresh', {
         didRefreshUser,
@@ -619,7 +628,16 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
       sessionCache.isAuthenticated = true;
       sessionCache.lastUpdated = Date.now();
       if (didRefreshChats) {
-        await persistSessionCache();
+        try {
+          await persistSessionCache();
+        } catch (error) {
+          debugLogger.general(
+            "WARN",
+            "Failed to persist session cache after refresh",
+            null,
+            error as Error,
+          );
+        }
       } else {
         debugLogger.general("WARN", "Skipping session cache persistence after partial refresh", {
           didRefreshChats,

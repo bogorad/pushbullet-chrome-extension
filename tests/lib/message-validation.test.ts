@@ -68,7 +68,9 @@ describe('message validation', () => {
     expect(isPrivilegedAction(MessageAction.UPDATE_DEVICE_NICKNAME)).toBe(true);
     expect(isPrivilegedAction(MessageAction.SETTINGS_CHANGED)).toBe(true);
     expect(isPrivilegedAction(MessageAction.UPDATE_DEBUG_CONFIG)).toBe(true);
-    expect(isPrivilegedAction('attemptReconnect')).toBe(true);
+    expect(isPrivilegedAction(MessageAction.GET_PUSH_DATA)).toBe(true);
+    expect(isPrivilegedAction(MessageAction.GET_NOTIFICATION_DATA)).toBe(true);
+    expect(isPrivilegedAction(MessageAction.ATTEMPT_RECONNECT)).toBe(true);
     expect(isPrivilegedAction(MessageAction.GET_SESSION_DATA)).toBe(false);
   });
 
@@ -87,12 +89,40 @@ describe('message validation', () => {
     ).toBe(false);
   });
 
+  it('rejects notification data actions from external senders', () => {
+    const externalSender = {
+      id: 'external-id',
+      url: 'chrome-extension://external-id/notification-detail.html',
+    };
+
+    expect(
+      validatePrivilegedMessage(MessageAction.GET_PUSH_DATA, externalSender),
+    ).toBe(false);
+    expect(
+      validatePrivilegedMessage(MessageAction.GET_NOTIFICATION_DATA, externalSender),
+    ).toBe(false);
+  });
+
   it('allows privileged actions from this extension', () => {
     expect(
       validatePrivilegedMessage(MessageAction.SEND_PUSH, {
         id: 'extension-id',
         url: 'chrome-extension://extension-id/popup.html',
       }),
+    ).toBe(true);
+  });
+
+  it('allows notification data actions from extension pages', () => {
+    const extensionPageSender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/notification-detail.html',
+    };
+
+    expect(
+      validatePrivilegedMessage(MessageAction.GET_PUSH_DATA, extensionPageSender),
+    ).toBe(true);
+    expect(
+      validatePrivilegedMessage(MessageAction.GET_NOTIFICATION_DATA, extensionPageSender),
     ).toBe(true);
   });
 
@@ -110,7 +140,7 @@ describe('message validation', () => {
         MessageAction.UPDATE_DEVICE_NICKNAME,
         MessageAction.SETTINGS_CHANGED,
         MessageAction.UPDATE_DEBUG_CONFIG,
-        'attemptReconnect',
+        MessageAction.ATTEMPT_RECONNECT,
       ]),
     );
     expect(unhandledActions).toEqual([]);

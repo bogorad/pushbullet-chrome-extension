@@ -13,6 +13,10 @@ declare const chrome: any;
 let initializeSessionCache: any;
 let sessionCache: any;
 
+const indexedDbMock = {
+  saveSessionCache: vi.fn().mockResolvedValue(undefined),
+};
+
 // Mock the dependencies
 vi.mock('../../src/lib/logging', () => ({
   debugLogger: {
@@ -31,6 +35,8 @@ vi.mock('../../src/app/api/client', () => ({
   fetchChats: vi.fn().mockResolvedValue([]),
   registerDevice: vi.fn().mockResolvedValue({ iden: 'device123' })
 }));
+
+vi.mock('../../src/infrastructure/storage/indexed-db', () => indexedDbMock);
 
 // Mock the storage repository
 vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
@@ -55,6 +61,7 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     // Reset all mocks
     vi.clearAllMocks();
     vi.resetModules();
+    indexedDbMock.saveSessionCache.mockResolvedValue(undefined);
 
     // Re-import the module to get fresh state
     const module = await import('../../src/app/session/index');
@@ -195,5 +202,11 @@ describe('initializeSessionCache - Race Condition Prevention', () => {
     // Verify WebSocket connection was initiated
     expect(mockConnectWebSocket).toHaveBeenCalled();
   });
-});
 
+  it('should reject initialization when session cache persistence fails', async () => {
+    indexedDbMock.saveSessionCache.mockRejectedValue(new Error('indexeddb write failed'));
+
+    await expect(initializeSessionCache('persist-failure')).rejects.toThrow('indexeddb write failed');
+    expect(sessionCache.isAuthenticated).toBe(false);
+  });
+});

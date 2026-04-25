@@ -30,7 +30,7 @@ export class PerformanceMonitor {
   getPerformanceSummary() { return { websocket: this.websocketMetrics, health: this.healthChecks, quality: this.quality, notifications: this.notificationMetrics, recovery: this.recoveryMetrics, metrics: Object.fromEntries(this.metrics) as Record<string, number> }; }
   getQualityMetrics() { return this.quality; }
   exportPerformanceData() { return { summary: this.getPerformanceSummary(), timeline: this.notificationTimeline.slice(-200) }; }
+  reset() { this.metrics = new Map<string, number>(); this.notificationTimeline = []; this.websocketMetrics = { connectionAttempts: 0, successfulConnections: 0, messagesReceived: 0, messagesProcessed: 0, reconnectionAttempts: 0, lastConnectionTime: null, totalDowntime: 0 }; this.notificationMetrics = { pushesReceived: 0, notificationsCreated: 0, notificationsFailed: 0, unknownTypes: 0 }; this.healthChecks = { success: 0, failure: 0, lastCheck: null }; this.quality = { disconnections: 0, permanentErrors: 0, consecutiveFailures: 0 }; this.recoveryMetrics = { invalidCursorRecoveries: 0, lastRecoveryTime: null }; this.timers = {}; }
 }
 
 export const performanceMonitor = new PerformanceMonitor();
-

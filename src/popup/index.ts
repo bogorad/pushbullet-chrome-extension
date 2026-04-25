@@ -134,7 +134,12 @@ async function initializeFromSessionData(response: PopupSessionData): Promise<vo
   // Update the "Send a Push" heading with version
   const sendPushHeading = document.getElementById('send-push-heading');
   if (sendPushHeading) {
-    sendPushHeading.innerHTML = `Send a Push <span class="version-text">(v.${version})</span>`;
+    sendPushHeading.textContent = 'Send a Push ';
+
+    const versionText = document.createElement('span');
+    versionText.className = 'version-text';
+    versionText.textContent = `(v.${version})`;
+    sendPushHeading.appendChild(versionText);
   }
 
   showSection("main");
@@ -319,7 +324,7 @@ function setupEventListeners(): void {
   manualReconnectBtn.addEventListener('click', async () => {
     // Send message to background to attempt reconnection
     await chrome.runtime.sendMessage({
-      action: 'attemptReconnect'
+      action: MessageAction.ATTEMPT_RECONNECT
     });
 
     // Close popup
@@ -641,6 +646,7 @@ function displayPushes(pushes: Push[]): void {
       const urlEl = document.createElement("a");
       urlEl.href = url as string;
       urlEl.target = "_blank";
+      urlEl.rel = "noopener noreferrer";
       urlEl.className = "push-url";
       urlEl.textContent = url || '';
       pushItem.appendChild(urlEl);

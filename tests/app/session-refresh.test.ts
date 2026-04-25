@@ -186,6 +186,26 @@ describe('session refresh flows', () => {
     expect(indexedDbMock.saveSessionCache).not.toHaveBeenCalled();
   });
 
+  it('logs and continues when background refresh cache persistence fails', async () => {
+    const cacheError = new Error('indexeddb write failed');
+    const { debugLogger } = await import('../../src/lib/logging');
+    indexedDbMock.saveSessionCache.mockRejectedValue(cacheError);
+
+    await expect(refreshSessionInBackground('test-api-key')).resolves.toBeUndefined();
+
+    expect(debugLogger.general).toHaveBeenCalledWith(
+      'WARN',
+      'Failed to persist session cache after background refresh',
+      null,
+      cacheError,
+    );
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: MessageAction.SESSION_DATA_UPDATED,
+      }),
+    );
+  });
+
   it('persists refreshed chats after a full session refresh', async () => {
     await refreshSessionCache('test-api-key');
 
@@ -201,6 +221,22 @@ describe('session refresh flows', () => {
           expect.objectContaining({ iden: 'push-1' }),
         ]),
       }),
+    );
+  });
+
+  it('logs and continues when session refresh cache persistence fails', async () => {
+    const cacheError = new Error('indexeddb write failed');
+    const { debugLogger } = await import('../../src/lib/logging');
+    indexedDbMock.saveSessionCache.mockRejectedValue(cacheError);
+
+    await expect(refreshSessionCache('test-api-key')).resolves.toBeUndefined();
+
+    expect(sessionCache.isAuthenticated).toBe(true);
+    expect(debugLogger.general).toHaveBeenCalledWith(
+      'WARN',
+      'Failed to persist session cache after refresh',
+      null,
+      cacheError,
     );
   });
 });

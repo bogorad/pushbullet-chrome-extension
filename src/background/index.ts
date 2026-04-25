@@ -27,8 +27,10 @@ import {
   requestFileUpload,
   uploadFileToServer,
   sendFilePush,
+  sendPush,
   PushbulletUploadError,
 } from "../app/api/client";
+import type { SendPushRequest } from "../app/api/client";
 import { installDiagnosticsMessageHandler } from "./diagnostics";
 import {
   ensureDebugConfigLoadedOnce,
@@ -40,7 +42,11 @@ import { PushbulletCrypto } from "../lib/crypto";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
 import { MessageAction } from "../types/domain";
 import { globalEventBus } from "../lib/events/event-bus";
-import { ServiceWorkerStateMachine, ServiceWorkerState } from "./state-machine";
+import {
+  ServiceWorkerStateMachine,
+  ServiceWorkerState,
+  type InitializationTransitionPayload,
+} from "./state-machine";
 import {
   getApiKey,
   setApiKey,
@@ -73,6 +79,7 @@ import { validatePrivilegedMessage } from "../lib/security/message-validation";
 import { handleKeepaliveAlarm } from "./keepalive";
 import type {
   Push,
+  PushBase,
   SessionDataResponse,
   StructuredUploadError,
   UploadAndSendFileMessage,
@@ -83,38 +90,13 @@ import {
   saveSessionCache,
   clearSessionCache,
 } from "../infrastructure/storage/indexed-db";
-
-function hasStringValue(value: unknown): boolean {
-  return typeof value === "string" && value.length > 0;
-}
-
-function summarizePushForLog(push: Partial<Push>): Record<string, unknown> {
-  const pushRecord = push as Record<string, unknown>;
-  const notifications = Array.isArray(pushRecord.notifications)
-    ? pushRecord.notifications
-    : [];
-
-  return {
-    iden: pushRecord.iden,
-    type: pushRecord.type,
-    encrypted: !!pushRecord.encrypted,
-    contentFlags: {
-      heading: hasStringValue(pushRecord.title),
-      message: hasStringValue(pushRecord.body),
-      link: hasStringValue(pushRecord.url),
-      fileLink: hasStringValue(pushRecord.file_url),
-      imageLink: hasStringValue(pushRecord.image_url),
-      ciphertext: hasStringValue(pushRecord.ciphertext),
-    },
-    notificationsCount: notifications.length,
-    created: pushRecord.created,
-    modified: pushRecord.modified,
-  };
-}
+import { summarizePushForLog } from "../app/push-summary";
 
 const DEFAULT_FILE_TYPE = "application/octet-stream";
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_FILE_TYPE_LENGTH = 255;
+const LONG_SLEEP_RECOVERY_ALARM = "longSleepRecovery";
+const LONG_SLEEP_RECOVERY_PERIOD_MINUTES = 5;
 
 function buildUploadError(
   code: string,
@@ -229,6 +211,25 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
   return buffer;
+}
+
+function getAlarm(name: string): Promise<chrome.alarms.Alarm | undefined> {
+  return new Promise((resolve) => {
+    chrome.alarms.get(name, (alarm) => {
+      resolve(alarm);
+    });
+  });
+}
+
+async function ensureLongSleepRecoveryAlarm(): Promise<void> {
+  const alarm = await getAlarm(LONG_SLEEP_RECOVERY_ALARM);
+  if (alarm) {
+    return;
+  }
+
+  chrome.alarms.create(LONG_SLEEP_RECOVERY_ALARM, {
+    periodInMinutes: LONG_SLEEP_RECOVERY_PERIOD_MINUTES,
+  });
 }
 
 function isStructuredUploadError(error: unknown): error is StructuredUploadError {
@@ -367,7 +368,7 @@ globalEventBus.on("websocket:tickle:device", async () => {
   }
 });
 
-globalEventBus.on("websocket:push", async (push: Push | any) => {
+globalEventBus.on("websocket:push", async (push: Push) => {
   // RACE CONDITION FIX: Ensure configuration is loaded before processing push
   await hydrateBackgroundConfig();
 
@@ -389,7 +390,7 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
         });
 
         const decrypted = await PushbulletCrypto.decryptPush(
-          push as any,
+          push,
           password,
           sessionCache.userInfo.iden,
         );
@@ -437,9 +438,10 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
   }
 
   // ✅ FIX: Verify type field exists after decryption
-  if (!decryptedPush.type) {
+  const pushWithOptionalType = decryptedPush as PushBase & { type?: Push['type'] };
+  if (!pushWithOptionalType.type) {
     debugLogger.general("ERROR", "Push has no type field after decryption", {
-      pushIden: (decryptedPush as any).iden,
+      pushIden: pushWithOptionalType.iden,
       pushSummary: summarizePushForLog(decryptedPush),
     });
     return;
@@ -572,7 +574,7 @@ let stateMachine: ServiceWorkerStateMachine;
 
 // Define the callbacks once for reuse
 const stateMachineCallbacks = {
-  onInitialize: async (data: any) => {
+  onInitialize: async (data?: InitializationTransitionPayload) => {
     // Initialize session cache
     const apiKey = data?.apiKey || getApiKey();
     if (apiKey) {
@@ -828,9 +830,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   // Ensure state machine is ready
   await stateMachineReady;
 
-  if (alarm.name === "longSleepRecovery") {
+  if (alarm.name === LONG_SLEEP_RECOVERY_ALARM) {
     debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
-    await reconcileWake("longSleepRecovery");
+    await reconcileWake(LONG_SLEEP_RECOVERY_ALARM);
     return;
   }
 
@@ -980,7 +982,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
   }
 
-  if (message.type === "GET_PUSH_DATA") {
+  if (message.action === MessageAction.GET_PUSH_DATA) {
     debugLogger.general("DEBUG", "GET_PUSH_DATA request received", {
       notificationId: message.notificationId,
     });
@@ -1181,6 +1183,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .then(() => {
         return clearSessionCache();
+      })
+      .then(() => {
+        performanceMonitor.reset();
       })
       .then(() => {
         sendResponse({ success: true });
@@ -1424,7 +1429,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(() => {
           sendResponse({ success: true });
         })
-        .catch((error: any) => {
+        .catch((error: Error) => {
           debugLogger.general(
             "ERROR",
             "Failed to update debug config",
@@ -1492,7 +1497,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "Notification not found" });
     }
     return false; // Synchronous response
-  } else if (message.action === "attemptReconnect") {
+  } else if (message.action === MessageAction.ATTEMPT_RECONNECT) {
     debugLogger.general("INFO", "Manual reconnection requested from popup");
 
     (async () => {
@@ -1602,31 +1607,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        // Send push via API
-        const response = await fetch("https://api.pushbullet.com/v2/pushes", {
-          method: "POST",
-          headers: {
-            "Access-Token": apiKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(pushData),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          let errorMessage = "Failed to send push";
-          try {
-            const errorData = JSON.parse(errorText) as {
-              error?: { message?: string };
-            };
-            if (errorData.error?.message) {
-              errorMessage = errorData.error.message;
-            }
-          } catch {
-            // Use default
-          }
-          throw new Error(errorMessage);
-        }
+        await sendPush(apiKey, pushData as SendPushRequest);
 
         // Refresh pushes after sending
         try {
@@ -1731,46 +1712,22 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
   chrome.notifications.clear(notificationId);
 });
 
-// Export debug info function for console access
-(globalThis as any).exportDebugInfo = function () {
-  return {
-    debugLogs: debugLogger.exportLogs(),
-    performanceData: performanceMonitor.exportPerformanceData(),
-    websocketState: wsStateMonitor.getStateReport(),
-    initializationData: initTracker.exportData(),
-    sessionCache: {
-      isAuthenticated: sessionCache.isAuthenticated,
-      lastUpdated: sessionCache.lastUpdated
-        ? new Date(sessionCache.lastUpdated).toISOString()
-        : "never",
-      userInfo: sessionCache.userInfo
-        ? { email: sessionCache.userInfo.email?.substring(0, 3) + "***" }
-        : null,
-      deviceCount: sessionCache.devices?.length || 0,
-      pushCount: sessionCache.recentPushes?.length || 0,
-    },
-    websocketConnected: websocketClient ? websocketClient.isConnected() : false,
-  };
-};
-
 debugLogger.general("INFO", "Background service worker initialized", {
   timestamp: new Date().toISOString(),
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await ensureDebugConfigLoadedOnce();
-  chrome.alarms.create('longSleepRecovery', { periodInMinutes: 5 });
+  await ensureLongSleepRecoveryAlarm();
   void bootstrap("startup");
-});
-chrome.runtime.onInstalled.addListener(async () => {
-  await ensureDebugConfigLoadedOnce();
-  void bootstrap("install");
+  setTimeout(checkExtensionHealth, 5000); // Wait 5 seconds after startup
 });
 
-// Optional: if you also track other wake-ups, funnel them here too
-// chrome.alarms.onAlarm.addListener(a => {
-//   if (a.name === 'keepAlive' || a.name === 'recovery') { void bootstrap('wakeup'); }
-// });
+chrome.runtime.onInstalled.addListener(async () => {
+  await ensureDebugConfigLoadedOnce();
+  await ensureLongSleepRecoveryAlarm();
+  void bootstrap("install");
+});
 
 // Diagnostic function to check extension health
 async function checkExtensionHealth(): Promise<void> {
@@ -1819,11 +1776,5 @@ async function checkExtensionHealth(): Promise<void> {
     "[Diagnostic] Extension state is consistent",
   );
 }
-
-// Run diagnostic on startup
-chrome.runtime.onStartup.addListener(async () => {
-  await ensureDebugConfigLoadedOnce();
-  setTimeout(checkExtensionHealth, 5000); // Wait 5 seconds after startup
-});
 
 export { stateMachine };

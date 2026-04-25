@@ -132,8 +132,24 @@ const pruneProcessedPushMarkers = (
  * chrome.storage API.
  */
 export class ChromeStorageRepository implements StorageRepository {
+  private fallbackEncryptionPassword: string | null = null;
+
   private getSessionStorage(): chrome.storage.StorageArea | undefined {
     return chrome.storage.session;
+  }
+
+  private async removeLegacyEncryptionPassword(): Promise<void> {
+    try {
+      await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+      const result = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+      if (getStringOrNull(result[ENCRYPTION_PASSWORD_KEY]) !== null) {
+        console.warn('Storage: Failed to remove legacy encryption password from local storage');
+      }
+    } catch (error) {
+      console.warn('Storage: Failed to clean up legacy encryption password from local storage', {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+    }
   }
 
   /**
@@ -256,27 +272,33 @@ export class ChromeStorageRepository implements StorageRepository {
     const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
     if (localPassword && sessionStorage) {
       await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
-      await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+      await this.removeLegacyEncryptionPassword();
+    }
+    if (!sessionStorage) {
+      return localPassword ?? this.fallbackEncryptionPassword;
     }
     return localPassword;
   }
 
   /**
    * Set Encryption Password in session storage when available.
-   * Falls back to local storage only on browsers without storage.session.
+   * Falls back to memory only on browsers without storage.session.
    */
   async setEncryptionPassword(password: string | null): Promise<void> {
     const sessionStorage = this.getSessionStorage();
     if (password === null) {
+      this.fallbackEncryptionPassword = null;
       await Promise.all([
         sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
         chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
       ]);
     } else if (sessionStorage) {
+      this.fallbackEncryptionPassword = null;
       await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
-      await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+      await this.removeLegacyEncryptionPassword();
     } else {
-      await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+      this.fallbackEncryptionPassword = password;
+      await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
     }
   }
 
