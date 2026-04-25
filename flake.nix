@@ -22,8 +22,7 @@
           packages = with pkgs; [
             nodejs_24
             nix-ld
-            nodePackages.npm # Use npm instead of pnpm
-            nodePackages.typescript
+            typescript
             esbuild # build
             prettier # format js/ts
             biome # format json
@@ -40,10 +39,10 @@
             # Ensure npm dependencies are installed
             if [ ! -d node_modules ]; then
               echo "Installing npm dependencies..."
-              ${pkgs.nodePackages.npm}/bin/npm install || { echo "Error: npm install failed"; exit 1; }
+              ${pkgs.nodejs_24}/bin/npm install || { echo "Error: npm install failed"; exit 1; }
             fi
             # Ensure vitest is installed
-            ${pkgs.nodePackages.npm}/bin/npm install vitest 2>/dev/null || \
+            ${pkgs.nodejs_24}/bin/npm install vitest 2>/dev/null || \
               { echo "Error: npm install vitest failed"; exit 1; }
             # Add node_modules/.bin to PATH
             export PATH=$PWD/node_modules/.bin:$PATH

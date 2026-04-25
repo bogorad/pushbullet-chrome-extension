@@ -63,3 +63,5 @@ dolt.user: "root"
 
 
 backup.enabled: false
+
+dolt.auto-push: false
