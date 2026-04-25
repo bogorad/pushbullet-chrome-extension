@@ -22,6 +22,7 @@ export interface CloseInfo {
  * Events emitted:
  * - websocket:connected - When WebSocket connection is established
  * - websocket:disconnected - When WebSocket connection is closed
+ * - websocket:permanent-error - When WebSocket closes with an unrecoverable code
  * - websocket:message - When a message is received
  * - websocket:tickle:push - When a push tickle is received
  * - websocket:tickle:device - When a device tickle is received
@@ -263,27 +264,20 @@ export class WebSocketClient {
           reconnectAttempts: this.reconnectAttempts,
         });
 
-        // Emit disconnected event
-        globalEventBus.emit("websocket:disconnected", {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-        });
-
-        // Emit state change for popup
-        globalEventBus.emit("websocket:state", "disconnected");
-
-        // Permanent error: stop and notify
-        if (
+        const isPermanentClose =
           event.code === 1008 ||
           event.code === 4001 ||
-          (event.code >= 4000 && event.code < 5000)
-        ) {
+          (event.code >= 4000 && event.code < 5000);
+
+        // Permanent error: stop, notify, and let the lifecycle enter ERROR.
+        if (isPermanentClose) {
           debugLogger.websocket(
             "ERROR",
             "Permanent WebSocket error - stopping reconnection attempts",
             closeInfo,
           );
+          globalEventBus.emit("websocket:permanent-error", closeInfo);
+          globalEventBus.emit("websocket:state", "permanent-error");
           try {
             showPermanentWebSocketError(closeInfo);
           } catch {
@@ -291,6 +285,12 @@ export class WebSocketClient {
           }
           return;
         }
+
+        // Emit disconnected event for recoverable closes.
+        globalEventBus.emit("websocket:disconnected", closeInfo);
+
+        // Emit state change for popup
+        globalEventBus.emit("websocket:state", "disconnected");
       };
     } catch (error) {
       debugLogger.websocket(

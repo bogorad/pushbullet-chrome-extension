@@ -247,15 +247,13 @@ export enum MessageAction {
   UPDATE_DEVICE_NICKNAME = 'updateDeviceNickname',
   LOG = 'log',
   SEND_PUSH = 'sendPush',
+  UPLOAD_AND_SEND_FILE = 'uploadAndSendFile',
   GET_NOTIFICATION_DATA = 'getNotificationData',
   CLEAR_ALL_LOGS = 'clearAllLogs',
   UPDATE_DEBUG_CONFIG = 'updateDebugConfig',
   EXPORT_DEBUG_DATA = 'exportDebugData',
   GET_DEBUG_SUMMARY = 'getDebugSummary',
   CONNECTION_STATE_CHANGED = 'connectionStateChanged',
-  AUTO_OPEN_LINKS_CHANGED = 'autoOpenLinksChanged',
-  ENCRYPTION_PASSWORD_CHANGED = 'encryptionPasswordChanged',
-  DEBUG_MODE_CHANGED = 'debugModeChanged',
 }
 
 export interface GetSessionDataMessage {
@@ -296,8 +294,6 @@ export interface SettingsPayload {
   deviceNickname?: string;
   notificationTimeout?: number;
   autoOpenLinks?: boolean;
-  autoOpenLinksOnReconnect?: boolean;
-  debugMode?: boolean;
   onlyThisDevice?: boolean;
 }
 
@@ -327,6 +323,31 @@ export interface UpdateDeviceNicknameMessage {
   nickname: string;
 }
 
+export type UploadStage = 'metadata' | 'upload-request' | 'file-upload' | 'file-push' | 'unknown';
+
+export interface StructuredUploadError {
+  code: string;
+  message: string;
+  stage: UploadStage;
+  status?: number;
+}
+
+export interface UploadAndSendFileMessage {
+  action: MessageAction.UPLOAD_AND_SEND_FILE;
+  fileBase64: string;
+  fileName: string;
+  fileType?: string;
+  fileSize: number;
+  body?: string;
+  device_iden?: string;
+  email?: string;
+  source_device_iden?: string;
+}
+
+export type UploadAndSendFileResponse =
+  | { success: true }
+  | { success: false; error: StructuredUploadError };
+
 export type ChromeMessage =
   | GetSessionDataMessage
   | ApiKeyChangedMessage
@@ -335,7 +356,8 @@ export type ChromeMessage =
   | SettingsChangedMessage
   | LogoutMessage
   | RefreshSessionMessage
-  | UpdateDeviceNicknameMessage;
+  | UpdateDeviceNicknameMessage
+  | UploadAndSendFileMessage;
 
 // ============================================================================
 // Type Guards

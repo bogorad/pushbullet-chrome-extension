@@ -220,6 +220,87 @@ const systemInfoEl = getElementById<HTMLDivElement>('system-info');
 let autoRefreshInterval: number | null = null;
 let currentData: DebugSummary['summary'] | null = null;
 
+const VALID_LOG_LEVELS = new Set<string>(['DEBUG', 'INFO', 'WARN', 'ERROR']);
+
+function safeLogLevel(level: string): LogEntry['level'] {
+  if (VALID_LOG_LEVELS.has(level)) {
+    return level as LogEntry['level'];
+  }
+
+  return 'INFO';
+}
+
+function renderLoading(element: HTMLElement, message: string): void {
+  const loading = document.createElement('p');
+  loading.className = 'loading';
+  loading.textContent = message;
+  element.replaceChildren(loading);
+}
+
+function stringifyForDisplay(value: unknown): string {
+  try {
+    const rendered = JSON.stringify(value, null, 2);
+    return rendered ?? '';
+  } catch {
+    return '[Unable to render value]';
+  }
+}
+
+function appendMetricRow(
+  container: HTMLElement,
+  label: string,
+  value: string,
+  valueClass?: string,
+): void {
+  const row = document.createElement('p');
+  const strong = document.createElement('strong');
+  const span = document.createElement('span');
+
+  strong.textContent = `${label}:`;
+  span.textContent = value;
+
+  if (valueClass) {
+    span.className = valueClass;
+  }
+
+  row.append(strong, document.createTextNode(' '), span);
+  container.appendChild(row);
+}
+
+function appendTextRow(container: HTMLElement, label: string, value: string): void {
+  const row = document.createElement('p');
+  const strong = document.createElement('strong');
+
+  strong.textContent = `${label}:`;
+  row.append(strong, document.createTextNode(` ${value}`));
+  container.appendChild(row);
+}
+
+function appendDivider(container: HTMLElement, margin: string): void {
+  const divider = document.createElement('hr');
+  divider.style.margin = margin;
+  divider.style.borderColor = '#444';
+  container.appendChild(divider);
+}
+
+function appendSectionLabel(container: HTMLElement, label: string): void {
+  const sectionLabel = document.createElement('p');
+  sectionLabel.style.fontSize = '11px';
+  sectionLabel.style.color = '#888';
+  sectionLabel.style.marginBottom = '5px';
+  sectionLabel.textContent = label;
+  container.appendChild(sectionLabel);
+}
+
+function appendPre(container: HTMLElement, text: string, className?: string): void {
+  const pre = document.createElement('pre');
+  if (className) {
+    pre.className = className;
+  }
+  pre.textContent = text;
+  container.appendChild(pre);
+}
+
 /**
  * Set up event listeners
  */
@@ -421,7 +502,7 @@ function updateSummary(data: DebugSummary['summary']): void {
  */
 function renderLogs(): void {
   if (!currentData || !currentData.logs) {
-    logsContainer.innerHTML = '<p class="loading">No logs available</p>';
+    renderLoading(logsContainer, 'No logs available');
     return;
   }
 
@@ -460,29 +541,60 @@ function renderLogs(): void {
 
   // Render logs
   if (filteredLogs.length === 0) {
-    logsContainer.innerHTML = '<p class="loading">No logs match the current filters</p>';
+    renderLoading(logsContainer, 'No logs match the current filters');
     return;
   }
 
   // By creating a copy with [...filteredLogs] and then reversing it,
   // we ensure the newest logs are processed first without changing the original data.
-  logsContainer.innerHTML = [...filteredLogs].reverse().map(log => {
-    const dataStr = log.data ? JSON.stringify(log.data, null, 2) : '';
-    const errorStr = log.error ? `${log.error.name}: ${log.error.message}` : '';
+  const fragment = document.createDocumentFragment();
 
-    return `
-      <div class="log-entry ${log.level}">
-        <div class="log-header">
-          <span class="log-category">[${log.category}]</span>
-          <span class="log-level ${log.level}">${log.level}</span>
-        </div>
-        <div class="log-timestamp">${log.timestamp}</div>
-        <div class="log-message">${log.message}</div>
-        ${dataStr ? `<div class="log-data">${dataStr}</div>` : ''}
-        ${errorStr ? `<div class="log-data error">${errorStr}</div>` : ''}
-      </div>
-    `;
-  }).join('');
+  [...filteredLogs].reverse().forEach(log => {
+    const logLevel = safeLogLevel(log.level);
+    const entry = document.createElement('div');
+    entry.classList.add('log-entry', logLevel);
+
+    const header = document.createElement('div');
+    header.className = 'log-header';
+
+    const category = document.createElement('span');
+    category.className = 'log-category';
+    category.textContent = `[${log.category}]`;
+
+    const level = document.createElement('span');
+    level.classList.add('log-level', logLevel);
+    level.textContent = logLevel;
+
+    header.append(category, level);
+
+    const timestamp = document.createElement('div');
+    timestamp.className = 'log-timestamp';
+    timestamp.textContent = log.timestamp;
+
+    const message = document.createElement('div');
+    message.className = 'log-message';
+    message.textContent = log.message;
+
+    entry.append(header, timestamp, message);
+
+    if (log.data !== undefined) {
+      const data = document.createElement('div');
+      data.className = 'log-data';
+      data.textContent = stringifyForDisplay(log.data);
+      entry.appendChild(data);
+    }
+
+    if (log.error) {
+      const error = document.createElement('div');
+      error.classList.add('log-data', 'error');
+      error.textContent = `${log.error.name}: ${log.error.message}`;
+      entry.appendChild(error);
+    }
+
+    fragment.appendChild(entry);
+  });
+
+  logsContainer.replaceChildren(fragment);
 }
 
 /**
@@ -508,53 +620,84 @@ function formatDuration(ms: number): string {
  */
 function renderPerformanceMetrics(performance: PerformanceData | undefined): void {
   if (!performance) {
-    websocketMetricsEl.innerHTML = '<p class="loading">No data available</p>';
-    qualityMetricsEl.innerHTML = '<p class="loading">No data available</p>';
-    notificationMetricsEl.innerHTML = '<p class="loading">No data available</p>';
+    renderLoading(websocketMetricsEl, 'No data available');
+    renderLoading(qualityMetricsEl, 'No data available');
+    renderLoading(notificationMetricsEl, 'No data available');
     return;
   }
 
   // WebSocket metrics
   if (performance.websocket) {
     const ws = performance.websocket;
-    websocketMetricsEl.innerHTML = `
-      <p><strong>Connection Attempts:</strong> <span>${ws.connectionAttempts || 0}</span></p>
-      <p><strong>Successful Connections:</strong> <span>${ws.successfulConnections || 0}</span></p>
-      <p><strong>Messages Received:</strong> <span>${ws.messagesReceived || 0}</span></p>
-      <p><strong>Reconnection Attempts:</strong> <span>${ws.reconnectionAttempts || 0}</span></p>
-      <p><strong>Last Connection:</strong> <span>${ws.lastConnectionTime ? new Date(ws.lastConnectionTime).toLocaleString() : 'Never'}</span></p>
-    `;
+    websocketMetricsEl.replaceChildren();
+    appendMetricRow(websocketMetricsEl, 'Connection Attempts', (ws.connectionAttempts || 0).toString());
+    appendMetricRow(websocketMetricsEl, 'Successful Connections', (ws.successfulConnections || 0).toString());
+    appendMetricRow(websocketMetricsEl, 'Messages Received', (ws.messagesReceived || 0).toString());
+    appendMetricRow(websocketMetricsEl, 'Reconnection Attempts', (ws.reconnectionAttempts || 0).toString());
+    appendMetricRow(
+      websocketMetricsEl,
+      'Last Connection',
+      ws.lastConnectionTime ? new Date(ws.lastConnectionTime).toLocaleString() : 'Never',
+    );
   } else {
-    websocketMetricsEl.innerHTML = '<p class="loading">No websocket data available</p>';
+    renderLoading(websocketMetricsEl, 'No websocket data available');
   }
 
   // Connection quality metrics
   if (performance.qualityMetrics) {
     const quality = performance.qualityMetrics;
-    qualityMetricsEl.innerHTML = `
-      <p><strong>Average Latency:</strong> <span>${quality.averageLatency ? quality.averageLatency.toFixed(0) + 'ms' : 'N/A'}</span></p>
-      <p><strong>Min/Max Latency:</strong> <span>${quality.minLatency ? quality.minLatency.toFixed(0) : 'N/A'} / ${quality.maxLatency ? quality.maxLatency.toFixed(0) : 'N/A'} ms</span></p>
-      <p><strong>Total Uptime:</strong> <span>${formatDuration(quality.connectionUptime)}</span></p>
-      <p><strong>Current Uptime:</strong> <span>${formatDuration(quality.currentUptime)}</span></p>
-      <p><strong>Disconnections:</strong> <span>${quality.disconnectionCount || 0}</span></p>
-      <p><strong>Health Checks:</strong> <span class="success">${quality.healthChecksPassed || 0} passed</span> / <span class="error">${quality.healthChecksFailed || 0} failed</span></p>
-      <p><strong>Consecutive Failures:</strong> <span class="${quality.consecutiveFailures > 3 ? 'error' : ''}">${quality.consecutiveFailures || 0}</span></p>
-    `;
+    const healthChecks = document.createElement('p');
+    const healthChecksLabel = document.createElement('strong');
+    const passed = document.createElement('span');
+    const failed = document.createElement('span');
+
+    qualityMetricsEl.replaceChildren();
+    appendMetricRow(
+      qualityMetricsEl,
+      'Average Latency',
+      quality.averageLatency ? `${quality.averageLatency.toFixed(0)}ms` : 'N/A',
+    );
+    appendMetricRow(
+      qualityMetricsEl,
+      'Min/Max Latency',
+      `${quality.minLatency ? quality.minLatency.toFixed(0) : 'N/A'} / ${quality.maxLatency ? quality.maxLatency.toFixed(0) : 'N/A'} ms`,
+    );
+    appendMetricRow(qualityMetricsEl, 'Total Uptime', formatDuration(quality.connectionUptime));
+    appendMetricRow(qualityMetricsEl, 'Current Uptime', formatDuration(quality.currentUptime));
+    appendMetricRow(qualityMetricsEl, 'Disconnections', (quality.disconnectionCount || 0).toString());
+
+    healthChecksLabel.textContent = 'Health Checks:';
+    passed.className = 'success';
+    passed.textContent = `${quality.healthChecksPassed || 0} passed`;
+    failed.className = 'error';
+    failed.textContent = `${quality.healthChecksFailed || 0} failed`;
+    healthChecks.append(healthChecksLabel, document.createTextNode(' '), passed, document.createTextNode(' / '), failed);
+    qualityMetricsEl.appendChild(healthChecks);
+
+    appendMetricRow(
+      qualityMetricsEl,
+      'Consecutive Failures',
+      (quality.consecutiveFailures || 0).toString(),
+      quality.consecutiveFailures > 3 ? 'error' : undefined,
+    );
   } else {
-    qualityMetricsEl.innerHTML = '<p class="loading">No quality metrics available</p>';
+    renderLoading(qualityMetricsEl, 'No quality metrics available');
   }
 
   // Notification metrics
   if (performance.notifications) {
     const notif = performance.notifications;
-    notificationMetricsEl.innerHTML = `
-      <p><strong>Pushes Received:</strong> <span>${notif.pushesReceived || 0}</span></p>
-      <p><strong>Notifications Created:</strong> <span>${notif.notificationsCreated || 0}</span></p>
-      <p><strong>Notifications Failed:</strong> <span>${notif.notificationsFailed || 0}</span></p>
-      <p><strong>Avg Processing Time:</strong> <span>${notif.averageProcessingTime ? notif.averageProcessingTime.toFixed(2) + 'ms' : 'N/A'}</span></p>
-    `;
+    notificationMetricsEl.replaceChildren();
+    appendMetricRow(notificationMetricsEl, 'Pushes Received', (notif.pushesReceived || 0).toString());
+    appendMetricRow(notificationMetricsEl, 'Notifications Created', (notif.notificationsCreated || 0).toString());
+    appendMetricRow(notificationMetricsEl, 'Notifications Failed', (notif.notificationsFailed || 0).toString());
+    appendMetricRow(
+      notificationMetricsEl,
+      'Avg Processing Time',
+      notif.averageProcessingTime ? `${notif.averageProcessingTime.toFixed(2)}ms` : 'N/A',
+    );
   } else {
-    notificationMetricsEl.innerHTML = '<p class="loading">No notification metrics available</p>';
+    renderLoading(notificationMetricsEl, 'No notification metrics available');
   }
 }
 
@@ -563,26 +706,38 @@ function renderPerformanceMetrics(performance: PerformanceData | undefined): voi
  */
 function renderInitializationStats(initStats: InitializationStats | undefined): void {
   if (!initStats || !initStats.stats) {
-    initializationStatsEl.innerHTML = '<p class="loading">No data available</p>';
+    renderLoading(initializationStatsEl, 'No data available');
     return;
   }
 
   const stats = initStats.stats;
-  initializationStatsEl.innerHTML = `
-    <p><strong>Total Initializations:</strong> <span>${stats.total || 0}</span></p>
-    <p><strong>On Install/Update:</strong> <span>${stats.onInstalled || 0}</span></p>
-    <p><strong>On Browser Startup:</strong> <span>${stats.onStartup || 0}</span></p>
-    <p><strong>Service Worker Wakeup:</strong> <span>${stats.serviceWorkerWakeup || 0}</span></p>
-    <p><strong>Unknown Source:</strong> <span>${stats.unknown || 0}</span></p>
-    <p><strong>Last Initialization:</strong> <span>${stats.lastInitialization ? new Date(stats.lastInitialization).toLocaleString() : 'Never'}</span></p>
-  `;
+  initializationStatsEl.replaceChildren();
+  appendMetricRow(initializationStatsEl, 'Total Initializations', (stats.total || 0).toString());
+  appendMetricRow(initializationStatsEl, 'On Install/Update', (stats.onInstalled || 0).toString());
+  appendMetricRow(initializationStatsEl, 'On Browser Startup', (stats.onStartup || 0).toString());
+  appendMetricRow(initializationStatsEl, 'Service Worker Wakeup', (stats.serviceWorkerWakeup || 0).toString());
+  appendMetricRow(initializationStatsEl, 'Unknown Source', (stats.unknown || 0).toString());
+  appendMetricRow(
+    initializationStatsEl,
+    'Last Initialization',
+    stats.lastInitialization ? new Date(stats.lastInitialization).toLocaleString() : 'Never',
+  );
 
   // Show recent initializations
   if (stats.recentInitializations && stats.recentInitializations.length > 0) {
-    const recentHtml = stats.recentInitializations.map(init =>
-      `<p style="font-size: 12px; margin: 5px 0;"><strong>${init.source}:</strong> ${new Date(init.timestamp).toLocaleTimeString()}</p>`
-    ).join('');
-    initializationStatsEl.innerHTML += '<hr style="margin: 10px 0; border-color: #444;"><p style="font-size: 11px; color: #888; margin-bottom: 5px;">Recent (last 10):</p>' + recentHtml;
+    appendDivider(initializationStatsEl, '10px 0');
+    appendSectionLabel(initializationStatsEl, 'Recent (last 10):');
+
+    stats.recentInitializations.forEach(init => {
+      const row = document.createElement('p');
+      const source = document.createElement('strong');
+
+      row.style.fontSize = '12px';
+      row.style.margin = '5px 0';
+      source.textContent = `${init.source}:`;
+      row.append(source, document.createTextNode(` ${new Date(init.timestamp).toLocaleTimeString()}`));
+      initializationStatsEl.appendChild(row);
+    });
   }
 }
 
@@ -591,19 +746,22 @@ function renderInitializationStats(initStats: InitializationStats | undefined): 
  */
 function renderMv3LifecycleMetrics(stats: Mv3LifecycleStats | undefined): void {
   if (!stats) {
-    mv3LifecycleMetricsEl.innerHTML = '<p class="loading">No MV3 stats available</p>';
+    renderLoading(mv3LifecycleMetricsEl, 'No MV3 stats available');
     return;
   }
 
-  mv3LifecycleMetricsEl.innerHTML = `
-    <p><strong>Service Worker Restarts:</strong> <span>${stats.restarts || 0}</span></p>
-    <p><strong>Avg. Recovery Time:</strong> <span>${stats.avgRecoveryTime || 'N/A'}</span></p>
-    <hr style="margin: 10px 0; border-color: #444;">
-    <p style="font-size: 11px; color: #888; margin-bottom: 5px;">Wake-up Triggers:</p>
-    <p><strong>On Startup/Install:</strong> <span>${(stats.wakeUpTriggers.onInstalled || 0) + (stats.wakeUpTriggers.onStartup || 0)}</span></p>
-    <p><strong>By Alarm:</strong> <span>${stats.wakeUpTriggers.onAlarm || 0}</span></p>
-    <p><strong>By User Action:</strong> <span>${stats.wakeUpTriggers.onMessage || 0}</span></p>
-  `;
+  mv3LifecycleMetricsEl.replaceChildren();
+  appendMetricRow(mv3LifecycleMetricsEl, 'Service Worker Restarts', (stats.restarts || 0).toString());
+  appendMetricRow(mv3LifecycleMetricsEl, 'Avg. Recovery Time', stats.avgRecoveryTime || 'N/A');
+  appendDivider(mv3LifecycleMetricsEl, '10px 0');
+  appendSectionLabel(mv3LifecycleMetricsEl, 'Wake-up Triggers:');
+  appendMetricRow(
+    mv3LifecycleMetricsEl,
+    'On Startup/Install',
+    ((stats.wakeUpTriggers.onInstalled || 0) + (stats.wakeUpTriggers.onStartup || 0)).toString(),
+  );
+  appendMetricRow(mv3LifecycleMetricsEl, 'By Alarm', (stats.wakeUpTriggers.onAlarm || 0).toString());
+  appendMetricRow(mv3LifecycleMetricsEl, 'By User Action', (stats.wakeUpTriggers.onMessage || 0).toString());
 }
 
 /**
@@ -611,39 +769,50 @@ function renderMv3LifecycleMetrics(stats: Mv3LifecycleStats | undefined): void {
  */
 function renderErrors(errors: ErrorData | undefined): void {
   if (!errors) {
-    errorSummaryEl.innerHTML = '<p class="loading">No data available</p>';
-    criticalErrorsEl.innerHTML = '<p class="loading">No data available</p>';
+    renderLoading(errorSummaryEl, 'No data available');
+    renderLoading(criticalErrorsEl, 'No data available');
     return;
   }
 
   // Error summary
-  errorSummaryEl.innerHTML = `
-    <p><strong>Total Errors:</strong> <span>${errors.total || 0}</span></p>
-    <p><strong>Critical Errors:</strong> <span>${errors.critical || 0}</span></p>
-    <p><strong>Last 24 Hours:</strong> <span>${errors.last24h || 0}</span></p>
-    <p><strong>Last Hour:</strong> <span>${errors.lastHour || 0}</span></p>
-  `;
+  errorSummaryEl.replaceChildren();
+  appendMetricRow(errorSummaryEl, 'Total Errors', (errors.total || 0).toString());
+  appendMetricRow(errorSummaryEl, 'Critical Errors', (errors.critical || 0).toString());
+  appendMetricRow(errorSummaryEl, 'Last 24 Hours', (errors.last24h || 0).toString());
+  appendMetricRow(errorSummaryEl, 'Last Hour', (errors.lastHour || 0).toString());
 
   // Top errors
   if (errors.topErrors && errors.topErrors.length > 0) {
-    const topErrorsHtml = errors.topErrors.map(err =>
-      `<p><strong>${err.error}:</strong> <span>${err.count} occurrences</span></p>`
-    ).join('');
-    errorSummaryEl.innerHTML += '<hr style="margin: 15px 0; border-color: #444;">' + topErrorsHtml;
+    appendDivider(errorSummaryEl, '15px 0');
+    errors.topErrors.forEach(err => {
+      appendMetricRow(errorSummaryEl, err.error, `${err.count} occurrences`);
+    });
   }
 
   // Critical errors
   if (errors.recentCritical && errors.recentCritical.length > 0) {
-    criticalErrorsEl.innerHTML = errors.recentCritical.map(err => `
-      <div class="error-item">
-        <h5>${err.name || 'Error'}: ${err.message}</h5>
-        <p><strong>Category:</strong> ${err.category}</p>
-        <p><strong>Time:</strong> ${new Date(err.timestamp).toLocaleString()}</p>
-        ${err.stack ? `<pre>${err.stack}</pre>` : ''}
-      </div>
-    `).join('');
+    const fragment = document.createDocumentFragment();
+
+    errors.recentCritical.forEach(err => {
+      const item = document.createElement('div');
+      const title = document.createElement('h5');
+
+      item.className = 'error-item';
+      title.textContent = `${err.name || 'Error'}: ${err.message}`;
+      item.appendChild(title);
+      appendTextRow(item, 'Category', err.category);
+      appendTextRow(item, 'Time', new Date(err.timestamp).toLocaleString());
+
+      if (err.stack) {
+        appendPre(item, err.stack);
+      }
+
+      fragment.appendChild(item);
+    });
+
+    criticalErrorsEl.replaceChildren(fragment);
   } else {
-    criticalErrorsEl.innerHTML = '<p class="loading">No critical errors</p>';
+    renderLoading(criticalErrorsEl, 'No critical errors');
   }
 }
 
@@ -652,17 +821,19 @@ function renderErrors(errors: ErrorData | undefined): void {
  */
 function renderConfig(config: DebugConfig | undefined, websocketState: WebSocketState | undefined): void {
   if (!config) {
-    debugConfigEl.innerHTML = '<p class="loading">No data available</p>';
+    renderLoading(debugConfigEl, 'No data available');
     return;
   }
 
-  debugConfigEl.innerHTML = `<pre>${JSON.stringify(config, null, 2)}</pre>`;
+  debugConfigEl.replaceChildren();
+  appendPre(debugConfigEl, stringifyForDisplay(config));
 
   // System info
   if (websocketState) {
-    systemInfoEl.innerHTML = `<pre>${JSON.stringify(websocketState, null, 2)}</pre>`;
+    systemInfoEl.replaceChildren();
+    appendPre(systemInfoEl, stringifyForDisplay(websocketState));
   } else {
-    systemInfoEl.innerHTML = '<p class="loading">No data available</p>';
+    renderLoading(systemInfoEl, 'No data available');
   }
 }
 
@@ -830,4 +1001,3 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
-

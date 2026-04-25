@@ -958,24 +958,23 @@
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             reconnectAttempts: this.reconnectAttempts
           });
-          globalEventBus.emit("websocket:disconnected", {
-            code: event.code,
-            reason: event.reason,
-            wasClean: event.wasClean
-          });
-          globalEventBus.emit("websocket:state", "disconnected");
-          if (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3) {
+          const isPermanentClose = event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3;
+          if (isPermanentClose) {
             debugLogger.websocket(
               "ERROR",
               "Permanent WebSocket error - stopping reconnection attempts",
               closeInfo
             );
+            globalEventBus.emit("websocket:permanent-error", closeInfo);
+            globalEventBus.emit("websocket:state", "permanent-error");
             try {
               showPermanentWebSocketError(closeInfo);
             } catch {
             }
             return;
           }
+          globalEventBus.emit("websocket:disconnected", closeInfo);
+          globalEventBus.emit("websocket:state", "disconnected");
         };
       } catch (error) {
         debugLogger.websocket(
@@ -1035,7 +1034,11 @@
   var getStringOrNull = (value) => typeof value === "string" ? value : null;
   var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
   var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
+  var ENCRYPTION_PASSWORD_KEY = "encryptionPassword";
   var ChromeStorageRepository = class {
+    getSessionStorage() {
+      return chrome.storage.session;
+    }
     /**
      * Get API Key from local storage
      * Security: API keys are stored in local storage (not synced) to prevent
@@ -1127,20 +1130,42 @@
       await chrome.storage.sync.set({ onlyThisDevice: value });
     }
     /**
-     * Get Encryption Password from local storage
+     * Get Encryption Password from session storage when available.
+     * Existing local plaintext values are migrated once, then removed.
      */
     async getEncryptionPassword() {
-      const result = await chrome.storage.local.get(["encryptionPassword"]);
-      return getStringOrNull(result.encryptionPassword);
+      const sessionStorage = this.getSessionStorage();
+      if (sessionStorage) {
+        const sessionResult = await sessionStorage.get([ENCRYPTION_PASSWORD_KEY]);
+        const sessionPassword = getStringOrNull(sessionResult[ENCRYPTION_PASSWORD_KEY]);
+        if (sessionPassword) {
+          return sessionPassword;
+        }
+      }
+      const localResult = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+      const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
+      if (localPassword && sessionStorage) {
+        await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+      }
+      return localPassword;
     }
     /**
-     * Set Encryption Password in local storage
+     * Set Encryption Password in session storage when available.
+     * Falls back to local storage only on browsers without storage.session.
      */
     async setEncryptionPassword(password) {
+      const sessionStorage = this.getSessionStorage();
       if (password === null) {
-        await chrome.storage.local.remove(["encryptionPassword"]);
+        await Promise.all([
+          sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
+          chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
+        ]);
+      } else if (sessionStorage) {
+        await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
       } else {
-        await chrome.storage.local.set({ encryptionPassword: password });
+        await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
       }
     }
     /**
@@ -1273,7 +1298,8 @@
     async clear() {
       await Promise.all([
         chrome.storage.sync.clear(),
-        chrome.storage.local.clear()
+        chrome.storage.local.clear(),
+        this.getSessionStorage()?.clear() ?? Promise.resolve()
       ]);
     }
     /**
@@ -1283,7 +1309,8 @@
     async remove(keys) {
       await Promise.all([
         chrome.storage.sync.remove(keys),
-        chrome.storage.local.remove(keys)
+        chrome.storage.local.remove(keys),
+        this.getSessionStorage()?.remove(keys) ?? Promise.resolve()
       ]);
     }
     /**
@@ -1388,6 +1415,7 @@
   var PUSHES_URL = `${API_BASE_URL}/pushes`;
   var DEVICES_URL = `${API_BASE_URL}/devices`;
   var USER_INFO_URL = `${API_BASE_URL}/users/me`;
+  var MAX_INCREMENTAL_PUSH_PAGES = 11;
   var registrationPromise = null;
   function authHeaders(apiKey2) {
     return { "Access-Token": apiKey2 };
@@ -1600,7 +1628,21 @@
         hasMore: !!cursor
       });
       page += 1;
-      if (page > 10) break;
+      if (page >= MAX_INCREMENTAL_PUSH_PAGES) {
+        if (cursor) {
+          debugLogger.api("WARN", "Incremental push fetch truncated by page guard", {
+            pagesFetched: page,
+            maxPages: MAX_INCREMENTAL_PUSH_PAGES,
+            pageLimit,
+            total: all.length,
+            modifiedAfter,
+            hasRemainingCursor: true,
+            remainingCursorLength: cursor.length,
+            remainingCursorPreview: cursor.substring(0, 8)
+          });
+        }
+        break;
+      }
     } while (cursor);
     const filtered = all.filter((p) => {
       if (p.dismissed) {
@@ -2778,6 +2820,28 @@
     pollingMode = mode;
   }
 
+  // src/lib/security/trusted-image-url.ts
+  function isTrustedPushbulletHost(hostname) {
+    return hostname === "pushbullet.com" || hostname.endsWith(".pushbullet.com") || hostname === "pushbulletusercontent.com" || hostname.endsWith(".pushbulletusercontent.com");
+  }
+  function isTrustedGoogleUserContentHost(hostname) {
+    return /^lh[0-9]\.googleusercontent\.com$/.test(hostname);
+  }
+  function isTrustedImageUrl(urlString) {
+    if (!urlString) {
+      return false;
+    }
+    try {
+      const url = new URL(urlString);
+      if (url.protocol !== "https:") {
+        return false;
+      }
+      return isTrustedPushbulletHost(url.hostname) || isTrustedGoogleUserContentHost(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
   // src/background/links.ts
   function isLinkPush2(p) {
     return p.type === "link" && typeof p.url === "string" && p.url.length > 0 && typeof p.iden === "string";
@@ -2966,20 +3030,6 @@
     } catch {
       debugLogger.general("WARN", "Invalid URL provided", { url });
       return "";
-    }
-  }
-  function isTrustedImageUrl(urlString) {
-    if (!urlString) {
-      return false;
-    }
-    try {
-      const url = new URL(urlString);
-      return url.hostname.endsWith(".pushbullet.com") || url.hostname.endsWith(".pushbulletusercontent.com") || /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);
-    } catch {
-      debugLogger.general("WARN", "Could not parse URL for domain check", {
-        url: urlString
-      });
-      return false;
     }
   }
   function updateExtensionTooltip(stateDescription) {
@@ -4403,6 +4453,10 @@
   globalEventBus.on("websocket:disconnected", async () => {
     await stateMachineReady;
     stateMachine.transition("WS_DISCONNECTED");
+  });
+  globalEventBus.on("websocket:permanent-error", async () => {
+    await stateMachineReady;
+    stateMachine.transition("WS_PERMANENT_ERROR");
   });
   globalEventBus.on("websocket:polling:check", () => {
     checkPollingMode();

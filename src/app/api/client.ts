@@ -8,14 +8,71 @@ const API_BASE_URL = 'https://api.pushbullet.com/v2';
 const PUSHES_URL = `${API_BASE_URL}/pushes`;
 const DEVICES_URL = `${API_BASE_URL}/devices`;
 const USER_INFO_URL = `${API_BASE_URL}/users/me`;
+const UPLOAD_REQUEST_URL = `${API_BASE_URL}/upload-request`;
+const MAX_INCREMENTAL_PUSH_PAGES = 11;
 
 type HeadersInit = Record<string, string>;
+
+export type UploadApiStage = 'upload-request' | 'file-upload' | 'file-push';
+
+export interface UploadRequestResponse {
+  file_name: string;
+  file_type: string;
+  file_url: string;
+  upload_url: string;
+  data: Record<string, string>;
+}
+
+export interface SendFilePushRequest {
+  file_name: string;
+  file_type: string;
+  file_url: string;
+  body?: string;
+  device_iden?: string;
+  email?: string;
+  source_device_iden?: string;
+}
+
+export class PushbulletUploadError extends Error {
+  code: string;
+  stage: UploadApiStage;
+  status?: number;
+
+  constructor(code: string, stage: UploadApiStage, message: string, status?: number) {
+    super(message);
+    this.name = 'PushbulletUploadError';
+    this.code = code;
+    this.stage = stage;
+    this.status = status;
+  }
+}
 
 // Promise singleton for device registration to prevent race conditions
 let registrationPromise: Promise<{ deviceIden: string; needsUpdate: boolean }> | null = null;
 
 function authHeaders(apiKey: string): HeadersInit {
   return { 'Access-Token': apiKey };
+}
+
+function parseApiErrorMessage(errorText: string, fallback: string): string {
+  try {
+    const errorData = JSON.parse(errorText) as {
+      error?: { message?: string };
+      message?: string;
+    };
+    return errorData.error?.message || errorData.message || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function getApiErrorMessage(response: Response, fallback: string): Promise<string> {
+  const errorText = await response.text().catch(() => '');
+  if (!errorText) {
+    return fallback;
+  }
+
+  return parseApiErrorMessage(errorText, fallback);
 }
 
 export async function fetchUserInfoWithTimeout(apiKey: string): Promise<User> {
@@ -278,8 +335,22 @@ export async function fetchIncrementalPushes(
     });
 
     page += 1;
-    // guard: avoid huge loops on first sync
-    if (page > 10) break;
+    // Guard: avoid huge loops on first sync while making truncation visible.
+    if (page >= MAX_INCREMENTAL_PUSH_PAGES) {
+      if (cursor) {
+        debugLogger.api('WARN', 'Incremental push fetch truncated by page guard', {
+          pagesFetched: page,
+          maxPages: MAX_INCREMENTAL_PUSH_PAGES,
+          pageLimit,
+          total: all.length,
+          modifiedAfter,
+          hasRemainingCursor: true,
+          remainingCursorLength: cursor.length,
+          remainingCursorPreview: cursor.substring(0, 8),
+        });
+      }
+      break;
+    }
   } while (cursor);
 
   // Filter to only supported types and log unsupported ones
@@ -402,9 +473,7 @@ export async function registerDevice(
               icon: device.icon || '(no icon)',
               pushToken: device.push_token ? `${device.push_token.substring(0, 8)}...` : '(no push token)',
               appVersion: device.app_version || '(no app version)',
-              hasSms: device.has_sms || false,
-              // Include ALL raw device data
-              rawDevice: device
+              hasSms: device.has_sms || false
             });
           });
           // --- END NEW CODE ---
@@ -638,6 +707,91 @@ export async function fetchChats(apiKey: string): Promise<Chat[]> {
   }
 }
 
+export async function requestFileUpload(
+  apiKey: string,
+  fileName: string,
+  fileType: string
+): Promise<UploadRequestResponse> {
+  const response = await fetch(UPLOAD_REQUEST_URL, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(apiKey),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      file_name: fileName,
+      file_type: fileType,
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await getApiErrorMessage(
+      response,
+      'Failed to request file upload authorization'
+    );
+    throw new PushbulletUploadError(
+      'upload_request_failed',
+      'upload-request',
+      message,
+      response.status
+    );
+  }
+
+  return response.json();
+}
+
+export async function uploadFileToServer(
+  uploadData: UploadRequestResponse,
+  file: Blob
+): Promise<void> {
+  const formData = new FormData();
+  Object.entries(uploadData.data).forEach(([key, value]) => {
+    formData.append(key, value);
+  });
+  formData.append('file', file, uploadData.file_name);
+
+  const response = await fetch(uploadData.upload_url, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new PushbulletUploadError(
+      'file_upload_failed',
+      'file-upload',
+      'Failed to upload file to server',
+      response.status
+    );
+  }
+}
+
+export async function sendFilePush(
+  apiKey: string,
+  filePush: SendFilePushRequest
+): Promise<void> {
+  const response = await fetch(PUSHES_URL, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(apiKey),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'file',
+      ...filePush,
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await getApiErrorMessage(response, 'Failed to send file push');
+    throw new PushbulletUploadError(
+      'file_push_failed',
+      'file-push',
+      message,
+      response.status
+    );
+  }
+}
+
 export async function dismissPush(iden: string, apiKey: string): Promise<void> {
   const url = `https://api.pushbullet.com/v2/pushes/${encodeURIComponent(iden)}`;
   const response = await fetch(url, {
@@ -650,5 +804,3 @@ export async function dismissPush(iden: string, apiKey: string): Promise<void> {
   });
   if (!response.ok) throw new Error(`Dismiss failed: ${response.status}`);
 }
-
-

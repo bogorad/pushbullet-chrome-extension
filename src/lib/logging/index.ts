@@ -14,6 +14,13 @@ export type LogCategory =
 // Persistent logging constants
 const STORAGE_KEY = "persistentDebugLogs";
 const MAX_PERSISTENT_LOGS = 5000; // Store the last 5000 log entries
+const MAX_TRACKED_ERRORS = 500;
+const REDACTED_VALUE = "[redacted]";
+const SENSITIVE_KEY_PATTERN =
+  /token|key|password|secret|authorization|body|title|url|email|phone|address|street|postal|zipcode|zip_code/i;
+const URL_VALUE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+const EMAIL_VALUE_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_VALUE_PATTERN = /^\+?[0-9][0-9 .().-]{6,}[0-9]$/;
 
 export interface DebugConfig {
   enabled: boolean;
@@ -53,18 +60,27 @@ export class DebugLogger {
   private logs: LogEntry[] = [];
   private startTime = Date.now();
   private performanceMarkers = new Map<string, number>();
+  private rehydratePromise: Promise<void> | null = null;
 
   /**
    * Rehydrate logs from persistent storage on startup
    * This method loads logs from the previous session
    */
   async rehydrate(): Promise<void> {
+    if (!this.rehydratePromise) {
+      this.rehydratePromise = this.rehydrateFromStorage();
+    }
+    await this.rehydratePromise;
+  }
+
+  private async rehydrateFromStorage(): Promise<void> {
     try {
       const result = await chrome.storage.local.get(STORAGE_KEY);
       if (result[STORAGE_KEY] && Array.isArray(result[STORAGE_KEY])) {
-        this.logs = result[STORAGE_KEY];
+        const storedLogs = result[STORAGE_KEY] as LogEntry[];
+        this.logs = [...storedLogs, ...this.logs].slice(-MAX_PERSISTENT_LOGS);
         console.log(
-          `[Logger] Rehydrated ${this.logs.length} logs from persistent storage.`,
+          `[Logger] Rehydrated ${storedLogs.length} logs from persistent storage.`,
         );
       }
     } catch (error) {
@@ -99,28 +115,34 @@ export class DebugLogger {
     this.log('GENERAL', 'INFO', 'Log buffer has been cleared by the user.');
   }
 
-  private sanitize(data: unknown): unknown {
+  private sanitize(data: unknown, seen = new WeakSet<object>()): unknown {
     if (!DEBUG_CONFIG.sanitizeData) return data;
     if (typeof data === "string") {
+      if (
+        URL_VALUE_PATTERN.test(data) ||
+        EMAIL_VALUE_PATTERN.test(data) ||
+        PHONE_VALUE_PATTERN.test(data)
+      ) {
+        return REDACTED_VALUE;
+      }
       if (data.length > 20 && /^[a-zA-Z0-9_-]+$/.test(data)) {
         return data.substring(0, 4) + "***" + data.substring(data.length - 4);
       }
       return data;
     }
     if (data && typeof data === "object") {
-      const sanitized: Record<string, unknown> | unknown[] = Array.isArray(data)
-        ? []
-        : {};
-      for (const key in data as Record<string, unknown>) {
-        if (
-          key.toLowerCase().includes("token") ||
-          key.toLowerCase().includes("key") ||
-          key.toLowerCase().includes("password")
-        ) {
-          (sanitized as any)[key] = this.sanitize((data as any)[key]);
-        } else {
-          (sanitized as any)[key] = (data as any)[key];
-        }
+      if (seen.has(data)) return "[circular]";
+      seen.add(data);
+
+      if (Array.isArray(data)) {
+        return data.map((item) => this.sanitize(item, seen));
+      }
+
+      const sanitized: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+        sanitized[key] = SENSITIVE_KEY_PATTERN.test(key)
+          ? REDACTED_VALUE
+          : this.sanitize(value, seen);
       }
       return sanitized;
     }
@@ -432,9 +454,17 @@ export class GlobalErrorTracker {
       context,
     };
     this.errors.push(entry);
+    if (this.errors.length > MAX_TRACKED_ERRORS) {
+      this.errors = this.errors.slice(-MAX_TRACKED_ERRORS);
+    }
     const count = (this.errorCounts.get(category) || 0) + 1;
     this.errorCounts.set(category, count);
-    if (count >= 5) this.criticalErrors.push(entry);
+    if (count >= 5) {
+      this.criticalErrors.push(entry);
+      if (this.criticalErrors.length > MAX_TRACKED_ERRORS) {
+        this.criticalErrors = this.criticalErrors.slice(-MAX_TRACKED_ERRORS);
+      }
+    }
   }
   getErrorSummary() {
     const byCat: Record<string, number> = {};

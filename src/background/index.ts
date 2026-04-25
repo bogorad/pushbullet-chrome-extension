@@ -24,9 +24,17 @@ import {
   fetchDevices,
   updateDeviceNickname,
   fetchRecentPushes,
+  requestFileUpload,
+  uploadFileToServer,
+  sendFilePush,
+  PushbulletUploadError,
 } from "../app/api/client";
 import { installDiagnosticsMessageHandler } from "./diagnostics";
-import { ensureConfigLoaded } from "../app/reconnect";
+import {
+  ensureDebugConfigLoadedOnce,
+  hydrateBackgroundConfig,
+} from "./config";
+import { createLifecycleCoordinator } from "./lifecycle";
 import { checkPushTypeSupport, SUPPORTED_PUSH_TYPES } from "../app/push-types";
 import { PushbulletCrypto } from "../lib/crypto";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
@@ -42,7 +50,6 @@ import {
   setDeviceNickname,
   getAutoOpenLinks,
   setAutoOpenLinks,
-  getNotificationTimeout,
   setNotificationTimeout,
   setWebSocketClient,
   WEBSOCKET_URL,
@@ -64,35 +71,195 @@ import { maybeAutoOpenLinkWithDismiss } from "./processing";
 import { runPostConnect } from "../realtime/postConnectQueue";
 import { validatePrivilegedMessage } from "../lib/security/message-validation";
 import { handleKeepaliveAlarm } from "./keepalive";
-import type { Push } from "../types/domain";
+import type {
+  Push,
+  SessionDataResponse,
+  StructuredUploadError,
+  UploadAndSendFileMessage,
+  UploadStage,
+} from "../types/domain";
 import { isLinkPush } from "../types/domain";
 import {
   saveSessionCache,
   clearSessionCache,
 } from "../infrastructure/storage/indexed-db";
 
-// Load debug configuration (single-flight)
-let loadDebugConfigOnce: Promise<void> | null = null;
+function hasStringValue(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
 
-export function ensureDebugConfigLoadedOnce(): Promise<void> {
-  if (!loadDebugConfigOnce) {
-    loadDebugConfigOnce = (async () => {
-      try {
-        await debugConfigManager.loadConfig();
-        debugLogger.general(
-          "INFO",
-          "Debug configuration loaded (single-flight)",
-        );
-      } catch (e) {
-        debugLogger.general(
-          "WARN",
-          "Failed to load debug configuration (single-flight)",
-          { error: (e as Error).message },
-        );
-      }
-    })();
+function summarizePushForLog(push: Partial<Push>): Record<string, unknown> {
+  const pushRecord = push as Record<string, unknown>;
+  const notifications = Array.isArray(pushRecord.notifications)
+    ? pushRecord.notifications
+    : [];
+
+  return {
+    iden: pushRecord.iden,
+    type: pushRecord.type,
+    encrypted: !!pushRecord.encrypted,
+    contentFlags: {
+      heading: hasStringValue(pushRecord.title),
+      message: hasStringValue(pushRecord.body),
+      link: hasStringValue(pushRecord.url),
+      fileLink: hasStringValue(pushRecord.file_url),
+      imageLink: hasStringValue(pushRecord.image_url),
+      ciphertext: hasStringValue(pushRecord.ciphertext),
+    },
+    notificationsCount: notifications.length,
+    created: pushRecord.created,
+    modified: pushRecord.modified,
+  };
+}
+
+const DEFAULT_FILE_TYPE = "application/octet-stream";
+const MAX_FILE_NAME_LENGTH = 255;
+const MAX_FILE_TYPE_LENGTH = 255;
+
+function buildUploadError(
+  code: string,
+  stage: UploadStage,
+  message: string,
+  status?: number
+): StructuredUploadError {
+  return {
+    code,
+    stage,
+    message,
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
+function validateUploadMetadata(
+  message: UploadAndSendFileMessage,
+  maxUploadSize?: number
+): { fileName: string; fileType: string; fileBytes: Uint8Array } {
+  const fileName = typeof message.fileName === "string" ? message.fileName.trim() : "";
+  const fileType = typeof message.fileType === "string" && message.fileType.trim()
+    ? message.fileType.trim()
+    : DEFAULT_FILE_TYPE;
+  const fileSize = typeof message.fileSize === "number" ? message.fileSize : 0;
+
+  if (!fileName) {
+    throw buildUploadError(
+      "invalid_file_name",
+      "metadata",
+      "File name is required.",
+    );
   }
-  return loadDebugConfigOnce;
+
+  if (fileName.length > MAX_FILE_NAME_LENGTH) {
+    throw buildUploadError(
+      "invalid_file_name",
+      "metadata",
+      "File name is too long.",
+    );
+  }
+
+  if (fileType.length > MAX_FILE_TYPE_LENGTH) {
+    throw buildUploadError(
+      "invalid_file_type",
+      "metadata",
+      "File type is too long.",
+    );
+  }
+
+  if (fileSize <= 0) {
+    throw buildUploadError(
+      "invalid_file",
+      "metadata",
+      "File data is required.",
+    );
+  }
+
+  if (
+    typeof maxUploadSize === "number" &&
+    maxUploadSize > 0 &&
+    fileSize > maxUploadSize
+  ) {
+    throw buildUploadError(
+      "file_too_large",
+      "metadata",
+      "File exceeds the account upload limit.",
+    );
+  }
+
+  if (typeof message.fileBase64 !== "string" || !message.fileBase64) {
+    throw buildUploadError(
+      "invalid_file",
+      "metadata",
+      "File data is required.",
+    );
+  }
+
+  const fileBytes = decodeBase64File(message.fileBase64);
+  if (fileBytes.byteLength !== fileSize) {
+    throw buildUploadError(
+      "invalid_file",
+      "metadata",
+      "File data did not match the declared size.",
+    );
+  }
+
+  return {
+    fileName,
+    fileType,
+    fileBytes,
+  };
+}
+
+function decodeBase64File(fileBase64: string): Uint8Array {
+  try {
+    const binary = atob(fileBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  } catch {
+    throw buildUploadError(
+      "invalid_file",
+      "metadata",
+      "File data is not valid base64.",
+    );
+  }
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function isStructuredUploadError(error: unknown): error is StructuredUploadError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "stage" in error &&
+    "message" in error
+  );
+}
+
+function toStructuredUploadError(error: unknown): StructuredUploadError {
+  if (isStructuredUploadError(error)) {
+    return error;
+  }
+
+  if (error instanceof PushbulletUploadError) {
+    return buildUploadError(
+      error.code,
+      error.stage,
+      error.message,
+      error.status,
+    );
+  }
+
+  return buildUploadError(
+    "upload_failed",
+    "unknown",
+    error instanceof Error ? error.message : "File upload failed.",
+  );
 }
 
 // Store notification data for detail view
@@ -202,7 +369,7 @@ globalEventBus.on("websocket:tickle:device", async () => {
 
 globalEventBus.on("websocket:push", async (push: Push | any) => {
   // RACE CONDITION FIX: Ensure configuration is loaded before processing push
-  await ensureConfigLoaded();
+  await hydrateBackgroundConfig();
 
   // Track push received
   performanceMonitor.recordPushReceived();
@@ -233,9 +400,8 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
           pushType: decryptedPush.type,
         });
 
-        // ADD THIS - Full dump of decrypted data (for debugging)
-        debugLogger.general("DEBUG", "FULL DECRYPTED PUSH DATA", {
-          completeData: decryptedPush,
+        debugLogger.general("DEBUG", "Decrypted push summary", {
+          push: summarizePushForLog(decryptedPush),
         });
       } else {
         debugLogger.general(
@@ -274,7 +440,7 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
   if (!decryptedPush.type) {
     debugLogger.general("ERROR", "Push has no type field after decryption", {
       pushIden: (decryptedPush as any).iden,
-      pushData: decryptedPush,
+      pushSummary: summarizePushForLog(decryptedPush),
     });
     return;
   }
@@ -299,8 +465,7 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
         category: typeCheck.category,
         reason: "This is a new or unrecognized push type",
         supportedTypes: SUPPORTED_PUSH_TYPES,
-        // Include full push data for investigation
-        fullPushData: decryptedPush,
+        pushSummary: summarizePushForLog(decryptedPush),
       });
     }
 
@@ -314,11 +479,9 @@ globalEventBus.on("websocket:push", async (push: Push | any) => {
     pushIden: decryptedPush.iden,
   });
 
-  // ADD THIS - Dump for Mirror Messages
   if (decryptedPush.type === "mirror") {
-    // Log full mirror message data to see all available fields
-    debugLogger.general("DEBUG", "FULL MIRROR MESSAGE DATA", {
-      completeMirrorData: decryptedPush,
+    debugLogger.general("DEBUG", "Mirror push summary", {
+      push: summarizePushForLog(decryptedPush),
     });
   }
 
@@ -379,6 +542,11 @@ globalEventBus.on("websocket:disconnected", async () => {
   stateMachine.transition("WS_DISCONNECTED");
 });
 
+globalEventBus.on("websocket:permanent-error", async () => {
+  await stateMachineReady;
+  stateMachine.transition("WS_PERMANENT_ERROR");
+});
+
 globalEventBus.on("websocket:polling:check", () => {
   checkPollingMode();
 });
@@ -419,6 +587,10 @@ const stateMachineCallbacks = {
     }
   },
 
+  onConnectWebSocket: () => {
+    connectWebSocket();
+  },
+
   onStartPolling: () => {
     checkPollingMode();
   },
@@ -451,6 +623,105 @@ const stateMachineReady = ServiceWorkerStateMachine.create(
     },
   );
 });
+
+const { bootstrap, reconcileWake } = createLifecycleCoordinator({
+  hydrateConfig: hydrateBackgroundConfig,
+  stateMachineReady,
+  getStateMachine: () => stateMachine,
+  getApiKey,
+  getDeviceIden,
+  getAutoOpenLinks,
+  getDeviceNickname,
+  isSocketHealthy: () =>
+    !!websocketClient?.isConnected?.() &&
+    !!websocketClient?.isConnectionHealthy?.(),
+});
+
+type PopupSessionDataResponse = SessionDataResponse & { state: string };
+
+async function getPopupRecentPushes(): Promise<Push[]> {
+  const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
+  const deviceIden = await storageRepository.getDeviceIden();
+
+  if (!onlyThisDevice || !deviceIden) {
+    return sessionCache.recentPushes ?? [];
+  }
+
+  return (sessionCache.recentPushes ?? []).filter(
+    (push) => push.target_device_iden === deviceIden,
+  );
+}
+
+async function buildSessionDataResponse(
+  apiKey: string | null,
+): Promise<PopupSessionDataResponse> {
+  const filteredPushes = await getPopupRecentPushes();
+
+  debugLogger.general('INFO', 'Recent pushes filtered for display', {
+    total: sessionCache.recentPushes?.length ?? 0,
+    filtered: filteredPushes.length,
+  });
+
+  return {
+    isAuthenticated: !!apiKey,
+    userInfo: sessionCache.userInfo,
+    devices: sessionCache.devices,
+    recentPushes: filteredPushes,
+    chats: sessionCache.chats,
+    autoOpenLinks: getAutoOpenLinks(),
+    deviceNickname: getDeviceNickname(),
+    websocketConnected: websocketClient
+      ? websocketClient.isConnected()
+      : false,
+    state: stateMachine.getCurrentState(),
+  };
+}
+
+async function refreshPopupTargetsInBackground(apiKey: string): Promise<void> {
+  debugLogger.general("INFO", "Refreshing popup targets in background");
+
+  const [devicesResult, chatsResult] = await Promise.allSettled([
+    fetchDevices(apiKey),
+    fetchChats(apiKey),
+  ]);
+  let refreshed = false;
+
+  if (devicesResult.status === "fulfilled") {
+    sessionCache.devices = devicesResult.value;
+    refreshed = true;
+  } else {
+    debugLogger.general("WARN", "Failed to refresh devices for popup", {
+      error: (devicesResult.reason as Error).message,
+    });
+  }
+
+  if (chatsResult.status === "fulfilled") {
+    sessionCache.chats = chatsResult.value;
+    refreshed = true;
+  } else {
+    debugLogger.general("WARN", "Failed to refresh chats for popup", {
+      error: (chatsResult.reason as Error).message,
+    });
+  }
+
+  if (!refreshed) {
+    return;
+  }
+
+  sessionCache.lastUpdated = Date.now();
+
+  chrome.runtime
+    .sendMessage({
+      action: MessageAction.SESSION_DATA_UPDATED,
+      ...(await buildSessionDataResponse(apiKey)),
+    })
+    .catch(() => {
+      debugLogger.general(
+        "DEBUG",
+        "Popup not available for background target refresh",
+      );
+    });
+}
 
 // Install diagnostics message handler
 installDiagnosticsMessageHandler();
@@ -534,22 +805,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const apiKey = getApiKey();
     if (!apiKey) {
       debugLogger.general("WARN", "Keepalive: API key missing, reloading");
-      await ensureConfigLoaded(
-        {
-          setApiKey,
-          setDeviceIden,
-          setAutoOpenLinks,
-          setDeviceNickname,
-          setNotificationTimeout,
-        },
-        {
-          getApiKey,
-          getDeviceIden,
-          getAutoOpenLinks,
-          getDeviceNickname,
-          getNotificationTimeout,
-        },
-      );
+      await hydrateBackgroundConfig();
     }
     return;
   }
@@ -566,30 +822,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       "[Alarm] Auto-recovery timer fired, attempting to reconnect",
     );
 
-    const apiKey = getApiKey();
-    if (apiKey) {
-      await stateMachine.transition("ATTEMPT_RECONNECT", {
-        hasApiKey: true,
-      });
-    } else {
-      debugLogger.general("WARN", "[Alarm] Cannot auto-recover - no API key");
-    }
+    await reconcileWake("auto-recovery-from-error");
   }
 
   // Ensure state machine is ready
   await stateMachineReady;
 
   if (alarm.name === "longSleepRecovery") {
-    const apiKey = getApiKey();
-    if (apiKey && (await stateMachineReady, stateMachine.isInState(ServiceWorkerState.IDLE) || stateMachine.isInState(ServiceWorkerState.ERROR))) {
-      debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
-      await stateMachine.transition("ATTEMPT_RECONNECT", { hasApiKey: true });
-    }
+    debugLogger.general("INFO", "[Alarm] Long sleep recovery triggered");
+    await reconcileWake("longSleepRecovery");
     return;
   }
 
   // Handle our two main periodic alarms.
   if (alarm.name === "websocketHealthCheck") {
+    await reconcileWake("websocketHealthCheck");
     const currentState = stateMachine.getCurrentState();
 
     debugLogger.general(
@@ -637,7 +884,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       }
     } else {
       // Normal state: perform health check
-      performWebSocketHealthCheck(websocketClient, connectWebSocket);
+      performWebSocketHealthCheck(websocketClient, connectWebSocket, stateMachine);
     }
   }
 });
@@ -647,7 +894,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
  */
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   // RACE CONDITION FIX: Ensure configuration is loaded before processing context menu action
-  await ensureConfigLoaded();
+  await hydrateBackgroundConfig();
 
   if (!getApiKey()) {
     chrome.notifications.create("pushbullet-no-api-key", {
@@ -765,22 +1012,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Ensure debug config is loaded
         await ensureDebugConfigLoadedOnce();
         // STEP 1: Load config from storage (handles service worker restarts)
-        await ensureConfigLoaded(
-          {
-            setApiKey,
-            setDeviceIden,
-            setAutoOpenLinks,
-            setDeviceNickname,
-            setNotificationTimeout,
-          },
-          {
-            getApiKey,
-            getDeviceIden,
-            getAutoOpenLinks,
-            getDeviceNickname,
-            getNotificationTimeout,
-          },
-        );
+        await reconcileWake("popup-open");
 
         // STEP 2: Get API key after config is loaded
         const apiKey = getApiKey();
@@ -856,49 +1088,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         }
 
-        // Force refresh popup targets before responding.
+        // STEP 5: Send cached session data before device/chat network refresh.
+        sendResponse(await buildSessionDataResponse(apiKey));
+
         if (apiKey) {
-          debugLogger.general("INFO", "Force refreshing popup targets");
-          const [devices, chats] = await Promise.all([
-            fetchDevices(apiKey),
-            fetchChats(apiKey).catch((chatError) => {
-              debugLogger.general("WARN", "Failed to refresh chats for popup", {
-                error: (chatError as Error).message,
-              });
-              return sessionCache.chats;
-            }),
-          ]);
-          sessionCache.devices = devices;
-          sessionCache.chats = chats;
+          void refreshPopupTargetsInBackground(apiKey);
         }
-
-        // STEP 5: Apply onlyThisDevice filter to recentPushes for display
-        const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
-        const deviceIden = await storageRepository.getDeviceIden();
-        const filteredPushes = onlyThisDevice && deviceIden 
-          ? sessionCache.recentPushes.filter((p: any) => p.target_device_iden === deviceIden)
-          : sessionCache.recentPushes;
-        debugLogger.general('INFO', 'Recent pushes filtered for display', {
-          total: sessionCache.recentPushes.length,
-          filtered: filteredPushes.length,
-          onlyThisDevice,
-          hasDeviceIden: !!deviceIden
-        });
-
-        // STEP 5: Send response with session data
-        sendResponse({
-          isAuthenticated: !!apiKey,
-          userInfo: sessionCache.userInfo,
-          devices: sessionCache.devices,
-          recentPushes: filteredPushes,
-          chats: sessionCache.chats,
-          autoOpenLinks: getAutoOpenLinks(),
-          deviceNickname: getDeviceNickname(),
-          websocketConnected: websocketClient
-            ? websocketClient.isConnected()
-            : false,
-          state: stateMachine.getCurrentState(),
-        });
       } catch (error) {
         debugLogger.general("ERROR", "Failed to handle GETSESSIONDATA", {
           error: (error as Error).message,
@@ -1000,7 +1195,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // RACE CONDITION FIX: Ensure configuration is loaded before processing
     (async () => {
       await ensureDebugConfigLoadedOnce();
-      await ensureConfigLoaded();
+      await hydrateBackgroundConfig();
 
       const apiKey = getApiKey();
       if (apiKey) {
@@ -1072,6 +1267,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     }
 
+    if (settings.onlyThisDevice !== undefined) {
+      sessionCache.onlyThisDevice = settings.onlyThisDevice;
+      promises.push(storageRepository.setOnlyThisDevice(settings.onlyThisDevice));
+    }
+
     Promise.all(promises)
       .then(() => {
         sendResponse({ success: true });
@@ -1086,7 +1286,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // RACE CONDITION FIX: Ensure configuration is loaded before processing
     (async () => {
       await ensureDebugConfigLoadedOnce();
-      await ensureConfigLoaded();
+      await hydrateBackgroundConfig();
 
       const apiKey = getApiKey();
       const deviceIden = getDeviceIden();
@@ -1296,11 +1496,88 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     debugLogger.general("INFO", "Manual reconnection requested from popup");
 
     (async () => {
-      await stateMachine.transition("ATTEMPT_RECONNECT");
+      await reconcileWake("manual-attemptReconnect");
       sendResponse({ success: true });
     })();
 
     return true; // Async response
+  } else if (message.action === MessageAction.UPLOAD_AND_SEND_FILE) {
+    (async () => {
+      try {
+        await ensureDebugConfigLoadedOnce();
+        await hydrateBackgroundConfig();
+
+        const apiKey = getApiKey();
+        if (!apiKey) {
+          sendResponse({
+            success: false,
+            error: buildUploadError(
+              "not_authenticated",
+              "metadata",
+              "Not logged in. Please try again.",
+            ),
+          });
+          return;
+        }
+
+        const uploadMessage = message as UploadAndSendFileMessage;
+        const { fileName, fileType, fileBytes } = validateUploadMetadata(
+          uploadMessage,
+          sessionCache.userInfo?.max_upload_size,
+        );
+
+        const uploadData = await requestFileUpload(apiKey, fileName, fileType);
+        await uploadFileToServer(
+          uploadData,
+          new Blob([toArrayBuffer(fileBytes)], { type: fileType }),
+        );
+        await sendFilePush(apiKey, {
+          file_name: uploadData.file_name,
+          file_type: uploadData.file_type,
+          file_url: uploadData.file_url,
+          body: uploadMessage.body?.trim() || undefined,
+          device_iden: uploadMessage.device_iden,
+          email: uploadMessage.email,
+          source_device_iden: uploadMessage.source_device_iden,
+        });
+
+        try {
+          await refreshPushes(notificationDataStore);
+        } catch (error) {
+          if ((error as Error).name === "InvalidCursorError") {
+            debugLogger.general(
+              "WARN",
+              "Caught invalid cursor error during file push send - triggering recovery",
+            );
+            await handleInvalidCursorRecovery(apiKey, connectWebSocket);
+          } else {
+            debugLogger.general(
+              "ERROR",
+              "Error refreshing pushes after file send",
+              null,
+              error as Error,
+            );
+          }
+        }
+
+        sendResponse({ success: true });
+      } catch (error) {
+        const structuredError = toStructuredUploadError(error);
+        debugLogger.general(
+          "ERROR",
+          "Failed to upload and send file",
+          {
+            code: structuredError.code,
+            stage: structuredError.stage,
+            status: structuredError.status,
+          },
+          error instanceof Error ? error : undefined,
+        );
+        sendResponse({ success: false, error: structuredError });
+      }
+    })();
+
+    return true;
   } else if (message.action === MessageAction.SEND_PUSH) {
     // Handle push sending from popup
     // SERVICE WORKER AMNESIA FIX: Ensure configuration is loaded before attempting to send push
@@ -1308,7 +1585,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         await ensureDebugConfigLoadedOnce();
         // Ensure core configuration is loaded from storage if service worker just woke up
-        await ensureConfigLoaded();
+        await hydrateBackgroundConfig();
 
         const apiKey = getApiKey();
         if (!apiKey) {
@@ -1479,129 +1756,6 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 debugLogger.general("INFO", "Background service worker initialized", {
   timestamp: new Date().toISOString(),
 });
-
-// Bootstrap initialization immediately on startup/install
-async function bootstrap(
-  trigger: "startup" | "install" | "wakeup",
-): Promise<void> {
-  debugLogger.general("INFO", "Bootstrap start", { trigger });
-
-  // --- CRITICAL FIX START ---
-  // Ensure configuration is loaded BEFORE checking for API key
-  // The STARTUP event needs accurate hasApiKey state
-
-  // STEP 1: Load config (with error handling that doesn't stop execution)
-  await ensureConfigLoaded(
-    {
-      setApiKey,
-      setDeviceIden,
-      setAutoOpenLinks,
-      setDeviceNickname,
-      setNotificationTimeout,
-    },
-    {
-      getApiKey,
-      getDeviceIden,
-      getAutoOpenLinks,
-      getDeviceNickname,
-      getNotificationTimeout,
-    },
-  ).catch((error) => {
-    debugLogger.general(
-      "ERROR",
-      "Failed to load config before STARTUP",
-      null,
-      error as Error,
-    );
-    // Don't throw - continue execution. We'll get null from getApiKey which is fine.
-  });
-
-  debugLogger.general("DEBUG", "Configuration loaded before STARTUP event");
-
-  // STEP 2: Verify what was actually loaded (CRITICAL DEBUG INFO)
-  const apiKey = getApiKey();
-  const deviceIden = getDeviceIden();
-  const autoOpenLinks = getAutoOpenLinks();
-  const deviceNickname = getDeviceNickname();
-
-  debugLogger.general(
-    "INFO",
-    "[BOOTSTRAP_DEBUG] Config state after ensureConfigLoaded",
-    {
-      hasApiKey: !!apiKey,
-      apiKeyLength: apiKey?.length || 0,
-      apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : "null",
-      hasDeviceIden: !!deviceIden,
-      deviceIden: deviceIden || "null",
-      autoOpenLinks: autoOpenLinks,
-      deviceNickname: deviceNickname || "null",
-    },
-  );
-
-  // STEP 3: Wait for state machine and trigger STARTUP
-  await stateMachineReady;
-
-  debugLogger.general("INFO", "[BOOTSTRAP_DEBUG] Triggering STARTUP event", {
-    hasApiKey: !!apiKey,
-    apiKeyLength: apiKey?.length || 0,
-    trigger: trigger,
-  });
-
-  await stateMachine.transition("STARTUP", { hasApiKey: !!apiKey });
-
-  debugLogger.general(
-    "INFO",
-    "[BOOTSTRAP_DEBUG] STARTUP transition completed",
-    {
-      newState: stateMachine.getCurrentState(),
-    },
-  );
-  // --- CRITICAL FIX END ---
-
-  // NEW: Detect orphaned session and trigger recovery
-  if (
-    apiKey &&
-    stateMachine.isInState(
-      ServiceWorkerState.IDLE,
-    )
-  ) {
-    debugLogger.general(
-      "WARN",
-      "[Bootstrap] Detected orphaned session: have API key but state is IDLE. Triggering recovery.",
-    );
-
-    // Attempt to recover by transitioning to initializing
-    try {
-      await stateMachine.transition(
-        "ATTEMPT_RECONNECT",
-        {
-          hasApiKey: true,
-        },
-      );
-    } catch (error) {
-      debugLogger.general(
-        "ERROR",
-        "[Bootstrap] Failed to recover orphaned session",
-        null,
-        error as Error,
-      );
-    }
-  }
-
-  debugLogger.general(
-    "INFO",
-    "Bootstrap completed",
-    {
-      finalState:
-        stateMachine.getCurrentState(),
-      trigger,
-    },
-  );
-
-  // The orchestrateInitialization is now primarily driven by the state machine's
-  // onInitialize callback, but we can keep this for redundancy if desired.
-  void orchestrateInitialization(trigger, connectWebSocket);
-}
 
 chrome.runtime.onStartup.addListener(async () => {
   await ensureDebugConfigLoadedOnce();

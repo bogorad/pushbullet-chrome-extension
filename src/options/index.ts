@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS = {
   notificationTimeout: 10000, // 10 seconds in milliseconds
   autoOpenLinks: true,
   autoOpenLinksOnReconnect: false, // Off by default for safety
-  encryptionPassword: '', // E2EE password (stored in local storage only)
+  encryptionPassword: '', // E2EE password (stored in session storage when supported)
   debugMode: true
 };
 
@@ -146,8 +146,10 @@ async function saveAutoOpenLinks(): Promise<void> {
 
     // Notify background script
     chrome.runtime.sendMessage({
-      action: MessageAction.AUTO_OPEN_LINKS_CHANGED,
-      autoOpenLinks: enabled
+      action: MessageAction.SETTINGS_CHANGED,
+      settings: {
+        autoOpenLinks: enabled
+      }
     });
 
     showStatus('Auto-open links setting updated', 'success');
@@ -189,7 +191,9 @@ async function saveOnlyThisDevice(): Promise<void> {
 }
 
 /**
- * Save encryption password (to LOCAL storage only, not synced!)
+ * Save encryption password.
+ * Uses Chrome session storage when supported, so the raw password does not
+ * persist across browser restarts by default.
  */
 async function saveEncryptionPassword(): Promise<void> {
   const password = encryptionPasswordInput.value.trim();
@@ -197,14 +201,8 @@ async function saveEncryptionPassword(): Promise<void> {
   try {
     await storageRepository.setEncryptionPassword(password);
 
-    // Notify background script that encryption password changed
-    chrome.runtime.sendMessage({
-      action: MessageAction.ENCRYPTION_PASSWORD_CHANGED,
-      hasPassword: password.length > 0
-    });
-
     if (password.length > 0) {
-      showStatus('Encryption password saved (stored locally only)', 'success');
+      showStatus('Encryption password saved for this browser session', 'success');
     } else {
       showStatus('Encryption password cleared', 'success');
     }
@@ -221,19 +219,15 @@ async function saveDebugMode(): Promise<void> {
   const enabled = debugModeCheckbox.checked;
 
   try {
-    // Get current debug config
-    const result = await chrome.storage.local.get(['debugConfig']);
-
-    const debugConfig = (result.debugConfig as Record<string, unknown>) || {};
-    debugConfig.enabled = enabled;
-
-    await chrome.storage.local.set({ debugConfig });
-
     // Notify background script
-    chrome.runtime.sendMessage({
-      action: MessageAction.DEBUG_MODE_CHANGED,
-      enabled: enabled
-    });
+    const response = await chrome.runtime.sendMessage({
+      action: MessageAction.UPDATE_DEBUG_CONFIG,
+      config: { enabled }
+    }) as { success?: boolean; error?: string } | undefined;
+
+    if (response?.success === false) {
+      throw new Error(response.error || 'Failed to update debug config');
+    }
 
     showStatus('Debug mode updated', 'success');
   } catch (error) {
@@ -270,19 +264,24 @@ async function saveAllSettings(): Promise<void> {
     await storageRepository.setAutoOpenLinks(autoOpen);
     await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
 
-    // Note: Debug config handling skipped for now (complex local storage structure)
-
     // Notify background script
     chrome.runtime.sendMessage({
       action: MessageAction.SETTINGS_CHANGED,
       settings: {
         deviceNickname: nickname,
         notificationTimeout: seconds * 1000,
-        autoOpenLinks: autoOpen,
-        autoOpenLinksOnReconnect: autoOpenOnReconnect,
-        debugMode: debug
+        autoOpenLinks: autoOpen
       }
     });
+
+    const debugResponse = await chrome.runtime.sendMessage({
+      action: MessageAction.UPDATE_DEBUG_CONFIG,
+      config: { enabled: debug }
+    }) as { success?: boolean; error?: string } | undefined;
+
+    if (debugResponse?.success === false) {
+      throw new Error(debugResponse.error || 'Failed to update debug config');
+    }
 
     showStatus('All settings saved successfully!', 'success');
   } catch (error) {
@@ -357,4 +356,3 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
-

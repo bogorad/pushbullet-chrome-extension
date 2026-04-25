@@ -13,18 +13,22 @@ export function createNotificationWithTimeout(
   options: chrome.notifications.NotificationCreateOptions,
   callback?: (id?: string) => void,
   timeoutMs?: number,
-): void {
+): Promise<void> {
   // Get ABSOLUTE URL for the icon - service workers need absolute paths!
   const iconUrl = chrome.runtime.getURL("icons/icon128.png");
 
   // Create CLEAN options with ONLY the properties we want
   const safeOptions: chrome.notifications.NotificationCreateOptions = {
-    type: "basic",
-    iconUrl: iconUrl, // Use absolute URL
+    type: options.type || "basic",
+    iconUrl: options.iconUrl || iconUrl, // Use absolute URL
     title: options.title || "Pushbullet",
     message: options.message || "",
     priority: options.priority || 1,
   };
+
+  if (options.imageUrl) {
+    safeOptions.imageUrl = options.imageUrl;
+  }
 
   // Log what we're creating
   debugLogger.notifications(
@@ -38,35 +42,39 @@ export function createNotificationWithTimeout(
     },
   );
 
-  chrome.notifications.create(notificationId, safeOptions, (createdId) => {
-    // Check for errors
-    if (chrome.runtime.lastError) {
-      debugLogger.notifications("ERROR", "Notification creation error", {
-        error: chrome.runtime.lastError.message,
-        notificationId,
-      });
-    }
-
-    if (callback) callback(createdId);
-
-    // Auto-dismiss logic
-    try {
-      const timeout = timeoutMs !== undefined ? timeoutMs : 10000; // Default 10 seconds
-      if (typeof timeout === "number" && timeout > 0) {
-        setTimeout(() => {
-          chrome.notifications.clear(createdId || notificationId, () => {});
-        }, timeout);
+  return new Promise((resolve) => {
+    chrome.notifications.create(notificationId, safeOptions, (createdId) => {
+      // Check for errors
+      if (chrome.runtime.lastError) {
+        debugLogger.notifications("ERROR", "Notification creation error", {
+          error: chrome.runtime.lastError.message,
+          notificationId,
+        });
       }
-    } catch (error) {
-      debugLogger.notifications(
-        "ERROR",
-        "Failed to set notification timeout",
-        {
-          error: (error as Error).message,
-        },
-        error as Error,
-      );
-    }
+
+      if (callback) callback(createdId);
+
+      // Auto-dismiss logic
+      try {
+        const timeout = timeoutMs !== undefined ? timeoutMs : 10000; // Default 10 seconds
+        if (typeof timeout === "number" && timeout > 0) {
+          setTimeout(() => {
+            chrome.notifications.clear(createdId || notificationId, () => {});
+          }, timeout);
+        }
+      } catch (error) {
+        debugLogger.notifications(
+          "ERROR",
+          "Failed to set notification timeout",
+          {
+            error: (error as Error).message,
+          },
+          error as Error,
+        );
+      }
+
+      resolve();
+    });
   });
 }
 

@@ -39,14 +39,13 @@ export async function refreshPushesIncremental(apiKey: string): Promise<Incremen
     return { pushes: [], isSeedRun: true as const };
   }
 
-  // Normal incremental: fetch and advance cutoff
+  // Normal incremental: callers advance the cutoff only after side effects complete.
   const pushes = await fetchIncrementalPushes(apiKey, storedCutoff, 100);
   const maxModified = await computeMaxModified(pushes);
   if (maxModified > storedCutoff!) {
-    await setLastModifiedCutoffSafe(maxModified);
-    debugLogger.general('DEBUG', 'Pipeline 1 Updated cutoff via safe setter', {
+    debugLogger.general('DEBUG', 'Pipeline 1 fetched pushes awaiting processing', {
       old: storedCutoff,
-      new: maxModified,
+      candidate: maxModified,
     });
   }
   return { pushes, isSeedRun: false as const };

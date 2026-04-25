@@ -26,6 +26,36 @@ export const KNOWN_UNSUPPORTED_TYPES: readonly string[] = [
   "channel",
 ] as const;
 
+function hasStringValue(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+function summarizeUnknownPush(fullPush: unknown): Record<string, unknown> | undefined {
+  if (!fullPush || typeof fullPush !== "object") {
+    return undefined;
+  }
+
+  const push = fullPush as Record<string, unknown>;
+  return {
+    iden: push.iden,
+    type: push.type,
+    encrypted: !!push.encrypted,
+    contentFlags: {
+      heading: hasStringValue(push.title),
+      message: hasStringValue(push.body),
+      link: hasStringValue(push.url),
+      fileLink: hasStringValue(push.file_url),
+      imageLink: hasStringValue(push.image_url),
+      ciphertext: hasStringValue(push.ciphertext),
+    },
+    notificationsCount: Array.isArray(push.notifications)
+      ? push.notifications.length
+      : 0,
+    created: push.created,
+    modified: push.modified,
+  };
+}
+
 /**
  * Result of checking push type support.
  */
@@ -82,8 +112,7 @@ export function logUnsupportedPushType(
       category: typeCheck.category,
       reason: "This is a new or unrecognized push type",
       supportedTypes: SUPPORTED_PUSH_TYPES,
-      // Include full push data for unknown types
-      fullPushData: fullPush,
+      pushSummary: summarizeUnknownPush(fullPush),
     });
   }
 }

@@ -51,5 +51,16 @@ export default [
         { allowShortCircuit: true, allowTernary: true }
       ]
     }
+  },
+  {
+    files: [
+      'src/background/**/*.ts',
+      'src/lib/security/**/*.ts',
+      'src/lib/logging/**/*.ts'
+    ],
+    rules: {
+      'no-undef': 'error',
+      '@typescript-eslint/no-explicit-any': 'warn'
+    }
   }
 ];

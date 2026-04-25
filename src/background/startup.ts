@@ -9,7 +9,7 @@ import { sessionCache, hydrateCutoff } from '../app/session';
 import { debugLogger } from '../lib/logging';
 import { startCriticalKeepalive, stopCriticalKeepalive } from './keepalive';
 import { setApiKey } from './state';
-import { ensureDebugConfigLoadedOnce } from './index';
+import { ensureDebugConfigLoadedOnce } from './config';
 import type { User } from '../types/domain';
 
 import {

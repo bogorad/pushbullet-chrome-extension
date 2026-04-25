@@ -49,13 +49,11 @@ const PRIVILEGED_ACTIONS = new Set([
   MessageAction.SETTINGS_CHANGED,
   MessageAction.UPDATE_DEVICE_NICKNAME,
   MessageAction.SEND_PUSH,
+  MessageAction.UPLOAD_AND_SEND_FILE,
   MessageAction.UPDATE_DEBUG_CONFIG,
   MessageAction.CLEAR_ALL_LOGS,
   MessageAction.EXPORT_DEBUG_DATA,
   MessageAction.GET_DEBUG_SUMMARY,
-  MessageAction.AUTO_OPEN_LINKS_CHANGED,
-  MessageAction.ENCRYPTION_PASSWORD_CHANGED,
-  MessageAction.DEBUG_MODE_CHANGED,
   'attemptReconnect',
 ]);
 

@@ -3,7 +3,7 @@
  * Tests the idempotent guard pattern that prevents duplicate menu creation
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Chrome API is mocked globally in tests/setup.ts
 declare const chrome: any;
@@ -13,6 +13,11 @@ let setupContextMenu: any;
 
 // Mock the dependencies
 const mockGetApiKey = vi.fn();
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 vi.mock('../../src/lib/logging', () => ({
   debugLogger: {
@@ -70,13 +75,6 @@ vi.mock('../../src/background/state', () => ({
   isPollingMode: vi.fn(() => false),
   setWebSocketClient: vi.fn(),
   WEBSOCKET_URL: 'wss://example.com/'
-}));
-
-vi.mock('../../src/background/index', () => ({
-  stateMachine: {
-    getCurrentState: vi.fn(() => 'degraded'),
-    transition: vi.fn(() => Promise.resolve())
-  }
 }));
 
 describe('setupContextMenu - Idempotent Guard Pattern', () => {
@@ -274,8 +272,17 @@ describe('showPushNotification - Notification Creation', () => {
     // Mock chrome.runtime.getURL for icon URL generation
     chrome.runtime.getURL = vi.fn((path: string) => `chrome-extension://fake-id/${path}`);
     
-    // Mock chrome.notifications.create to return a promise that resolves
-    chrome.notifications.create.mockImplementation(() => Promise.resolve('notification-id'));
+    // Mock chrome.notifications.create to invoke callback and return a promise
+    chrome.notifications.create.mockImplementation(
+      (
+        _notificationId: string,
+        _options: chrome.notifications.NotificationCreateOptions,
+        callback?: (id?: string) => void,
+      ) => {
+        callback?.('notification-id');
+        return Promise.resolve('notification-id');
+      },
+    );
     
     // Re-import the module to get fresh state
     const module = await import('../../src/background/utils');
@@ -476,6 +483,86 @@ describe('showPushNotification - Notification Creation', () => {
     
     expect(notificationId1).not.toBe(notificationId2);
   });
+
+  it('should clear received push notifications after the configured timeout', async () => {
+    vi.useFakeTimers();
+    const { getNotificationTimeout } = await import('../../src/background/state');
+    (getNotificationTimeout as any).mockReturnValue(2500);
+    const push = { type: 'note', title: 'Timed Note', body: 'Expires' };
+
+    await showPushNotification(push);
+
+    expect(chrome.notifications.clear).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2499);
+    expect(chrome.notifications.clear).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(chrome.notifications.clear).toHaveBeenCalledWith('notification-id', expect.any(Function));
+  });
+
+  it('should keep received push notifications when timeout is 0', async () => {
+    vi.useFakeTimers();
+    const { getNotificationTimeout } = await import('../../src/background/state');
+    (getNotificationTimeout as any).mockReturnValue(0);
+    const push = { type: 'note', title: 'Persistent Note', body: 'Stays visible' };
+
+    await showPushNotification(push);
+    vi.advanceTimersByTime(60000);
+
+    expect(chrome.notifications.clear).not.toHaveBeenCalled();
+  });
+});
+
+describe('push sent notifications - timeout behavior', () => {
+  let pushLink: any;
+  let pushNote: any;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    chrome.runtime.getURL = vi.fn((path: string) => `chrome-extension://fake-id/${path}`);
+    chrome.notifications.create.mockImplementation(
+      (
+        _notificationId: string,
+        _options: chrome.notifications.NotificationCreateOptions,
+        callback?: (id?: string) => void,
+      ) => {
+        callback?.('sent-notification-id');
+        return Promise.resolve('sent-notification-id');
+      },
+    );
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true } as Response)));
+
+    const state = await import('../../src/background/state');
+    (state.getApiKey as any).mockReturnValue('test-api-key');
+    (state.getNotificationTimeout as any).mockReturnValue(2500);
+
+    const module = await import('../../src/background/utils');
+    pushLink = module.pushLink;
+    pushNote = module.pushNote;
+    chrome.notifications.create.mockClear();
+    chrome.notifications.clear.mockClear();
+  });
+
+  it('should keep link-sent notifications on the wrapper default timeout', async () => {
+    vi.useFakeTimers();
+
+    await pushLink('https://example.com', 'Example');
+
+    vi.advanceTimersByTime(9999);
+    expect(chrome.notifications.clear).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(chrome.notifications.clear).toHaveBeenCalledWith('sent-notification-id', expect.any(Function));
+  });
+
+  it('should keep note-sent notifications on the wrapper default timeout', async () => {
+    vi.useFakeTimers();
+
+    await pushNote('Example note', 'Body');
+
+    vi.advanceTimersByTime(9999);
+    expect(chrome.notifications.clear).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(chrome.notifications.clear).toHaveBeenCalledWith('sent-notification-id', expect.any(Function));
+  });
 });
 
 /**
@@ -486,6 +573,7 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
   let performWebSocketHealthCheck: any;
   let mockWsClient: any;
   let mockConnectFn: any;
+  let mockRecoveryController: any;
 
   beforeEach(async () => {
     // Reset module state by re-importing
@@ -501,6 +589,10 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
       isConnectionHealthy: vi.fn()
     };
     mockConnectFn = vi.fn();
+    mockRecoveryController = {
+      getCurrentState: vi.fn(() => 'degraded'),
+      transition: vi.fn(() => Promise.resolve())
+    };
 
     // Reset getApiKey mock to default (null)
     const { getApiKey } = await import('../../src/background/state');
@@ -522,20 +614,29 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
     expect(mockConnectFn).not.toHaveBeenCalled();
   });
 
-  it('should emit disconnected event when WebSocket is connected but unhealthy', async () => {
+  it('should trigger reconnect when WebSocket is connected but unhealthy', async () => {
     // Arrange
     mockWsClient.isConnected.mockReturnValue(true);
     mockWsClient.isConnectionHealthy.mockReturnValue(false);
     const { getApiKey } = await import('../../src/background/state');
     (getApiKey as any).mockReturnValue('test-api-key');
-    const { globalEventBus } = await import('../../src/lib/events/event-bus');
 
     // Act
-    performWebSocketHealthCheck(mockWsClient, mockConnectFn);
+    performWebSocketHealthCheck(
+      mockWsClient,
+      mockConnectFn,
+      mockRecoveryController,
+    );
 
     // Assert
     expect(mockWsClient.isConnectionHealthy).toHaveBeenCalledTimes(1);
-    expect(globalEventBus.emit).toHaveBeenCalledWith('websocket:disconnected');
+    expect(mockRecoveryController.transition).toHaveBeenCalledWith(
+      'ATTEMPT_RECONNECT',
+      {
+        hasApiKey: true,
+        socketHealthy: false,
+      },
+    );
     expect(mockConnectFn).not.toHaveBeenCalled();
   });
 
@@ -589,5 +690,24 @@ describe('performWebSocketHealthCheck - Reconnection Logic', () => {
 
     // Assert
     expect(mockConnectFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('should recover when WebSocket client is null, API key is loaded, and state is stale READY', async () => {
+    // Arrange
+    const { getApiKey } = await import('../../src/background/state');
+    (getApiKey as any).mockReturnValue('test-api-key');
+    mockRecoveryController.getCurrentState.mockReturnValue('ready');
+
+    // Act
+    performWebSocketHealthCheck(null, mockConnectFn, mockRecoveryController);
+
+    // Assert
+    const attemptedStateMachineReconnect = mockRecoveryController.transition.mock.calls.some(
+      ([event, data]: [string, { hasApiKey?: boolean; socketHealthy?: boolean } | undefined]) =>
+        event === 'ATTEMPT_RECONNECT' &&
+        data?.hasApiKey === true,
+    );
+
+    expect(mockConnectFn.mock.calls.length > 0 || attemptedStateMachineReconnect).toBe(true);
   });
 });

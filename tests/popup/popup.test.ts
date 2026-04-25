@@ -98,6 +98,19 @@ async function loadPopup(): Promise<void> {
   popupModule.init();
 }
 
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function createUploadTestFile(): File {
+  const file = new File(['hello'], 'report.txt', { type: 'text/plain' });
+  Object.defineProperty(file, 'arrayBuffer', {
+    configurable: true,
+    value: vi.fn().mockResolvedValue(new ArrayBuffer(5)),
+  });
+  return file;
+}
+
 describe('Popup friend targets', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -186,6 +199,99 @@ describe('Popup friend targets', () => {
       },
     });
     expect(sendPushCall?.[0].pushData.device_iden).toBeUndefined();
+  });
+
+  it('sends file uploads to the background without reading the API key', async () => {
+    const session = createSessionData();
+
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(session);
+      }
+
+      if (message.action === MessageAction.UPLOAD_AND_SEND_FILE && callback) {
+        callback({ success: true });
+      }
+
+      return Promise.resolve(undefined);
+    });
+
+    await loadPopup();
+
+    const targetDeviceSelect = document.getElementById('target-device') as HTMLSelectElement;
+    const fileTypeButton = document.getElementById('push-type-file') as HTMLButtonElement;
+    const fileInput = document.getElementById('file-input') as HTMLInputElement;
+    const fileBody = document.getElementById('file-body') as HTMLTextAreaElement;
+    const sendPushButton = document.getElementById('send-push') as HTMLButtonElement;
+    const file = createUploadTestFile();
+
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: [file],
+    });
+    targetDeviceSelect.value = 'friend:alice@example.com';
+    fileBody.value = 'Quarterly report';
+    fileTypeButton.click();
+    sendPushButton.click();
+    await flushAsyncWork();
+
+    const uploadCall = chrome.runtime.sendMessage.mock.calls.find(
+      ([message]: [{ action?: string }]) => message.action === MessageAction.UPLOAD_AND_SEND_FILE,
+    );
+
+    expect(uploadCall).toBeDefined();
+    expect(uploadCall?.[0]).toMatchObject({
+      action: MessageAction.UPLOAD_AND_SEND_FILE,
+      fileName: 'report.txt',
+      fileType: 'text/plain',
+      fileSize: 5,
+      body: 'Quarterly report',
+      email: 'alice@example.com',
+    });
+    expect(uploadCall?.[0].fileBase64).toEqual(expect.any(String));
+    expect(uploadCall?.[0].fileBase64).not.toHaveLength(0);
+    expect(storageRepositoryMock.getApiKey).not.toHaveBeenCalled();
+  });
+
+  it('shows structured file upload errors returned by the background', async () => {
+    const session = createSessionData();
+
+    chrome.runtime.sendMessage.mockImplementation((message: { action?: string }, callback?: (response: unknown) => void) => {
+      if (message.action === MessageAction.GET_SESSION_DATA && callback) {
+        callback(session);
+      }
+
+      if (message.action === MessageAction.UPLOAD_AND_SEND_FILE && callback) {
+        callback({
+          success: false,
+          error: {
+            code: 'upload_request_failed',
+            stage: 'upload-request',
+            message: 'Upload request rejected',
+          },
+        });
+      }
+
+      return Promise.resolve(undefined);
+    });
+
+    await loadPopup();
+
+    const fileTypeButton = document.getElementById('push-type-file') as HTMLButtonElement;
+    const fileInput = document.getElementById('file-input') as HTMLInputElement;
+    const sendPushButton = document.getElementById('send-push') as HTMLButtonElement;
+    const statusMessage = document.getElementById('status-message') as HTMLDivElement;
+    const file = createUploadTestFile();
+
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: [file],
+    });
+    fileTypeButton.click();
+    sendPushButton.click();
+    await flushAsyncWork();
+
+    expect(statusMessage.textContent).toBe('Error: Upload request rejected');
   });
 
   it('repopulates targets when the background sends session data updates', async () => {

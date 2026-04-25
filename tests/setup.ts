@@ -66,6 +66,12 @@ const createChromeMock = () => {
           set: vi.fn(),
           remove: vi.fn(),
           clear: vi.fn()
+        },
+        session: {
+          get: vi.fn(() => ({})),
+          set: vi.fn(),
+          remove: vi.fn(),
+          clear: vi.fn()
         }
       },
     contextMenus: {
@@ -100,4 +106,3 @@ beforeEach(() => {
   // Recreate chrome mock for each test
   (global as any).chrome = createChromeMock();
 });
-

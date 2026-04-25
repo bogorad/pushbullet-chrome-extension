@@ -4,6 +4,7 @@
 
 import type { Push } from '../types/domain';
 import { getElementById, querySelector, setText } from '../lib/ui/dom';
+import { isTrustedImageUrl } from '../lib/security/trusted-image-url';
 
 
 
@@ -43,6 +44,11 @@ function loadNotification(): void {
       if (push.type === "sms_changed" && push.notifications?.[0]?.image_url) {
         const imageUrl = push.notifications[0].image_url;
 
+        if (!isTrustedImageUrl(imageUrl)) {
+          displayNotification(push);
+          return;
+        }
+
         // Fetch and convert to data URL
         fetch(imageUrl)
           .then((res) => res.blob())
@@ -76,21 +82,6 @@ function loadNotification(): void {
       displayNotification(push);
     },
   );
-}
-
-/**
- * Check if URL is from a trusted image domain
- */
-function isTrustedImageUrl(urlString: string): boolean {
-  if (!urlString) return false;
-  
-  try {
-    const url = new URL(urlString);
-    return url.hostname.endsWith('.pushbullet.com') || 
-               url.hostname.endsWith('.pushbulletusercontent.com') ||
-               /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);  } catch {
-    return false;
-  }
 }
 
 /**
@@ -315,4 +306,3 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
-

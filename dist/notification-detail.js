@@ -19,6 +19,28 @@
     element.textContent = text;
   }
 
+  // src/lib/security/trusted-image-url.ts
+  function isTrustedPushbulletHost(hostname) {
+    return hostname === "pushbullet.com" || hostname.endsWith(".pushbullet.com") || hostname === "pushbulletusercontent.com" || hostname.endsWith(".pushbulletusercontent.com");
+  }
+  function isTrustedGoogleUserContentHost(hostname) {
+    return /^lh[0-9]\.googleusercontent\.com$/.test(hostname);
+  }
+  function isTrustedImageUrl(urlString) {
+    if (!urlString) {
+      return false;
+    }
+    try {
+      const url = new URL(urlString);
+      if (url.protocol !== "https:") {
+        return false;
+      }
+      return isTrustedPushbulletHost(url.hostname) || isTrustedGoogleUserContentHost(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
   // src/notification-detail/index.ts
   function getNotificationId() {
     const urlParams = new URLSearchParams(window.location.search);
@@ -41,6 +63,10 @@
         const push = response.push;
         if (push.type === "sms_changed" && push.notifications?.[0]?.image_url) {
           const imageUrl = push.notifications[0].image_url;
+          if (!isTrustedImageUrl(imageUrl)) {
+            displayNotification(push);
+            return;
+          }
           fetch(imageUrl).then((res) => res.blob()).then((blob) => {
             const reader = new FileReader();
             reader.onloadend = () => {
@@ -65,15 +91,6 @@
         displayNotification(push);
       }
     );
-  }
-  function isTrustedImageUrl(urlString) {
-    if (!urlString) return false;
-    try {
-      const url = new URL(urlString);
-      return url.hostname.endsWith(".pushbullet.com") || url.hostname.endsWith(".pushbulletusercontent.com") || /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname);
-    } catch {
-      return false;
-    }
   }
   function downloadFile(fileUrl, fileName) {
     const link = document.createElement("a");

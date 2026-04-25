@@ -18,8 +18,11 @@ export default defineConfig({
       reporter: ['text', 'json', 'html'],
       include: [
         'src/app/session/**/*.ts',
-        'src/background/utils.ts',
-        'src/background/index.ts'
+        'src/app/ws/**/*.ts',
+        'src/background/**/*.ts',
+        'src/debug-dashboard/**/*.ts',
+        'src/lib/logging/**/*.ts',
+        'src/lib/security/**/*.ts'
       ],
       exclude: [
         'node_modules/**',
@@ -28,13 +31,13 @@ export default defineConfig({
         '**/*.d.ts',
         '**/*.config.ts'
       ],
-      // Keep thresholds aligned with the current post-upgrade V8 baseline.
-      // Raise these as targeted coverage expands.
+      // Keep thresholds aligned with the expanded lifecycle/security baseline.
+      // Raise these as targeted tests land for currently uncovered modules.
       thresholds: {
-        lines: 18,
-        functions: 6,
-        branches: 18,
-        statements: 18
+        lines: 21,
+        functions: 14,
+        branches: 15,
+        statements: 20
       }
     },
     

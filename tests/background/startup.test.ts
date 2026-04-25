@@ -71,7 +71,7 @@ vi.mock('../../src/background/state', () => ({
   setApiKey: vi.fn(),
 }));
 
-vi.mock('../../src/background/index', () => ({
+vi.mock('../../src/background/config', () => ({
   ensureDebugConfigLoadedOnce: vi.fn().mockResolvedValue(undefined),
 }));
 

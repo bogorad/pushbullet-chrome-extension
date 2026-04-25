@@ -27,7 +27,11 @@
   var getStringOrNull = (value) => typeof value === "string" ? value : null;
   var getBooleanOrDefault = (value, fallback) => typeof value === "boolean" ? value : fallback;
   var getNumberOrDefault = (value, fallback) => typeof value === "number" ? value : fallback;
+  var ENCRYPTION_PASSWORD_KEY = "encryptionPassword";
   var ChromeStorageRepository = class {
+    getSessionStorage() {
+      return chrome.storage.session;
+    }
     /**
      * Get API Key from local storage
      * Security: API keys are stored in local storage (not synced) to prevent
@@ -119,20 +123,42 @@
       await chrome.storage.sync.set({ onlyThisDevice: value });
     }
     /**
-     * Get Encryption Password from local storage
+     * Get Encryption Password from session storage when available.
+     * Existing local plaintext values are migrated once, then removed.
      */
     async getEncryptionPassword() {
-      const result = await chrome.storage.local.get(["encryptionPassword"]);
-      return getStringOrNull(result.encryptionPassword);
+      const sessionStorage = this.getSessionStorage();
+      if (sessionStorage) {
+        const sessionResult = await sessionStorage.get([ENCRYPTION_PASSWORD_KEY]);
+        const sessionPassword = getStringOrNull(sessionResult[ENCRYPTION_PASSWORD_KEY]);
+        if (sessionPassword) {
+          return sessionPassword;
+        }
+      }
+      const localResult = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+      const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
+      if (localPassword && sessionStorage) {
+        await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+      }
+      return localPassword;
     }
     /**
-     * Set Encryption Password in local storage
+     * Set Encryption Password in session storage when available.
+     * Falls back to local storage only on browsers without storage.session.
      */
     async setEncryptionPassword(password) {
+      const sessionStorage = this.getSessionStorage();
       if (password === null) {
-        await chrome.storage.local.remove(["encryptionPassword"]);
+        await Promise.all([
+          sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
+          chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
+        ]);
+      } else if (sessionStorage) {
+        await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
       } else {
-        await chrome.storage.local.set({ encryptionPassword: password });
+        await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
       }
     }
     /**
@@ -265,7 +291,8 @@
     async clear() {
       await Promise.all([
         chrome.storage.sync.clear(),
-        chrome.storage.local.clear()
+        chrome.storage.local.clear(),
+        this.getSessionStorage()?.clear() ?? Promise.resolve()
       ]);
     }
     /**
@@ -275,7 +302,8 @@
     async remove(keys) {
       await Promise.all([
         chrome.storage.sync.remove(keys),
-        chrome.storage.local.remove(keys)
+        chrome.storage.local.remove(keys),
+        this.getSessionStorage()?.remove(keys) ?? Promise.resolve()
       ]);
     }
     /**
@@ -318,7 +346,7 @@
     autoOpenLinksOnReconnect: false,
     // Off by default for safety
     encryptionPassword: "",
-    // E2EE password (stored in local storage only)
+    // E2EE password (stored in session storage when supported)
     debugMode: true
   };
   function showStatus2(message, type) {
@@ -429,7 +457,7 @@
         hasPassword: password.length > 0
       });
       if (password.length > 0) {
-        showStatus2("Encryption password saved (stored locally only)", "success");
+        showStatus2("Encryption password saved for this browser session", "success");
       } else {
         showStatus2("Encryption password cleared", "success");
       }

@@ -56,6 +56,8 @@ export interface StorageRepository {
   getLastModifiedCutoff(): Promise<number | null>;
   setLastModifiedCutoff(value: number): Promise<void>;
   removeLastModifiedCutoff(): Promise<void>;
+  wasPushProcessed(iden: string, modified: number): Promise<boolean>;
+  markPushProcessed(iden: string, modified: number): Promise<void>;
 
   // Auto Open Links on Reconnect
   getLastAutoOpenCutoff(): Promise<number | null>;
@@ -93,6 +95,35 @@ const getBooleanOrDefault = (value: unknown, fallback: boolean): boolean =>
 const getNumberOrDefault = (value: unknown, fallback: number): number =>
   typeof value === 'number' ? value : fallback;
 
+const ENCRYPTION_PASSWORD_KEY = 'encryptionPassword';
+const PROCESSED_PUSHES_KEY = 'processedPushes';
+const MAX_PROCESSED_PUSH_MARKERS = 500;
+
+const getProcessedPushMarkers = (
+  value: unknown,
+): Record<string, number> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const markers: Record<string, number> = {};
+  for (const [iden, modified] of Object.entries(value)) {
+    if (typeof modified === 'number' && Number.isFinite(modified)) {
+      markers[iden] = modified;
+    }
+  }
+  return markers;
+};
+
+const pruneProcessedPushMarkers = (
+  markers: Record<string, number>,
+): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(markers)
+      .sort(([, leftModified], [, rightModified]) => rightModified - leftModified)
+      .slice(0, MAX_PROCESSED_PUSH_MARKERS),
+  );
+
 /**
  * Chrome Storage Repository Implementation
  * 
@@ -101,6 +132,10 @@ const getNumberOrDefault = (value: unknown, fallback: number): number =>
  * chrome.storage API.
  */
 export class ChromeStorageRepository implements StorageRepository {
+  private getSessionStorage(): chrome.storage.StorageArea | undefined {
+    return chrome.storage.session;
+  }
+
   /**
    * Get API Key from local storage
    * Security: API keys are stored in local storage (not synced) to prevent
@@ -204,21 +239,44 @@ export class ChromeStorageRepository implements StorageRepository {
   }
 
   /**
-   * Get Encryption Password from local storage
+   * Get Encryption Password from session storage when available.
+   * Existing local plaintext values are migrated once, then removed.
    */
   async getEncryptionPassword(): Promise<string | null> {
-    const result = await chrome.storage.local.get(['encryptionPassword']);
-    return getStringOrNull(result.encryptionPassword);
+    const sessionStorage = this.getSessionStorage();
+    if (sessionStorage) {
+      const sessionResult = await sessionStorage.get([ENCRYPTION_PASSWORD_KEY]);
+      const sessionPassword = getStringOrNull(sessionResult[ENCRYPTION_PASSWORD_KEY]);
+      if (sessionPassword) {
+        return sessionPassword;
+      }
+    }
+
+    const localResult = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
+    const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
+    if (localPassword && sessionStorage) {
+      await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
+      await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+    }
+    return localPassword;
   }
 
   /**
-   * Set Encryption Password in local storage
+   * Set Encryption Password in session storage when available.
+   * Falls back to local storage only on browsers without storage.session.
    */
   async setEncryptionPassword(password: string | null): Promise<void> {
+    const sessionStorage = this.getSessionStorage();
     if (password === null) {
-      await chrome.storage.local.remove(['encryptionPassword']);
+      await Promise.all([
+        sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
+        chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
+      ]);
+    } else if (sessionStorage) {
+      await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
+      await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
     } else {
-      await chrome.storage.local.set({ encryptionPassword: password });
+      await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password });
     }
   }
 
@@ -284,6 +342,35 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async removeLastModifiedCutoff(): Promise<void> {
     await chrome.storage.local.remove('lastModifiedCutoff');
+  }
+
+  /**
+   * Check whether a push version has already completed side effects.
+   */
+  async wasPushProcessed(iden: string, modified: number): Promise<boolean> {
+    if (!iden || !Number.isFinite(modified)) {
+      return false;
+    }
+
+    const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+    const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+    return (markers[iden] ?? 0) >= modified;
+  }
+
+  /**
+   * Mark a push version as completed after notification and auto-open work.
+   */
+  async markPushProcessed(iden: string, modified: number): Promise<void> {
+    if (!iden || !Number.isFinite(modified)) {
+      return;
+    }
+
+    const result = await chrome.storage.local.get([PROCESSED_PUSHES_KEY]);
+    const markers = getProcessedPushMarkers(result[PROCESSED_PUSHES_KEY]);
+    markers[iden] = Math.max(markers[iden] ?? 0, modified);
+    await chrome.storage.local.set({
+      [PROCESSED_PUSHES_KEY]: pruneProcessedPushMarkers(markers),
+    });
   }
 
   /**
@@ -370,7 +457,8 @@ export class ChromeStorageRepository implements StorageRepository {
   async clear(): Promise<void> {
     await Promise.all([
       chrome.storage.sync.clear(),
-      chrome.storage.local.clear()
+      chrome.storage.local.clear(),
+      this.getSessionStorage()?.clear() ?? Promise.resolve()
     ]);
   }
 
@@ -381,7 +469,8 @@ export class ChromeStorageRepository implements StorageRepository {
   async remove(keys: string[]): Promise<void> {
     await Promise.all([
       chrome.storage.sync.remove(keys),
-      chrome.storage.local.remove(keys)
+      chrome.storage.local.remove(keys),
+      this.getSessionStorage()?.remove(keys) ?? Promise.resolve()
     ]);
   }
 

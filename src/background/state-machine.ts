@@ -273,7 +273,7 @@ export class ServiceWorkerStateMachine {
 
     case ServiceWorkerState.INITIALIZING:
       if (event === 'INIT_SUCCESS') {
-        return ServiceWorkerState.READY;
+        return ServiceWorkerState.RECONNECTING;
       }
       if (event === 'INIT_FAILURE') {
         return ServiceWorkerState.ERROR;
@@ -281,6 +281,13 @@ export class ServiceWorkerStateMachine {
       break;
 
     case ServiceWorkerState.READY:
+      if (
+        event === 'ATTEMPT_RECONNECT' &&
+        data?.hasApiKey === true &&
+        data?.socketHealthy === false
+      ) {
+        return ServiceWorkerState.RECONNECTING;
+      }
       if (event === 'WS_DISCONNECTED') {
         return ServiceWorkerState.DEGRADED;
       }
@@ -373,7 +380,7 @@ export class ServiceWorkerStateMachine {
       if (this.callbacks.onInitialize) {
         try {
           await this.callbacks.onInitialize(data);
-          // Initialization succeeded - transition to READY
+          // Initialization succeeded - connect WebSocket before entering READY.
           await this.transition('INIT_SUCCESS');
         } catch (error) {
           // Initialization failed - transition to ERROR

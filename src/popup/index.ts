@@ -8,6 +8,7 @@ import type {
   Push,
   SessionDataResponse,
   SessionDataUpdatedMessage,
+  UploadAndSendFileResponse,
   User,
 } from "../types/domain";
 import { MessageAction, isMirrorPush } from "../types/domain";
@@ -35,13 +36,10 @@ interface PushData {
   file_url?: string;
 }
 
-interface UploadRequestResponse {
-  file_name: string;
-  file_type: string;
-  file_url: string;
-  upload_url: string;
-  data: Record<string, string>;
-}
+type PopupSendResponse = {
+  success: boolean;
+  error?: string | { message?: string };
+};
 
 // DOM elements
 const loadingSection = getElementById<HTMLDivElement>("loading-section");
@@ -751,6 +749,60 @@ async function togglePushType(type: PushType): Promise<void> {
 /**
  * Send push
  */
+function getSendResponseErrorMessage(
+  response: PopupSendResponse | undefined,
+  fallback: string,
+): string {
+  if (!response?.error) {
+    return fallback;
+  }
+
+  if (typeof response.error === "string") {
+    return response.error;
+  }
+
+  return response.error.message || fallback;
+}
+
+function handlePushSendResponse(response: PopupSendResponse | undefined): void {
+  logToBackground(
+    "INFO",
+    "[sendPush] Received response from background script.",
+    response,
+  );
+
+  if (response?.success) {
+    clearPushForm();
+    showStatus("Push sent successfully!", "success");
+    chrome.runtime.sendMessage(
+      { action: MessageAction.GET_SESSION_DATA },
+      (sessionResponse: PopupSessionData) => {
+        if (sessionResponse && sessionResponse.recentPushes) {
+          displayPushes(sessionResponse.recentPushes);
+        }
+      },
+    );
+  } else {
+    showStatus(
+      `Error: ${getSendResponseErrorMessage(response, "Failed to send push")}`,
+      "error",
+    );
+  }
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+}
+
 async function sendPush(): Promise<void> {
   logToBackground("INFO", "[sendPush] Function initiated.");
 
@@ -825,7 +877,6 @@ async function sendPush(): Promise<void> {
       showStatus("Uploading file...", "info");
 
       try {
-        // Check if file exists
         if (!file) {
           logToBackground(
             "WARN",
@@ -834,65 +885,54 @@ async function sendPush(): Promise<void> {
           showStatus("Please select a file to attach.", "error");
           return;
         }
-        const uploadApiKey = await storageRepository.getApiKey();
-        if (!uploadApiKey) {
-          logToBackground(
-            "WARN",
-            "[sendPush] Exiting: Cannot upload file, user is not logged in.",
-          );
-          showStatus("Not logged in. Please log in first.", "error");
-          return;
-        }
 
-        // Request upload authorization
-        const uploadRequestResponse = await fetch(
-          "https://api.pushbullet.com/v2/upload-request",
+        const fileBody = (
+          document.getElementById("file-body") as HTMLTextAreaElement
+        ).value.trim();
+        const fileBase64 = await fileToBase64(file);
+
+        logToBackground(
+          "INFO",
+          "[sendPush] Sending file upload message to background script.",
           {
-            method: "POST",
-            headers: {
-              "Access-Token": uploadApiKey,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              file_name: file.name,
-              file_type: file.type || "application/octet-stream",
-            }),
+            targetKind: pushData.email
+              ? "email"
+              : pushData.device_iden
+                ? "device"
+                : "broadcast",
+            hasBody: fileBody.length > 0,
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size,
           },
         );
 
-        if (!uploadRequestResponse.ok) {
-          throw new Error("Failed to request file upload authorization");
-        }
+        chrome.runtime.sendMessage(
+          {
+            action: MessageAction.UPLOAD_AND_SEND_FILE,
+            fileBase64,
+            fileName: file.name,
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size,
+            body: fileBody,
+            device_iden: pushData.device_iden,
+            email: pushData.email,
+            source_device_iden: pushData.source_device_iden,
+          },
+          (response: UploadAndSendFileResponse) => {
+            if (chrome.runtime.lastError) {
+              logToBackground(
+                "ERROR",
+                "[sendPush] Error sending file upload message to background.",
+                { error: chrome.runtime.lastError },
+              );
+              showStatus("Error: Could not send push", "error");
+              return;
+            }
 
-        const uploadData =
-          (await uploadRequestResponse.json()) as UploadRequestResponse;
-
-        // Upload to S3
-        const formData = new FormData();
-        Object.keys(uploadData.data).forEach((key) => {
-          formData.append(key, uploadData.data[key] as string);
-        });
-        formData.append("file", file);
-
-        const uploadResponse = await fetch(uploadData.upload_url, {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!uploadResponse.ok) {
-          throw new Error("Failed to upload file to server");
-        }
-
-        // Create file push
-        pushData.type = "file";
-        pushData.file_name = uploadData.file_name;
-        pushData.file_type = uploadData.file_type;
-        pushData.file_url = uploadData.file_url;
-        pushData.body = (
-          document.getElementById("file-body") as HTMLTextAreaElement
-        ).value.trim();
-
-        showStatus("File uploaded, sending push...", "info");
+            handlePushSendResponse(response);
+          },
+        );
+        return;
       } catch (uploadError) {
         logToBackground("ERROR", "[sendPush] File upload error.", {
           error: (uploadError as Error).message,
@@ -908,7 +948,18 @@ async function sendPush(): Promise<void> {
     logToBackground(
       "INFO",
       "[sendPush] Validation passed. Preparing to send message to background script.",
-      pushData,
+      {
+        type: pushData.type,
+        targetKind: pushData.email
+          ? "email"
+          : pushData.device_iden
+            ? "device"
+            : "broadcast",
+        hasTitle: typeof pushData.title === "string" && pushData.title.length > 0,
+        hasBody: typeof pushData.body === "string" && pushData.body.length > 0,
+        hasUrl: typeof pushData.url === "string" && pushData.url.length > 0,
+        hasFileUrl: typeof pushData.file_url === "string" && pushData.file_url.length > 0,
+      },
     );
 
     // Send push via background script
@@ -928,29 +979,7 @@ async function sendPush(): Promise<void> {
           return;
         }
 
-        logToBackground(
-          "INFO",
-          "[sendPush] Received response from background script.",
-          response,
-        );
-
-        if (response.success) {
-          clearPushForm();
-          showStatus("Push sent successfully!", "success");
-          chrome.runtime.sendMessage(
-            { action: MessageAction.GET_SESSION_DATA },
-            (sessionResponse: PopupSessionData) => {
-              if (sessionResponse && sessionResponse.recentPushes) {
-                displayPushes(sessionResponse.recentPushes);
-              }
-            },
-          );
-        } else {
-          showStatus(
-            `Error: ${response.error || "Failed to send push"}`,
-            "error",
-          );
-        }
+        handlePushSendResponse(response);
       },
     );
   } catch (error) {

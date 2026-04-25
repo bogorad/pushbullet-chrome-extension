@@ -84,4 +84,59 @@ describe('ServiceWorkerStateMachine', () => {
     //    This confirms that polling would have started.
     expect(mockCallbacks.onStartPolling).toHaveBeenCalled()
   })
+
+  it('should wait for WS_CONNECTED before marking initialization as READY', async () => {
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+
+    await stateMachine.transition('API_KEY_SET')
+
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.RECONNECTING)
+    expect(mockCallbacks.onConnectWebSocket).toHaveBeenCalledTimes(1)
+
+    await stateMachine.transition('WS_CONNECTED')
+
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
+  })
+
+  it('should reinitialize a hydrated READY state on STARTUP when credentials are present', async () => {
+    const storageGet = chrome.storage.local.get as any
+    storageGet.mockResolvedValue({
+      lastKnownState: ServiceWorkerState.READY
+    })
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
+
+    await stateMachine.transition('STARTUP', {
+      hasApiKey: true,
+      apiKey: 'test-api-key'
+    })
+
+    expect(mockCallbacks.onInitialize).toHaveBeenCalledWith({
+      hasApiKey: true,
+      apiKey: 'test-api-key'
+    })
+    expect(mockCallbacks.onConnectWebSocket).toHaveBeenCalledTimes(1)
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.RECONNECTING)
+
+    await stateMachine.transition('WS_CONNECTED')
+
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.READY)
+  })
+
+  it('should send a permanent WebSocket error from READY to ERROR', async () => {
+    const storageGet = chrome.storage.local.get as any
+    storageGet.mockResolvedValue({
+      lastKnownState: ServiceWorkerState.READY
+    })
+    const stateMachine = await ServiceWorkerStateMachine.create(mockCallbacks)
+
+    await stateMachine.transition('WS_PERMANENT_ERROR', { error: 'auth failed' })
+
+    expect(stateMachine.getCurrentState()).toBe(ServiceWorkerState.ERROR)
+    expect(mockCallbacks.onShowError).toHaveBeenCalledWith('Service worker encountered an error')
+    expect(chrome.alarms.create).toHaveBeenCalledWith('auto-recovery-from-error', {
+      delayInMinutes: 0.5
+    })
+  })
 })

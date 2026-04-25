@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MessageAction } from '../../src/types/domain';
 import {
@@ -6,6 +9,53 @@ import {
 } from '../../src/lib/security/message-validation';
 
 declare const chrome: any;
+
+const messageActionValues = Object.fromEntries(
+  Object.entries(MessageAction).map(([key, value]) => [key, value]),
+);
+
+function readProjectFile(path: string): string {
+  return readFileSync(resolve(process.cwd(), path), 'utf8');
+}
+
+function resolveActionValue(enumName: string | undefined, literalValue: string | undefined): string {
+  if (enumName) {
+    return messageActionValues[enumName] ?? enumName;
+  }
+
+  if (literalValue) {
+    return literalValue;
+  }
+
+  throw new Error('Unable to resolve message action value');
+}
+
+function extractOptionsSentActions(source: string): Set<string> {
+  const actions = new Set<string>();
+  const pattern =
+    /chrome\.runtime\.sendMessage\(\s*\{\s*action:\s*(?:MessageAction\.([A-Z_]+)|['"]([^'"]+)['"])/g;
+  let match = pattern.exec(source);
+
+  while (match) {
+    actions.add(resolveActionValue(match[1], match[2]));
+    match = pattern.exec(source);
+  }
+
+  return actions;
+}
+
+function extractBackgroundHandledActions(source: string): Set<string> {
+  const actions = new Set<string>();
+  const pattern = /message\.action\s*===\s*(?:MessageAction\.([A-Z_]+)|['"]([^'"]+)['"])/g;
+  let match = pattern.exec(source);
+
+  while (match) {
+    actions.add(resolveActionValue(match[1], match[2]));
+    match = pattern.exec(source);
+  }
+
+  return actions;
+}
 
 describe('message validation', () => {
   beforeEach(() => {
@@ -16,8 +66,16 @@ describe('message validation', () => {
   it('treats current mutating actions as privileged', () => {
     expect(isPrivilegedAction(MessageAction.SEND_PUSH)).toBe(true);
     expect(isPrivilegedAction(MessageAction.UPDATE_DEVICE_NICKNAME)).toBe(true);
+    expect(isPrivilegedAction(MessageAction.SETTINGS_CHANGED)).toBe(true);
+    expect(isPrivilegedAction(MessageAction.UPDATE_DEBUG_CONFIG)).toBe(true);
     expect(isPrivilegedAction('attemptReconnect')).toBe(true);
     expect(isPrivilegedAction(MessageAction.GET_SESSION_DATA)).toBe(false);
+  });
+
+  it('does not privilege removed options-only action names', () => {
+    expect(isPrivilegedAction('autoOpenLinksChanged')).toBe(false);
+    expect(isPrivilegedAction('encryptionPasswordChanged')).toBe(false);
+    expect(isPrivilegedAction('debugModeChanged')).toBe(false);
   });
 
   it('rejects privileged actions from invalid senders', () => {
@@ -36,5 +94,28 @@ describe('message validation', () => {
         url: 'chrome-extension://extension-id/popup.html',
       }),
     ).toBe(true);
+  });
+
+  it('keeps options message actions aligned with background handlers', () => {
+    const optionsSource = readProjectFile('src/options/index.ts');
+    const backgroundSource = readProjectFile('src/background/index.ts');
+    const optionsSentActions = extractOptionsSentActions(optionsSource);
+    const backgroundHandledActions = extractBackgroundHandledActions(backgroundSource);
+    const unhandledActions = [...optionsSentActions].filter(
+      (action) => !backgroundHandledActions.has(action),
+    );
+
+    expect(optionsSentActions).toEqual(
+      new Set([
+        MessageAction.UPDATE_DEVICE_NICKNAME,
+        MessageAction.SETTINGS_CHANGED,
+        MessageAction.UPDATE_DEBUG_CONFIG,
+        'attemptReconnect',
+      ]),
+    );
+    expect(unhandledActions).toEqual([]);
+    expect(optionsSource).not.toContain('autoOpenLinksChanged');
+    expect(optionsSource).not.toContain('encryptionPasswordChanged');
+    expect(optionsSource).not.toContain('debugModeChanged');
   });
 });

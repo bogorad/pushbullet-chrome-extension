@@ -7,17 +7,18 @@ import { performanceMonitor } from "../lib/perf";
 import { sessionCache, hydrateCutoff, setLastModifiedCutoffSafe } from "../app/session";
 import { fetchIncrementalPushes } from "../app/api/client";
 import { storageRepository } from "../infrastructure/storage/storage.repository";
+import { hydrateBackgroundConfig } from "./config";
 import {
   getApiKey,
+  getNotificationTimeout,
   setPollingMode,
   isPollingMode,
 } from "./state";
 import type { Push } from "../types/domain";
 import { createNotificationWithTimeout } from "../app/notifications";
-import { ensureConfigLoaded } from "../app/reconnect";
 import { globalEventBus } from "../lib/events/event-bus";
-import { ServiceWorkerState } from "./state-machine";
-import { stateMachine } from "./index";
+import { isTrustedImageUrl } from "../lib/security/trusted-image-url";
+import { ServiceWorkerState, type ServiceWorkerStateMachine } from "./state-machine";
 import { maybeAutoOpenLinkWithDismiss } from "./processing";
 
 // Guard flag to prevent concurrent context menu setup
@@ -32,6 +33,11 @@ export type ConnectionStatus =
   | "connecting"
   | "disconnected"
   | "degraded";
+
+export type WebSocketRecoveryController = Pick<
+  ServiceWorkerStateMachine,
+  "getCurrentState" | "transition"
+>;
 
 /**
  * Sanitize text to prevent XSS attacks
@@ -82,31 +88,31 @@ function sanitizeUrl(url: string): string {
   }
 }
 
-/**
- * Validates if a given URL belongs to trusted domains for image loading.
- * This includes Pushbullet domains and Google secure content domains.
- * @param urlString The URL to validate.
- * @returns True if the URL is from a trusted domain, false otherwise.
- */
-function isTrustedImageUrl(urlString: string): boolean {
-  if (!urlString) {
-    return false;
-  }
+function hasStringValue(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
 
-  try {
-    const url = new URL(urlString);
-    // Trust Pushbullet domains and Google secure content domains
-    return (
-      url.hostname.endsWith(".pushbullet.com") ||
-      url.hostname.endsWith(".pushbulletusercontent.com") ||
-      /^lh[0-9]\.googleusercontent\.com$/.test(url.hostname)
-    );
-  } catch {
-    debugLogger.general("WARN", "Could not parse URL for domain check", {
-      url: urlString,
-    });
-    return false;
-  }
+function summarizePushForLog(push: Partial<Push>): Record<string, unknown> {
+  const pushRecord = push as Record<string, unknown>;
+  const notifications = Array.isArray(pushRecord.notifications)
+    ? pushRecord.notifications
+    : [];
+
+  return {
+    iden: pushRecord.iden,
+    type: pushRecord.type,
+    encrypted: !!pushRecord.encrypted,
+    contentFlags: {
+      heading: hasStringValue(pushRecord.title),
+      message: hasStringValue(pushRecord.body),
+      link: hasStringValue(pushRecord.url),
+      fileLink: hasStringValue(pushRecord.file_url),
+      imageLink: hasStringValue(pushRecord.image_url),
+    },
+    notificationsCount: notifications.length,
+    created: pushRecord.created,
+    modified: pushRecord.modified,
+  };
 }
 
 /**
@@ -187,13 +193,17 @@ function upsertPushes(
   return [updated, newOnes];
 }
 
+function getPushModified(push: Push): number {
+  return typeof push.modified === 'number' ? push.modified : 0;
+}
+
 /**
  * Refresh pushes from API and show notifications for new ones
  */
 export async function refreshPushes(
   notificationDataStore?: Map<string, Push>,
 ): Promise<void> {
-  await ensureConfigLoaded(); // already present in background flow
+  await hydrateBackgroundConfig();
   const apiKey = getApiKey();
   if (!apiKey) {
     debugLogger.general('WARN', 'Cannot refresh pushes - no API key');
@@ -219,22 +229,6 @@ export async function refreshPushes(
     if (incrementalPushes.length === 0) {
       debugLogger.general('INFO', 'Pipeline 1: No new pushes to process');
       return; // Nothing new, exit early
-    }
-
-    // Update cutoff timestamp
-    const maxModified = Math.max(
-      cutoff,
-      ...incrementalPushes.map((p) => (typeof p.modified === 'number' ? p.modified : 0))
-    );
-
-    if (maxModified > cutoff) {
-      sessionCache.lastModifiedCutoff = maxModified;
-      await setLastModifiedCutoffSafe(maxModified);
-
-      debugLogger.general('INFO', 'Pipeline 1 Updated cutoff via safe setter', {
-        old: cutoff,
-        new: maxModified,
-      });
     }
 
     // ========================================
@@ -265,43 +259,65 @@ export async function refreshPushes(
     let openedThisRun = 0;
     const cap = await storageRepository.getMaxAutoOpenPerReconnect();
 
-    for (const push of newPushes) {
+    let processedCutoff = cutoff;
+    const pushesForProcessing = [...incrementalPushes].sort(
+      (left, right) => getPushModified(left) - getPushModified(right),
+    );
+
+    for (const push of pushesForProcessing) {
+      const modified = getPushModified(push);
+      if (modified <= 0) {
+        debugLogger.general('WARN', 'Skipping push with invalid modified timestamp', {
+          pushIden: push.iden,
+        });
+        continue;
+      }
+      if (!push.iden) {
+        debugLogger.general('WARN', 'Skipping push with missing iden');
+        continue;
+      }
+
+      if (await storageRepository.wasPushProcessed(push.iden, modified)) {
+        if (modified > processedCutoff) {
+          await setLastModifiedCutoffSafe(modified);
+          processedCutoff = modified;
+        }
+        continue;
+      }
+
       debugLogger.general('INFO', 'Processing new push', {
         pushIden: push.iden,
         pushType: push.type,
       });
 
       // Show notification
-      void showPushNotification(push, notificationDataStore).catch((error) => {
-        debugLogger.general('ERROR', 'Failed to show notification', {
-          pushIden: push.iden,
-        }, error);
-      });
+      await showPushNotification(push, notificationDataStore);
 
-      // Auto-open links if enabled
-      // Pre-check: if threshold already reached, log once and skip further opens
       if (openedThisRun >= cap) {
         debugLogger.general('WARN', 'Auto-open links capped', {
           opened: openedThisRun,
-          total: newPushes.length,
+          total: pushesForProcessing.length,
           cap,
         });
-        continue; // No more auto-open attempts this run
+      } else {
+        const opened = await maybeAutoOpenLinkWithDismiss(push);
+        if (opened) {
+          openedThisRun += 1;
+
+          if (openedThisRun >= cap) {
+            debugLogger.general('WARN', 'Auto-open links capped', {
+              opened: openedThisRun,
+              total: pushesForProcessing.length,
+              cap,
+            });
+          }
+        }
       }
 
-      const opened = await maybeAutoOpenLinkWithDismiss(push);
-      if (opened) {
-        openedThisRun += 1;
-
-        // Post-check: if we just hit threshold, log now
-        if (openedThisRun >= cap) {
-          debugLogger.general('WARN', 'Auto-open links capped', {
-            opened: openedThisRun,
-            total: newPushes.length,
-            cap,
-          });
-          // Do not attempt further opens in this run; loop continues but pre-check will skip them
-        }
+      await storageRepository.markPushProcessed(push.iden, modified);
+      if (modified > processedCutoff) {
+        await setLastModifiedCutoffSafe(modified);
+        processedCutoff = modified;
       }
     }
 
@@ -380,8 +396,8 @@ export async function showPushNotification(
 
       debugLogger.notifications(
         "DEBUG",
-        "Complete sms_changed push object received",
-        { push },
+        "SMS push summary received",
+        { push: summarizePushForLog(push) },
       );
       const sms = (push as any).notifications[0];
 
@@ -504,8 +520,8 @@ export async function showPushNotification(
         // Security validation for image URLs in file pushes
         debugLogger.notifications(
           "DEBUG",
-          "Complete file push object received",
-          { push },
+          "File push summary received",
+          { push: summarizePushForLog(push) },
         );
 
         let fileTitle = "New File";
@@ -670,7 +686,12 @@ export async function showPushNotification(
       finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
     }
 
-    await chrome.notifications.create(notificationId, finalNotificationOptions);
+    await createNotificationWithTimeout(
+      notificationId,
+      finalNotificationOptions,
+      undefined,
+      getNotificationTimeout(),
+    );
 
     if (notificationDataStore) {
       notificationDataStore.set(notificationId, push);
@@ -689,6 +710,7 @@ export async function showPushNotification(
       { pushIden: push.iden },
       error as Error,
     );
+    throw error;
   }
 }
 
@@ -749,6 +771,7 @@ export async function performPollingFetch(): Promise<void> {
 export function performWebSocketHealthCheck(
   websocketClient: any,
   connectFn: () => void,
+  recoveryController?: WebSocketRecoveryController,
 ): void {
   const apiKey = getApiKey();
 
@@ -784,31 +807,37 @@ export function performWebSocketHealthCheck(
         hasApiKey:
           !!apiKey,
         currentState:
-          stateMachine.getCurrentState(),
+          recoveryController?.getCurrentState() ?? "unknown",
       },
     );
 
     if (apiKey) {
-      // NEW: Check current state before reconnecting
-      const currentState =
-        stateMachine.getCurrentState();
+      const currentState = recoveryController?.getCurrentState();
+      const shouldRecoverViaStateMachine =
+        recoveryController &&
+        (currentState === ServiceWorkerState.IDLE ||
+          currentState === ServiceWorkerState.READY);
+      const shouldReconnectDirectly =
+        !recoveryController ||
+        currentState === ServiceWorkerState.DEGRADED ||
+        currentState === ServiceWorkerState.RECONNECTING;
 
-      // If we're in IDLE with an API key, we need to bootstrap recovery
-      if (
-        currentState ===
-        ServiceWorkerState.IDLE
-      ) {
+      if (shouldRecoverViaStateMachine) {
         debugLogger.websocket(
           "WARN",
-          "[HealthCheck] Detected IDLE state with API key - triggering recovery",
+          "[HealthCheck] Detected stale state with API key - triggering recovery",
+          {
+            currentState,
+          },
         );
 
         // Use state machine transition instead of direct connect
-        stateMachine
+        recoveryController
           .transition(
             "ATTEMPT_RECONNECT",
             {
               hasApiKey: true,
+              socketHealthy: false,
             },
           )
           .catch(
@@ -825,12 +854,7 @@ export function performWebSocketHealthCheck(
               connectFn();
             },
           );
-      } else if (
-        currentState ===
-          ServiceWorkerState.DEGRADED ||
-        currentState ===
-          ServiceWorkerState.RECONNECTING
-      ) {
+      } else if (shouldReconnectDirectly) {
         // Normal reconnection for expected states
         connectFn();
       } else {
@@ -855,10 +879,40 @@ export function performWebSocketHealthCheck(
   if (
     !websocketClient.isConnectionHealthy()
   ) {
+    const currentState =
+      recoveryController?.getCurrentState() ?? "unknown";
     debugLogger.websocket(
       "WARN",
-      "[HealthCheck] Connection unhealthy - emitting disconnect event",
+      "[HealthCheck] Connection unhealthy - triggering recovery",
+      {
+        currentState,
+        hasApiKey: !!apiKey,
+      },
     );
+    if (apiKey && recoveryController) {
+      recoveryController
+        .transition(
+          "ATTEMPT_RECONNECT",
+          {
+            hasApiKey: true,
+            socketHealthy: false,
+          },
+        )
+        .catch(
+          (
+            error,
+          ) => {
+            debugLogger.websocket(
+              "ERROR",
+              "[HealthCheck] Failed to trigger recovery for unhealthy connection",
+              null,
+              error as Error,
+            );
+            connectFn();
+          },
+        );
+      return;
+    }
     globalEventBus.emit(
       "websocket:disconnected",
     );

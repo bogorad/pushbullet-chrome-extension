@@ -35,7 +35,6 @@
             echo "Node.js: $(node --version)"
             echo "npm: $(npm --version)"
             echo "esbuild: $(esbuild --version)"
-            echo "opencode: $(opencode --version)"
             # Ensure npm dependencies are installed
             if [ ! -d node_modules ]; then
               echo "Installing npm dependencies..."
