@@ -3,6 +3,7 @@
 ## General
 
 Use beads instead of native task management.
+On any change, bump the patch version (`zz` in `xx.yy.zz`).
 
 ## Build Commands
 

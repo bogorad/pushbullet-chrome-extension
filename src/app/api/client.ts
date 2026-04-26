@@ -41,6 +41,22 @@ interface SendPushTarget {
   source_device_iden?: string;
 }
 
+function hasDisplayablePushContent(push: Push): boolean {
+  if (push.type === 'sms_changed') {
+    return !!push.notifications?.some(notification =>
+      !!notification.title || !!notification.body || !!notification.image_url
+    );
+  }
+
+  return !!(
+    ('title' in push && push.title) ||
+    ('body' in push && push.body) ||
+    ('url' in push && push.url) ||
+    ('file_name' in push && push.file_name) ||
+    ('file_url' in push && push.file_url)
+  );
+}
+
 export type SendPushRequest =
   | (SendPushTarget & {
       type: 'note';
@@ -269,13 +285,7 @@ export async function fetchRecentPushes(
       }
 
       // Check if push has displayable content
-      const hasContent =
-        ('title' in push && push.title) ||
-        ('body' in push && push.body) ||
-        ('url' in push && push.url) ||
-        ('file_name' in push && push.file_name) ||
-        ('file_url' in push && push.file_url);
-      return hasContent;
+      return hasDisplayablePushContent(push);
     });
     debugLogger.api('INFO', 'Pushes fetched successfully', {
       url,

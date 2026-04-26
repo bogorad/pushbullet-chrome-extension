@@ -22,6 +22,7 @@ vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
 import {
   createPush,
   ensureDeviceExists,
+  fetchRecentPushes,
   fetchIncrementalPushes,
   PushbulletApiError,
   registerDevice,
@@ -111,6 +112,64 @@ describe('fetchIncrementalPushes pagination guard', () => {
       'Incremental push fetch truncated by page guard',
       expect.anything(),
     );
+  });
+});
+
+describe('fetchRecentPushes display filtering', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  it('keeps sms_changed pushes with notification content', async () => {
+    const smsPush = {
+      active: true,
+      created: 10,
+      dismissed: false,
+      iden: 'sms-1',
+      modified: 10,
+      notifications: [{ title: 'Alice', body: 'Hello' }],
+      type: 'sms_changed',
+    } satisfies Push;
+
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      pushes: [smsPush],
+    } satisfies PushesResponse), {
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }));
+
+    await expect(fetchRecentPushes('api-key', 50)).resolves.toEqual([smsPush]);
+  });
+
+  it('filters sms_changed pushes without notification content', async () => {
+    const deletionPush = {
+      active: true,
+      created: 10,
+      dismissed: false,
+      iden: 'sms-delete-1',
+      modified: 10,
+      notifications: [],
+      type: 'sms_changed',
+    } satisfies Push;
+
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      pushes: [deletionPush],
+    } satisfies PushesResponse), {
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }));
+
+    await expect(fetchRecentPushes('api-key', 50)).resolves.toEqual([]);
   });
 });
 
