@@ -3,7 +3,7 @@
 ## General
 
 Use beads instead of native task management.
-On any change, bump the patch version (`zz` in `xx.yy.zz`).
+On any change, bump the patch version (`zz` in `xx.yy.zz`) in all relevant version files: `package.json`, `manifest.json`, and `options.html`.
 
 ## Build Commands
 

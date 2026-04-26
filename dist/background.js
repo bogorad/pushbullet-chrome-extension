@@ -1586,6 +1586,14 @@
   var USER_INFO_URL = `${API_BASE_URL}/users/me`;
   var UPLOAD_REQUEST_URL = `${API_BASE_URL}/upload-request`;
   var MAX_INCREMENTAL_PUSH_PAGES = 11;
+  function hasDisplayablePushContent(push) {
+    if (push.type === "sms_changed") {
+      return !!push.notifications?.some(
+        (notification) => !!notification.title || !!notification.body || !!notification.image_url
+      );
+    }
+    return !!("title" in push && push.title || "body" in push && push.body || "url" in push && push.url || "file_name" in push && push.file_name || "file_url" in push && push.file_url);
+  }
   var PushbulletApiError = class extends Error {
     code;
     status;
@@ -1755,8 +1763,7 @@
           logUnsupportedPushType(push.type, push.iden || "unknown", "fetchRecentPushes");
           return false;
         }
-        const hasContent = "title" in push && push.title || "body" in push && push.body || "url" in push && push.url || "file_name" in push && push.file_name || "file_url" in push && push.file_url;
-        return hasContent;
+        return hasDisplayablePushContent(push);
       });
       debugLogger.api("INFO", "Pushes fetched successfully", {
         url,
