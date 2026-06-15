@@ -17,6 +17,7 @@ interface DebugSummary {
     errors: ErrorData;
     config: DebugConfig;
     websocketState: WebSocketState;
+    smsEphemeralStats?: SmsEphemeralStats;
   };
 }
 
@@ -121,6 +122,16 @@ interface WebSocketState {
   [key: string]: unknown;
 }
 
+interface SmsEphemeralStats {
+  received: number;
+  shown: number;
+  droppedEncrypted: number;
+  droppedEmpty: number;
+  droppedUnsupported: number;
+  resolvedFromHistory: number;
+  historyFetchFailed: number;
+}
+
 /**
  * Log level hierarchy map.
  * Each key is a log level, and the value is an array of levels that should be visible
@@ -189,6 +200,7 @@ const lastUpdatedSpan = getElementById<HTMLSpanElement>('last-updated');
 const totalLogsEl = getElementById<HTMLSpanElement>('total-logs');
 const errorCountEl = getElementById<HTMLSpanElement>('error-count');
 const websocketStatusEl = getElementById<HTMLSpanElement>('websocket-status'); // Now displays state machine status
+const smsEphemeralSummaryEl = getElementById<HTMLDivElement>('sms-ephemeral-summary');
 
 // Tab elements
 const tabBtns = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
@@ -495,6 +507,24 @@ function updateSummary(data: DebugSummary['summary']): void {
   } else {
     websocketStatusEl.textContent = 'Unknown';
   }
+
+  renderSmsEphemeralSummary(data.smsEphemeralStats);
+}
+
+function renderSmsEphemeralSummary(stats: SmsEphemeralStats | undefined): void {
+  if (!stats) {
+    smsEphemeralSummaryEl.textContent = 'No data';
+    return;
+  }
+
+  smsEphemeralSummaryEl.replaceChildren();
+  appendMetricRow(smsEphemeralSummaryEl, 'Received', (stats.received || 0).toString());
+  appendMetricRow(smsEphemeralSummaryEl, 'Shown', (stats.shown || 0).toString());
+  appendMetricRow(smsEphemeralSummaryEl, 'Resolved', (stats.resolvedFromHistory || 0).toString());
+  appendMetricRow(smsEphemeralSummaryEl, 'Encrypted Drops', (stats.droppedEncrypted || 0).toString());
+  appendMetricRow(smsEphemeralSummaryEl, 'Empty Drops', (stats.droppedEmpty || 0).toString());
+  appendMetricRow(smsEphemeralSummaryEl, 'Unsupported Drops', (stats.droppedUnsupported || 0).toString());
+  appendMetricRow(smsEphemeralSummaryEl, 'History Failures', (stats.historyFetchFailed || 0).toString());
 }
 
 /**

@@ -4,7 +4,7 @@
 import { debugLogger } from '../lib/logging';
 
 const KEEPALIVE_ALARM = 'criticalKeepalive';
-const KEEPALIVE_INTERVAL_SECONDS = 20; // Chrome's minimum is 0.5 minutes (30s), but we use seconds for clarity
+const KEEPALIVE_INTERVAL_SECONDS = 30; // Chrome's minimum alarm period is 30s.
 
 let activeCount = 0;
 
@@ -16,7 +16,7 @@ export function startCriticalKeepalive(): void {
   activeCount++;
 
   if (activeCount === 1) {
-    // First caller - create the alarm
+    // First caller - create the alarm for this critical-operation window only.
     chrome.alarms.create(KEEPALIVE_ALARM, {
       delayInMinutes: KEEPALIVE_INTERVAL_SECONDS / 60,
       periodInMinutes: KEEPALIVE_INTERVAL_SECONDS / 60

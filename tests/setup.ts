@@ -89,6 +89,12 @@ const createChromeMock = () => {
       create: vi.fn(),
       clear: vi.fn()
     },
+    idle: {
+      setDetectionInterval: vi.fn(),
+      onStateChanged: {
+        addListener: vi.fn()
+      }
+    },
     alarms: {
       create: vi.fn(),
       clear: vi.fn(),

@@ -123,6 +123,15 @@ function createDebugSummary() {
       historyLength: 1,
       unsafeValue: hostileHtml,
     },
+    smsEphemeralStats: {
+      received: 1,
+      shown: 1,
+      droppedEncrypted: 1,
+      droppedEmpty: 1,
+      droppedUnsupported: 1,
+      resolvedFromHistory: 1,
+      historyFetchFailed: 1,
+    },
   };
 }
 

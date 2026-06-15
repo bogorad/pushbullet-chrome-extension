@@ -43,6 +43,7 @@
   var totalLogsEl = getElementById("total-logs");
   var errorCountEl = getElementById("error-count");
   var websocketStatusEl = getElementById("websocket-status");
+  var smsEphemeralSummaryEl = getElementById("sms-ephemeral-summary");
   var tabBtns = document.querySelectorAll(".tab-btn");
   var tabPanes = document.querySelectorAll(".tab-pane");
   var logCategoryFilter = getElementById("log-category-filter");
@@ -262,6 +263,21 @@
     } else {
       websocketStatusEl.textContent = "Unknown";
     }
+    renderSmsEphemeralSummary(data.smsEphemeralStats);
+  }
+  function renderSmsEphemeralSummary(stats) {
+    if (!stats) {
+      smsEphemeralSummaryEl.textContent = "No data";
+      return;
+    }
+    smsEphemeralSummaryEl.replaceChildren();
+    appendMetricRow(smsEphemeralSummaryEl, "Received", (stats.received || 0).toString());
+    appendMetricRow(smsEphemeralSummaryEl, "Shown", (stats.shown || 0).toString());
+    appendMetricRow(smsEphemeralSummaryEl, "Resolved", (stats.resolvedFromHistory || 0).toString());
+    appendMetricRow(smsEphemeralSummaryEl, "Encrypted Drops", (stats.droppedEncrypted || 0).toString());
+    appendMetricRow(smsEphemeralSummaryEl, "Empty Drops", (stats.droppedEmpty || 0).toString());
+    appendMetricRow(smsEphemeralSummaryEl, "Unsupported Drops", (stats.droppedUnsupported || 0).toString());
+    appendMetricRow(smsEphemeralSummaryEl, "History Failures", (stats.historyFetchFailed || 0).toString());
   }
   function renderLogs() {
     if (!currentData || !currentData.logs) {

@@ -24,13 +24,15 @@ import {
   fetchDevices,
   updateDeviceNickname,
   fetchRecentPushes,
+  fetchSmsThread,
+  fetchSmsThreads,
   requestFileUpload,
   uploadFileToServer,
   sendFilePush,
   sendPush,
   PushbulletUploadError,
 } from "../app/api/client";
-import type { SendPushRequest } from "../app/api/client";
+import type { SendPushRequest, SmsMessage, SmsThread } from "../app/api/client";
 import { installDiagnosticsMessageHandler } from "./diagnostics";
 import {
   ensureDebugConfigLoadedOnce,
@@ -74,6 +76,7 @@ import {
 import { autoOpenOfflineLinks } from "./links";
 import { orchestrateInitialization } from "./startup";
 import { maybeAutoOpenLinkWithDismiss } from "./processing";
+import { createNotificationWithTimeout } from "../app/notifications";
 import { runPostConnect } from "../realtime/postConnectQueue";
 import { validatePrivilegedMessage } from "../lib/security/message-validation";
 import { handleKeepaliveAlarm } from "./keepalive";
@@ -81,6 +84,7 @@ import type {
   Push,
   PushBase,
   SessionDataResponse,
+  SmsChangedPush,
   StructuredUploadError,
   UploadAndSendFileMessage,
   UploadStage,
@@ -91,12 +95,25 @@ import {
   clearSessionCache,
 } from "../infrastructure/storage/indexed-db";
 import { summarizePushForLog } from "../app/push-summary";
+import {
+  getSmsEphemeralStats,
+  recordSmsDroppedEmpty,
+  recordSmsDroppedEncrypted,
+  recordSmsDroppedUnsupported,
+  recordSmsEphemeralReceived,
+  recordSmsHistoryFetchFailed,
+  recordSmsResolvedFromHistory,
+  recordSmsShown,
+} from "./sms-diagnostics";
 
 const DEFAULT_FILE_TYPE = "application/octet-stream";
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_FILE_TYPE_LENGTH = 255;
 const LONG_SLEEP_RECOVERY_ALARM = "longSleepRecovery";
 const LONG_SLEEP_RECOVERY_PERIOD_MINUTES = 5;
+const WEBSOCKET_HEALTH_CHECK_ALARM = "websocketHealthCheck";
+const WEBSOCKET_HEALTH_CHECK_PERIOD_MINUTES = 1;
+const E2E_PASSWORD_NOTIFICATION_ID = "pushbullet-need-e2e-password";
 
 function buildUploadError(
   code: string,
@@ -213,23 +230,28 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return buffer;
 }
 
-function getAlarm(name: string): Promise<chrome.alarms.Alarm | undefined> {
+function getAllAlarms(): Promise<chrome.alarms.Alarm[]> {
   return new Promise((resolve) => {
-    chrome.alarms.get(name, (alarm) => {
-      resolve(alarm);
+    chrome.alarms.getAll((alarms) => {
+      resolve(alarms ?? []);
     });
   });
 }
 
-async function ensureLongSleepRecoveryAlarm(): Promise<void> {
-  const alarm = await getAlarm(LONG_SLEEP_RECOVERY_ALARM);
-  if (alarm) {
-    return;
+async function ensureRecoveryAlarmsExist(): Promise<void> {
+  const alarmNames = new Set((await getAllAlarms()).map((alarm) => alarm.name));
+
+  if (!alarmNames.has(LONG_SLEEP_RECOVERY_ALARM)) {
+    chrome.alarms.create(LONG_SLEEP_RECOVERY_ALARM, {
+      periodInMinutes: LONG_SLEEP_RECOVERY_PERIOD_MINUTES,
+    });
   }
 
-  chrome.alarms.create(LONG_SLEEP_RECOVERY_ALARM, {
-    periodInMinutes: LONG_SLEEP_RECOVERY_PERIOD_MINUTES,
-  });
+  if (!alarmNames.has(WEBSOCKET_HEALTH_CHECK_ALARM)) {
+    chrome.alarms.create(WEBSOCKET_HEALTH_CHECK_ALARM, {
+      periodInMinutes: WEBSOCKET_HEALTH_CHECK_PERIOD_MINUTES,
+    });
+  }
 }
 
 function isStructuredUploadError(error: unknown): error is StructuredUploadError {
@@ -267,6 +289,7 @@ function toStructuredUploadError(error: unknown): StructuredUploadError {
 // SECURITY FIX (M-06): Limit store size to prevent memory leak
 const notificationDataStore = new Map<string, Push>();
 const MAX_NOTIFICATION_STORE_SIZE = 100;
+const MAX_RECENT_PUSHES = 200;
 
 /**
  * Add notification to store with size limit
@@ -287,6 +310,187 @@ export function addToNotificationStore(id: string, push: Push): void {
  */
 export function getNotificationStore(): Map<string, Push> {
   return notificationDataStore;
+}
+
+type SmsNotification = NonNullable<SmsChangedPush["notifications"]>[number];
+type SmsChangedPushWithNotification = SmsChangedPush & {
+  notifications: [SmsNotification, ...SmsNotification[]];
+};
+
+function isSmsChangedPush(push: Push): push is SmsChangedPush {
+  return push.type === "sms_changed";
+}
+
+function hasSmsNotification(push: SmsChangedPush): push is SmsChangedPushWithNotification {
+  return Array.isArray(push.notifications) && push.notifications.length > 0;
+}
+
+function shouldTrackSmsEphemeral(
+  push: PushBase & { type?: Push["type"] },
+): boolean {
+  return push.type === "sms_changed" || push.type === "mirror" || !!push.encrypted;
+}
+
+function getTimestampSeconds(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+}
+
+function getSmsThreadTimestamp(thread: SmsThread): number {
+  const latestTimestamp = getTimestampSeconds(thread.latest?.timestamp);
+  if (latestTimestamp) {
+    return latestTimestamp;
+  }
+
+  return Math.max(
+    0,
+    ...(thread.messages ?? []).map((message) =>
+      getTimestampSeconds(message.timestamp) ?? 0,
+    ),
+  );
+}
+
+function getLatestSmsThread(threads: SmsThread[]): SmsThread | null {
+  return [...threads].sort(
+    (left, right) => getSmsThreadTimestamp(right) - getSmsThreadTimestamp(left),
+  )[0] ?? null;
+}
+
+function getLatestSmsMessage(
+  thread: SmsThread,
+  messages: SmsMessage[],
+): SmsMessage | null {
+  const candidates = [...messages, ...(thread.messages ?? [])];
+  if (thread.latest) {
+    candidates.push(thread.latest);
+  }
+
+  return candidates
+    .filter((message) => !!message.body || !!message.ciphertext)
+    .sort(
+      (left, right) =>
+        (getTimestampSeconds(right.timestamp) ?? 0) -
+        (getTimestampSeconds(left.timestamp) ?? 0),
+    )[0] ?? null;
+}
+
+function getSmsTitle(thread: SmsThread): string {
+  const names = (thread.recipients ?? [])
+    .map((recipient) => recipient.name || recipient.address)
+    .filter((value): value is string => !!value);
+
+  return names.length > 0 ? names.join(", ") : "New SMS";
+}
+
+function getSmsImageUrl(thread: SmsThread, message: SmsMessage): string | undefined {
+  return message.image_url ?? thread.recipients?.find((recipient) => recipient.image_url)?.image_url;
+}
+
+async function showE2EPasswordPrompt(): Promise<void> {
+  await createNotificationWithTimeout(
+    E2E_PASSWORD_NOTIFICATION_ID,
+    {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title: "Encrypted message received",
+      message: "Set your Pushbullet end-to-end password in Options to view encrypted SMS/notifications.",
+      priority: 2,
+    },
+    undefined,
+    0,
+  );
+}
+
+async function decryptSmsMessageIfNeeded(
+  message: SmsMessage,
+): Promise<SmsMessage | null> {
+  if (!message.encrypted || !message.ciphertext) {
+    return message;
+  }
+
+  const password = await storageRepository.getEncryptionPassword();
+  if (!password || !sessionCache.userInfo) {
+    await showE2EPasswordPrompt();
+    recordSmsDroppedEncrypted();
+    return null;
+  }
+
+  const key = await PushbulletCrypto.deriveKey(
+    password,
+    sessionCache.userInfo.iden,
+  );
+  const decrypted = await PushbulletCrypto.decryptMessage(message.ciphertext, key);
+  const decryptedRecord = decrypted && typeof decrypted === "object"
+    ? decrypted as Partial<SmsMessage>
+    : {};
+
+  return {
+    ...message,
+    ...decryptedRecord,
+    encrypted: false,
+  };
+}
+
+async function resolveSmsChangedFromHistory(
+  push: SmsChangedPush,
+): Promise<SmsChangedPush | null> {
+  const apiKey = getApiKey();
+  const smsDevice = sessionCache.devices.find((device) => device.has_sms && device.iden);
+
+  if (!apiKey || !smsDevice) {
+    return null;
+  }
+
+  try {
+    const threads = await fetchSmsThreads(apiKey, smsDevice.iden);
+    const latestThread = getLatestSmsThread(threads);
+    if (!latestThread) {
+      return null;
+    }
+
+    const messages = await fetchSmsThread(apiKey, smsDevice.iden, latestThread.id);
+    const latestMessage = getLatestSmsMessage(latestThread, messages);
+    if (!latestMessage) {
+      return null;
+    }
+
+    const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+    if (!decryptedMessage?.body) {
+      return null;
+    }
+
+    const timestamp = getTimestampSeconds(decryptedMessage.timestamp) ??
+      getTimestampSeconds(push.created) ??
+      Math.floor(Date.now() / 1000);
+
+    return {
+      ...push,
+      created: timestamp,
+      modified: timestamp,
+      notifications: [
+        {
+          title: getSmsTitle(latestThread),
+          body: decryptedMessage.body,
+          timestamp,
+          image_url: getSmsImageUrl(latestThread, decryptedMessage),
+        },
+      ],
+    };
+  } catch (error) {
+    recordSmsHistoryFetchFailed();
+    debugLogger.general(
+      "WARN",
+      "Failed to resolve sms_changed from SMS history",
+      {
+        pushIden: push.iden,
+        error: (error as Error).message,
+      },
+    );
+    return null;
+  }
 }
 
 /**
@@ -374,6 +578,10 @@ globalEventBus.on("websocket:push", async (push: Push) => {
 
   // Track push received
   performanceMonitor.recordPushReceived();
+  const trackSmsEphemeral = shouldTrackSmsEphemeral(push);
+  if (trackSmsEphemeral) {
+    recordSmsEphemeralReceived();
+  }
 
   let decryptedPush: Push = push;
   let decryptionFailed = false;
@@ -425,13 +633,20 @@ globalEventBus.on("websocket:push", async (push: Push) => {
   // ✅ FIX: Skip type checking if decryption failed
   // For encrypted pushes, we can't check type until after decryption
   if (decryptionFailed) {
+    const hasEncryptionPassword = !!(await storageRepository.getEncryptionPassword());
+    if (trackSmsEphemeral) {
+      recordSmsDroppedEncrypted();
+    }
+    if (!hasEncryptionPassword) {
+      await showE2EPasswordPrompt();
+    }
+
     debugLogger.general(
       "WARN",
       "Skipping encrypted push due to decryption failure",
       {
         pushIden: push.iden,
-        hasEncryptionPassword:
-          !!(await storageRepository.getEncryptionPassword()),
+        hasEncryptionPassword,
       },
     );
     return; // Exit early - can't process without decrypting
@@ -451,6 +666,10 @@ globalEventBus.on("websocket:push", async (push: Push) => {
   const typeCheck = checkPushTypeSupport(decryptedPush.type);
 
   if (!typeCheck.supported) {
+    if (shouldTrackSmsEphemeral(decryptedPush)) {
+      recordSmsDroppedUnsupported();
+    }
+
     // Log unsupported push types as WARNING for visibility
     if (typeCheck.category === "known-unsupported") {
       debugLogger.general("WARN", "Received known unsupported push type", {
@@ -487,9 +706,24 @@ globalEventBus.on("websocket:push", async (push: Push) => {
     });
   }
 
+  if (isSmsChangedPush(decryptedPush) && !hasSmsNotification(decryptedPush)) {
+    const resolvedPush = await resolveSmsChangedFromHistory(decryptedPush);
+    if (!resolvedPush) {
+      recordSmsDroppedEmpty();
+      debugLogger.general("INFO", "Dropped empty sms_changed after history lookup", {
+        pushIden: decryptedPush.iden,
+      });
+      return;
+    }
+
+    decryptedPush = resolvedPush;
+    recordSmsResolvedFromHistory();
+  }
+
   // Update cache (prepend)
   if (sessionCache.recentPushes) {
     sessionCache.recentPushes.unshift(decryptedPush);
+    sessionCache.recentPushes = sessionCache.recentPushes.slice(0, MAX_RECENT_PUSHES);
     // Save the updated cache (with the new push) to our database.
     saveSessionCache(sessionCache);
     sessionCache.lastUpdated = Date.now();
@@ -504,10 +738,16 @@ globalEventBus.on("websocket:push", async (push: Push) => {
 
   // FIX: Don't await - let notifications show immediately without blocking
   // This allows multiple notifications to appear concurrently
-  showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
-    debugLogger.general("ERROR", "Failed to show notification", null, error);
-    performanceMonitor.recordNotificationFailed();
-  });
+  showPushNotification(decryptedPush, notificationDataStore)
+    .then(() => {
+      if (shouldTrackSmsEphemeral(decryptedPush)) {
+        recordSmsShown();
+      }
+    })
+    .catch((error) => {
+      debugLogger.general("ERROR", "Failed to show notification", null, error);
+      performanceMonitor.recordNotificationFailed();
+    });
 
   // Auto-open links if setting is enabled
   const autoOpenLinks = getAutoOpenLinks();
@@ -637,7 +877,29 @@ const { bootstrap, reconcileWake } = createLifecycleCoordinator({
   isSocketHealthy: () =>
     !!websocketClient?.isConnected?.() &&
     !!websocketClient?.isConnectionHealthy?.(),
+  ensureRecoveryAlarms: ensureRecoveryAlarmsExist,
 });
+
+function installIdleWakeDetection(): void {
+  try {
+    chrome.idle.setDetectionInterval(60);
+    chrome.idle.onStateChanged.addListener((state) => {
+      if (state === "active") {
+        debugLogger.general(
+          "INFO",
+          "[Idle] Returned to active - reconciling wake",
+        );
+        void reconcileWake("idle-active");
+      }
+    });
+  } catch (error) {
+    debugLogger.general("WARN", "chrome.idle unavailable", {
+      error: String(error),
+    });
+  }
+}
+
+installIdleWakeDetection();
 
 type PopupSessionDataResponse = SessionDataResponse & { state: string };
 
@@ -732,31 +994,35 @@ installDiagnosticsMessageHandler();
  * Connect to WebSocket
  */
 function connectWebSocket(): void {
-  // Guard: Don't reconnect if already connected or connecting
   if (websocketClient) {
     const isConnected = websocketClient.isConnected();
+    const isHealthy = websocketClient.isConnectionHealthy();
     const isConnecting =
       websocketClient.getReadyState() === WebSocket.CONNECTING;
+    const isLive = isConnected && isHealthy;
 
-    if (isConnected || isConnecting) {
+    if (isLive || isConnecting) {
       debugLogger.websocket(
         "DEBUG",
-        "WebSocket already connected/connecting, skipping duplicate call",
+        "WebSocket live or connecting, skipping duplicate connect",
         {
           isConnected,
+          isHealthy,
           isConnecting,
           readyState: websocketClient.getReadyState(),
         },
       );
-      return; // EXIT EARLY - do not proceed
+      return;
     }
-  }
 
-  // SECURITY FIX (H-02): Dispose existing socket before creating new one
-  if (websocketClient) {
     debugLogger.websocket(
       "INFO",
-      "Disposing existing WebSocket before reconnecting",
+      "Disposing stale/unhealthy WebSocket before reconnecting",
+      {
+        isConnected,
+        isHealthy,
+        readyState: websocketClient.getReadyState(),
+      },
     );
     websocketClient.disconnect();
     websocketClient = null;
@@ -837,8 +1103,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 
   // Handle our two main periodic alarms.
-  if (alarm.name === "websocketHealthCheck") {
-    await reconcileWake("websocketHealthCheck");
+  if (alarm.name === WEBSOCKET_HEALTH_CHECK_ALARM) {
+    await reconcileWake(WEBSOCKET_HEALTH_CHECK_ALARM);
     const currentState = stateMachine.getCurrentState();
 
     debugLogger.general(
@@ -1404,6 +1670,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         websocketState: websocketState,
         initializationStats: initTracker.exportData(),
         mv3LifecycleStats: mv3LifecycleStats, // Add the new data object
+        smsEphemeralStats: getSmsEphemeralStats(),
         errors: {
           total: logData.summary.errors,
           last24h: logData.summary.errors, // Add last24h for dashboard
@@ -1658,6 +1925,12 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
     notificationId,
   });
 
+  if (notificationId === E2E_PASSWORD_NOTIFICATION_ID) {
+    chrome.runtime.openOptionsPage();
+    chrome.notifications.clear(notificationId);
+    return;
+  }
+
   // Get the push data from the notification store
   const push = notificationDataStore.get(notificationId);
 
@@ -1718,14 +1991,14 @@ debugLogger.general("INFO", "Background service worker initialized", {
 
 chrome.runtime.onStartup.addListener(async () => {
   await ensureDebugConfigLoadedOnce();
-  await ensureLongSleepRecoveryAlarm();
+  await ensureRecoveryAlarmsExist();
   void bootstrap("startup");
   setTimeout(checkExtensionHealth, 5000); // Wait 5 seconds after startup
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureDebugConfigLoadedOnce();
-  await ensureLongSleepRecoveryAlarm();
+  await ensureRecoveryAlarmsExist();
   void bootstrap("install");
 });
 

@@ -111,6 +111,7 @@ describe('lifecycle coordinator bootstrap', () => {
       getAutoOpenLinks: vi.fn(() => true),
       getDeviceNickname: vi.fn(() => 'Stored Chrome'),
       isSocketHealthy: vi.fn(() => false),
+      ensureRecoveryAlarms: vi.fn().mockResolvedValue(undefined),
     });
 
     await coordinator.bootstrap('startup');
@@ -146,6 +147,7 @@ describe('lifecycle coordinator bootstrap', () => {
   });
 
   it('routes wake reconciliation through the state machine when the socket is unhealthy', async () => {
+    const ensureRecoveryAlarms = vi.fn().mockResolvedValue(undefined);
     const stateMachine = {
       getCurrentState: vi.fn(() => 'ready'),
       transition: vi.fn(() => Promise.resolve()),
@@ -160,10 +162,12 @@ describe('lifecycle coordinator bootstrap', () => {
       getAutoOpenLinks: vi.fn(() => true),
       getDeviceNickname: vi.fn(() => 'Stored Chrome'),
       isSocketHealthy: vi.fn(() => false),
+      ensureRecoveryAlarms,
     });
 
     await coordinator.reconcileWake('websocketHealthCheck');
 
+    expect(ensureRecoveryAlarms).toHaveBeenCalledTimes(1);
     expect(stateMachine.transition).toHaveBeenCalledWith(
       'ATTEMPT_RECONNECT',
       {

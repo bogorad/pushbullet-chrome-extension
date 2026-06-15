@@ -24,6 +24,8 @@ import {
   ensureDeviceExists,
   fetchRecentPushes,
   fetchIncrementalPushes,
+  fetchSmsThread,
+  fetchSmsThreads,
   PushbulletApiError,
   registerDevice,
   sendPush,
@@ -170,6 +172,70 @@ describe('fetchRecentPushes display filtering', () => {
     }));
 
     await expect(fetchRecentPushes('api-key', 50)).resolves.toEqual([]);
+  });
+});
+
+describe('SMS permanents fetchers', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  it('fetches SMS threads from the phone permanents store', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        threads: [
+          {
+            id: 'thread-1',
+            recipients: [{ name: 'Alice', address: '+15551234567' }],
+            latest: { body: 'hello', timestamp: 123 },
+          },
+        ],
+      },
+    }), {
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }));
+
+    await expect(fetchSmsThreads('api-key', 'phone-1')).resolves.toEqual([
+      {
+        id: 'thread-1',
+        recipients: [{ name: 'Alice', address: '+15551234567' }],
+        latest: { body: 'hello', timestamp: 123 },
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.pushbullet.com/v2/permanents/phone-1_threads',
+      { headers: { 'Access-Token': 'api-key' } },
+    );
+  });
+
+  it('fetches SMS thread messages from the phone permanents store', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      thread: [
+        { id: 'message-1', type: 'incoming', body: 'hello', timestamp: 123 },
+      ],
+    }), {
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }));
+
+    await expect(fetchSmsThread('api-key', 'phone-1', 'thread-1')).resolves.toEqual([
+      { id: 'message-1', type: 'incoming', body: 'hello', timestamp: 123 },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.pushbullet.com/v2/permanents/phone-1_thread_thread-1',
+      { headers: { 'Access-Token': 'api-key' } },
+    );
   });
 });
 

@@ -46,6 +46,17 @@ const primaryChat = {
   },
 } satisfies Chat;
 
+const smsEphemeralPush = {
+  active: true,
+  created: Math.floor(Date.now() / 1000),
+  dismissed: false,
+  direction: 'incoming',
+  iden: 'sms-ephemeral-1',
+  modified: Math.floor(Date.now() / 1000),
+  notifications: [{ title: 'Alice', body: 'Hello from SMS' }],
+  type: 'sms_changed',
+} satisfies Push;
+
 const apiClientMock = {
   fetchChats: vi.fn(),
   fetchDevices: vi.fn(),
@@ -158,6 +169,33 @@ describe('session refresh flows', () => {
         action: MessageAction.SESSION_DATA_UPDATED,
         chats: expect.arrayContaining([
           expect.objectContaining({ iden: 'chat-1' }),
+        ]),
+      }),
+    );
+  });
+
+  it('preserves received SMS ephemerals during background display refresh', async () => {
+    sessionCache.recentPushes = [smsEphemeralPush];
+
+    await refreshSessionInBackground('test-api-key');
+
+    expect(sessionCache.recentPushes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ iden: 'sms-ephemeral-1' }),
+        expect.objectContaining({ iden: 'push-1' }),
+      ]),
+    );
+    expect(indexedDbMock.saveSessionCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recentPushes: expect.arrayContaining([
+          expect.objectContaining({ iden: 'sms-ephemeral-1' }),
+        ]),
+      }),
+    );
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recentPushes: expect.arrayContaining([
+          expect.objectContaining({ iden: 'sms-ephemeral-1' }),
         ]),
       }),
     );

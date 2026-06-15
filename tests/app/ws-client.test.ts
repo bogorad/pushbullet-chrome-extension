@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WebSocketClient } from '../../src/app/ws/client';
 
@@ -54,12 +54,17 @@ class MockWebSocket {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
+  close = vi.fn((code?: number, reason?: string) => {
+    this.readyState = 2;
+    this.closeCode = code;
+    this.closeReason = reason;
+  });
+  closeCode?: number;
+  closeReason?: string;
 
   constructor(public readonly url: string) {
     MockWebSocket.instances.push(this);
   }
-
-  close(): void {}
 }
 
 function installMockWebSocket(): void {
@@ -86,6 +91,17 @@ function closeSocket(code: number, reason = 'test close'): void {
   } as CloseEvent);
 }
 
+function openSocket(): MockWebSocket {
+  const socket = MockWebSocket.instances[0];
+  if (!socket?.onopen) {
+    throw new Error('Mock WebSocket open handler was not installed');
+  }
+
+  socket.readyState = 1;
+  socket.onopen();
+  return socket;
+}
+
 function sendMessage(data: string): void {
   const socket = MockWebSocket.instances[0];
   if (!socket?.onmessage) {
@@ -100,6 +116,10 @@ describe('WebSocketClient close handling', () => {
     vi.clearAllMocks();
     MockWebSocket.instances = [];
     installMockWebSocket();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it.each([1008, 4001, 4500])(
@@ -164,6 +184,10 @@ describe('WebSocketClient message handling', () => {
     installMockWebSocket();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('does not log API key prefixes when connecting', () => {
     const apiKey = 'test-api-key-with-visible-prefix';
     const client = new WebSocketClient('wss://example.test/', () => apiKey);
@@ -220,6 +244,75 @@ describe('WebSocketClient message handling', () => {
       {
         timestamp: expect.any(String),
       },
+    );
+  });
+
+  it('marks an open socket unhealthy when no nop arrives within the window', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const client = createClient();
+
+    openSocket();
+
+    expect(client.isConnected()).toBe(true);
+    expect(client.isConnectionHealthy()).toBe(true);
+
+    vi.advanceTimersByTime(60001);
+
+    expect(client.isConnectionHealthy()).toBe(false);
+  });
+
+  it('forces a recoverable disconnect when the nop watchdog expires', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    createClient();
+    const socket = openSocket();
+
+    vi.advanceTimersByTime(65001);
+
+    expect(socket.close).toHaveBeenCalledWith(4999, 'nop-timeout');
+    expect(mocks.emit).toHaveBeenCalledWith('websocket:disconnected', {
+      code: 4999,
+      reason: 'nop-timeout',
+      wasClean: false,
+    });
+    expect(mocks.emit).toHaveBeenCalledWith('websocket:state', 'disconnected');
+    expect(mocks.emit).not.toHaveBeenCalledWith(
+      'websocket:permanent-error',
+      expect.anything(),
+    );
+  });
+
+  it('keeps a healthy nop stream from triggering the watchdog', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    createClient();
+    const socket = openSocket();
+
+    vi.advanceTimersByTime(60000);
+    sendMessage('{"type":"nop"}');
+    vi.advanceTimersByTime(5000);
+
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalledWith(
+      'websocket:disconnected',
+      expect.objectContaining({ reason: 'nop-timeout' }),
+    );
+  });
+
+  it('clears the nop watchdog on explicit disconnect', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const client = createClient();
+    const socket = openSocket();
+
+    client.disconnect();
+    vi.advanceTimersByTime(65001);
+
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(mocks.emit).not.toHaveBeenCalledWith(
+      'websocket:disconnected',
+      expect.objectContaining({ reason: 'nop-timeout' }),
     );
   });
 

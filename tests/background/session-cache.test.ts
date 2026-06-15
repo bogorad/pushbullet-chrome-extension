@@ -105,10 +105,16 @@ const mocks = vi.hoisted(() => {
     fetchChats: vi.fn(),
     fetchDevices: vi.fn(),
     fetchRecentPushes: vi.fn(),
+    fetchSmsThread: vi.fn(),
+    fetchSmsThreads: vi.fn(),
     requestFileUpload: vi.fn(),
     sendFilePush: vi.fn(),
     sendPush: vi.fn(),
     uploadFileToServer: vi.fn(),
+    createNotificationWithTimeout: vi.fn().mockResolvedValue(undefined),
+    saveSessionCache: vi.fn().mockResolvedValue(undefined),
+    showPushNotification: vi.fn().mockResolvedValue(undefined),
+    eventBusOn: vi.fn(),
     getApiKey: vi.fn(),
     getAutoOpenLinks: vi.fn(() => true),
     getDeviceNickname: vi.fn(() => 'Chrome'),
@@ -136,6 +142,16 @@ const mocks = vi.hoisted(() => {
       reset: vi.fn(),
     },
     clearSessionCache: vi.fn().mockResolvedValue(undefined),
+    bootstrap: vi.fn().mockResolvedValue(undefined),
+    reconcileWake: vi.fn().mockResolvedValue(undefined),
+    serviceWorkerCreate: vi.fn(),
+    webSocketClients: [] as Array<{
+      connect: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+      getReadyState: ReturnType<typeof vi.fn>;
+      isConnected: ReturnType<typeof vi.fn>;
+      isConnectionHealthy: ReturnType<typeof vi.fn>;
+    }>,
   };
 });
 
@@ -155,13 +171,17 @@ vi.mock('../../src/lib/monitoring', () => ({
 }));
 
 vi.mock('../../src/app/ws/client', () => ({
-  WebSocketClient: vi.fn().mockImplementation(() => ({
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    getReadyState: vi.fn(() => 0),
-    isConnected: vi.fn(() => false),
-    isConnectionHealthy: vi.fn(() => false),
-  })),
+  WebSocketClient: vi.fn().mockImplementation(function MockWebSocketClient() {
+    const client = {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      getReadyState: vi.fn(() => 0),
+      isConnected: vi.fn(() => false),
+      isConnectionHealthy: vi.fn(() => false),
+    };
+    mocks.webSocketClients.push(client);
+    return client;
+  }),
 }));
 
 vi.mock('../../src/app/session', () => ({
@@ -182,6 +202,8 @@ vi.mock('../../src/app/api/client', () => ({
   fetchChats: mocks.fetchChats,
   fetchDevices: mocks.fetchDevices,
   fetchRecentPushes: mocks.fetchRecentPushes,
+  fetchSmsThread: mocks.fetchSmsThread,
+  fetchSmsThreads: mocks.fetchSmsThreads,
   requestFileUpload: mocks.requestFileUpload,
   sendFilePush: mocks.sendFilePush,
   sendPush: mocks.sendPush,
@@ -200,8 +222,8 @@ vi.mock('../../src/background/config', () => ({
 
 vi.mock('../../src/background/lifecycle', () => ({
   createLifecycleCoordinator: vi.fn(() => ({
-    bootstrap: vi.fn().mockResolvedValue(undefined),
-    reconcileWake: vi.fn().mockResolvedValue(undefined),
+    bootstrap: mocks.bootstrap,
+    reconcileWake: mocks.reconcileWake,
   })),
 }));
 
@@ -212,6 +234,10 @@ vi.mock('../../src/app/push-types', () => ({
 
 vi.mock('../../src/lib/crypto', () => ({
   PushbulletCrypto: { decryptPush: vi.fn() },
+}));
+
+vi.mock('../../src/app/notifications', () => ({
+  createNotificationWithTimeout: mocks.createNotificationWithTimeout,
 }));
 
 vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
@@ -227,7 +253,7 @@ vi.mock('../../src/background/state-machine', () => ({
     RECONNECTING: 'reconnecting',
   },
   ServiceWorkerStateMachine: {
-    create: vi.fn().mockResolvedValue(mocks.stateMachine),
+    create: mocks.serviceWorkerCreate,
   },
 }));
 
@@ -252,7 +278,7 @@ vi.mock('../../src/background/utils', () => ({
   pushLink: vi.fn(),
   pushNote: vi.fn(),
   refreshPushes: vi.fn().mockResolvedValue(undefined),
-  showPushNotification: vi.fn().mockResolvedValue(undefined),
+  showPushNotification: mocks.showPushNotification,
   stopPollingMode: vi.fn(),
   updatePopupConnectionState: vi.fn(),
 }));
@@ -283,26 +309,25 @@ vi.mock('../../src/background/keepalive', () => ({
 
 vi.mock('../../src/infrastructure/storage/indexed-db', () => ({
   clearSessionCache: mocks.clearSessionCache,
-  saveSessionCache: vi.fn().mockResolvedValue(undefined),
+  saveSessionCache: mocks.saveSessionCache,
 }));
 
 vi.mock('../../src/lib/events/event-bus', () => ({
-  globalEventBus: { on: vi.fn() },
+  globalEventBus: { on: mocks.eventBusOn },
 }));
 
 function installChromeMock(): void {
   const messageListeners: any[] = [];
   const installedListeners: any[] = [];
   const startupListeners: any[] = [];
+  const idleStateListeners: any[] = [];
 
   (globalThis as any).chrome = {
     alarms: {
       create: vi.fn(),
-      get: vi.fn(
-        (_name: string, callback: (alarm?: chrome.alarms.Alarm) => void) => {
-          callback(undefined);
-        },
-      ),
+      getAll: vi.fn((callback: (alarms: chrome.alarms.Alarm[]) => void) => {
+        callback([]);
+      }),
       onAlarm: { addListener: vi.fn() },
     },
     contextMenus: {
@@ -314,6 +339,17 @@ function installChromeMock(): void {
       clear: vi.fn(),
       create: vi.fn(),
       onClicked: { addListener: vi.fn() },
+    },
+    idle: {
+      setDetectionInterval: vi.fn(),
+      onStateChanged: {
+        addListener: vi.fn((callback: any) => {
+          idleStateListeners.push(callback);
+        }),
+        callListeners: (...args: any[]) => {
+          idleStateListeners.forEach((callback) => callback(...args));
+        },
+      },
     },
     runtime: {
       getManifest: vi.fn(() => ({ version: '1.0.0' })),
@@ -449,6 +485,12 @@ describe('background GET_SESSION_DATA session cache', () => {
     mocks.fetchRecentPushes.mockResolvedValue([]);
     mocks.fetchDevices.mockResolvedValue([refreshedDevice]);
     mocks.fetchChats.mockResolvedValue([refreshedChat]);
+    mocks.fetchSmsThreads.mockResolvedValue([]);
+    mocks.fetchSmsThread.mockResolvedValue([]);
+    mocks.createNotificationWithTimeout.mockResolvedValue(undefined);
+    mocks.saveSessionCache.mockResolvedValue(undefined);
+    mocks.showPushNotification.mockResolvedValue(undefined);
+    mocks.eventBusOn.mockReset();
     mocks.requestFileUpload.mockResolvedValue({
       file_name: 'report.txt',
       file_type: 'text/plain',
@@ -480,6 +522,10 @@ describe('background GET_SESSION_DATA session cache', () => {
     mocks.clearSessionCache.mockResolvedValue(undefined);
     mocks.performanceMonitor.exportPerformanceData.mockReturnValue({});
     mocks.performanceMonitor.getQualityMetrics.mockReturnValue({ consecutiveFailures: 0 });
+    mocks.bootstrap.mockResolvedValue(undefined);
+    mocks.reconcileWake.mockResolvedValue(undefined);
+    mocks.webSocketClients.length = 0;
+    mocks.serviceWorkerCreate.mockResolvedValue(mocks.stateMachine);
   });
 
   it('responds from populated cache before device and chat refresh completes', async () => {
@@ -777,19 +823,21 @@ describe('background GET_SESSION_DATA session cache', () => {
     expect((globalThis as any).exportDebugInfo).toBeUndefined();
   });
 
-  it('ensures long sleep recovery alarm exists on startup and install', async () => {
+  it('ensures recovery alarms exist on startup and install', async () => {
     await loadBackgroundRegistrations();
 
     chrome.runtime.onStartup.callListeners();
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(chrome.alarms.get).toHaveBeenCalledWith(
-      'longSleepRecovery',
+    expect(chrome.alarms.getAll).toHaveBeenCalledWith(
       expect.any(Function),
     );
     expect(chrome.alarms.create).toHaveBeenCalledWith('longSleepRecovery', {
       periodInMinutes: 5,
+    });
+    expect(chrome.alarms.create).toHaveBeenCalledWith('websocketHealthCheck', {
+      periodInMinutes: 1,
     });
 
     vi.clearAllMocks();
@@ -798,22 +846,31 @@ describe('background GET_SESSION_DATA session cache', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(chrome.alarms.get).toHaveBeenCalledWith(
-      'longSleepRecovery',
+    expect(chrome.alarms.getAll).toHaveBeenCalledWith(
       expect.any(Function),
     );
     expect(chrome.alarms.create).toHaveBeenCalledWith('longSleepRecovery', {
       periodInMinutes: 5,
     });
+    expect(chrome.alarms.create).toHaveBeenCalledWith('websocketHealthCheck', {
+      periodInMinutes: 1,
+    });
 
     vi.clearAllMocks();
-    chrome.alarms.get.mockImplementation(
-      (_name: string, callback: (alarm?: chrome.alarms.Alarm) => void) => {
-        callback({
-          name: 'longSleepRecovery',
-          scheduledTime: Date.now(),
-          periodInMinutes: 5,
-        });
+    chrome.alarms.getAll.mockImplementation(
+      (callback: (alarms: chrome.alarms.Alarm[]) => void) => {
+        callback([
+          {
+            name: 'longSleepRecovery',
+            scheduledTime: Date.now(),
+            periodInMinutes: 5,
+          },
+          {
+            name: 'websocketHealthCheck',
+            scheduledTime: Date.now(),
+            periodInMinutes: 1,
+          },
+        ]);
       },
     );
 
@@ -821,10 +878,135 @@ describe('background GET_SESSION_DATA session cache', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(chrome.alarms.get).toHaveBeenCalledWith(
-      'longSleepRecovery',
+    expect(chrome.alarms.getAll).toHaveBeenCalledWith(
       expect.any(Function),
     );
     expect(chrome.alarms.create).not.toHaveBeenCalled();
+  });
+
+  it('reconciles wake when chrome.idle reports active', async () => {
+    await loadBackgroundRegistrations();
+
+    expect(chrome.idle.setDetectionInterval).toHaveBeenCalledWith(60);
+
+    chrome.idle.onStateChanged.callListeners('idle');
+    chrome.idle.onStateChanged.callListeners('locked');
+    expect(mocks.reconcileWake).not.toHaveBeenCalled();
+
+    chrome.idle.onStateChanged.callListeners('active');
+
+    expect(mocks.reconcileWake).toHaveBeenCalledWith('idle-active');
+  });
+
+  it('replaces an open but unhealthy WebSocket on reconnect', async () => {
+    await loadBackgroundRegistrations();
+    const callbacks = mocks.serviceWorkerCreate.mock.calls[0]?.[0];
+
+    if (!callbacks?.onConnectWebSocket) {
+      throw new Error('Expected state machine onConnectWebSocket callback');
+    }
+
+    callbacks.onConnectWebSocket();
+    expect(mocks.webSocketClients).toHaveLength(1);
+    const firstClient = mocks.webSocketClients[0]!;
+    firstClient.isConnected.mockReturnValue(true);
+    firstClient.isConnectionHealthy.mockReturnValue(false);
+    firstClient.getReadyState.mockReturnValue(1);
+
+    callbacks.onConnectWebSocket();
+
+    expect(firstClient.disconnect).toHaveBeenCalledTimes(1);
+    expect(mocks.webSocketClients).toHaveLength(2);
+    expect(mocks.webSocketClients[1]!.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces encrypted SMS when no E2EE password is configured', async () => {
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      ciphertext: 'encrypted-payload',
+      encrypted: true,
+      iden: 'encrypted-sms',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.createNotificationWithTimeout).toHaveBeenCalledWith(
+      'pushbullet-need-e2e-password',
+      expect.objectContaining({
+        title: 'Encrypted message received',
+        priority: 2,
+      }),
+      undefined,
+      0,
+    );
+    expect(mocks.showPushNotification).not.toHaveBeenCalled();
+  });
+
+  it('resolves empty sms_changed pushes from SMS history before notifying', async () => {
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-1',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'old body', timestamp: 10 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockResolvedValue([
+      { id: 'message-1', type: 'incoming', body: 'fresh body', timestamp: 20 },
+    ]);
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      iden: 'sms-tickle',
+      notifications: [],
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.fetchSmsThreads).toHaveBeenCalledWith('test-api-key', 'phone-1');
+    expect(mocks.fetchSmsThread).toHaveBeenCalledWith('test-api-key', 'phone-1', 'thread-1');
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notifications: [
+          expect.objectContaining({
+            title: 'Alice',
+            body: 'fresh body',
+          }),
+        ],
+      }),
+      expect.any(Map),
+    );
+    expect(mocks.saveSessionCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recentPushes: expect.arrayContaining([
+          expect.objectContaining({
+            notifications: [
+              expect.objectContaining({ body: 'fresh body' }),
+            ],
+          }),
+        ]),
+      }),
+    );
   });
 });

@@ -33,11 +33,15 @@ export interface CloseInfo {
  */
 export class WebSocketClient {
   private static readonly NOP_TIMEOUT = 60000; // 60 seconds
+  private static readonly NOP_WATCHDOG_GRACE_MS = 5000;
+  private static readonly NOP_TIMEOUT_CLOSE_CODE = 4999;
 
   private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private nopTimer: ReturnType<typeof setTimeout> | null = null;
   private lastNopAt: number = 0;
+  private forcedNopTimeoutDisconnect = false;
 
   constructor(
     private websocketUrl: string,
@@ -150,6 +154,7 @@ export class WebSocketClient {
         });
 
         this.lastNopAt = Date.now();
+        this.armNopWatchdog();
         performanceMonitor.recordWebSocketConnection(true);
         wsStateMonitor.startMonitoring();
 
@@ -190,6 +195,7 @@ export class WebSocketClient {
         globalEventBus.emit("websocket:message", msg);
         if (msg.type === "nop") {
           this.lastNopAt = Date.now();
+          this.armNopWatchdog();
           debugLogger.websocket("DEBUG", "Server nop received", { timestamp: new Date(this.lastNopAt).toISOString() });
         }
         if (msg.type === "tickle") {
@@ -268,6 +274,7 @@ export class WebSocketClient {
       };
 
       this.socket.onclose = (event) => {
+        this.clearNopWatchdog();
         const closeInfo: CloseInfo = {
           code: event.code,
           reason: event.reason || "No reason provided",
@@ -280,10 +287,21 @@ export class WebSocketClient {
           reconnectAttempts: this.reconnectAttempts,
         });
 
+        const isNopTimeoutClose =
+          event.code === WebSocketClient.NOP_TIMEOUT_CLOSE_CODE &&
+          event.reason === "nop-timeout";
+        if (isNopTimeoutClose && this.forcedNopTimeoutDisconnect) {
+          this.forcedNopTimeoutDisconnect = false;
+          return;
+        }
+
         const isPermanentClose =
-          event.code === 1008 ||
-          event.code === 4001 ||
-          (event.code >= 4000 && event.code < 5000);
+          !isNopTimeoutClose &&
+          (
+            event.code === 1008 ||
+            event.code === 4001 ||
+            (event.code >= 4000 && event.code < 5000)
+          );
 
         // Permanent error: stop, notify, and let the lifecycle enter ERROR.
         if (isPermanentClose) {
@@ -325,6 +343,7 @@ export class WebSocketClient {
    * Disconnect WebSocket
    */
   disconnect(): void {
+    this.clearNopWatchdog();
     if (this.socket) {
       try {
         debugLogger.websocket("INFO", "Disconnecting WebSocket", {
@@ -361,9 +380,45 @@ export class WebSocketClient {
   }
 
   public isConnectionHealthy(): boolean {
-    const NOP_TIMEOUT_MS = 60000; // 60s window
     if (this.socket?.readyState !== WS_READY_STATE.OPEN) return false; // must be OPEN
     const age = Date.now() - this.lastNopAt;
-    return age >= 0 && age <= NOP_TIMEOUT_MS; // recent nop seen
+    return age >= 0 && age <= WebSocketClient.NOP_TIMEOUT; // recent nop seen
+  }
+
+  private armNopWatchdog(): void {
+    this.clearNopWatchdog();
+    this.nopTimer = setTimeout(() => {
+      this.nopTimer = null;
+      if (!this.isConnectionHealthy()) {
+        const closeInfo: CloseInfo = {
+          code: WebSocketClient.NOP_TIMEOUT_CLOSE_CODE,
+          reason: "nop-timeout",
+          wasClean: false,
+        };
+        debugLogger.websocket(
+          "WARN",
+          "No server nop within window - forcing reconnect",
+          { ageMs: Date.now() - this.lastNopAt },
+        );
+        this.forcedNopTimeoutDisconnect = true;
+        try {
+          this.socket?.close(
+            WebSocketClient.NOP_TIMEOUT_CLOSE_CODE,
+            "nop-timeout",
+          );
+        } catch {
+          // noop
+        }
+        globalEventBus.emit("websocket:disconnected", closeInfo);
+        globalEventBus.emit("websocket:state", "disconnected");
+      }
+    }, WebSocketClient.NOP_TIMEOUT + WebSocketClient.NOP_WATCHDOG_GRACE_MS);
+  }
+
+  private clearNopWatchdog(): void {
+    if (this.nopTimer) {
+      clearTimeout(this.nopTimer);
+      this.nopTimer = null;
+    }
   }
 }

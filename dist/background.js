@@ -693,6 +693,7 @@
     constructor(stateSource) {
       this.stateSource = stateSource;
     }
+    stateSource;
     stateHistory = [];
     lastStateCheck = Date.now();
     monitoringInterval = null;
@@ -848,17 +849,23 @@
   }
 
   // src/app/ws/client.ts
-  var WebSocketClient = class {
+  var WebSocketClient = class _WebSocketClient {
     constructor(websocketUrl, getApiKey2) {
       this.websocketUrl = websocketUrl;
       this.getApiKey = getApiKey2;
     }
+    websocketUrl;
+    getApiKey;
     static NOP_TIMEOUT = 6e4;
     // 60 seconds
+    static NOP_WATCHDOG_GRACE_MS = 5e3;
+    static NOP_TIMEOUT_CLOSE_CODE = 4999;
     socket = null;
     reconnectAttempts = 0;
     reconnectTimeout = null;
+    nopTimer = null;
     lastNopAt = 0;
+    forcedNopTimeoutDisconnect = false;
     /**
      * Get current WebSocket instance
      */
@@ -942,6 +949,7 @@
             timestamp: (/* @__PURE__ */ new Date()).toISOString()
           });
           this.lastNopAt = Date.now();
+          this.armNopWatchdog();
           performanceMonitor.recordWebSocketConnection(true);
           wsStateMonitor.startMonitoring();
           globalEventBus.emit("websocket:polling:stop");
@@ -968,6 +976,7 @@
           globalEventBus.emit("websocket:message", msg);
           if (msg.type === "nop") {
             this.lastNopAt = Date.now();
+            this.armNopWatchdog();
             debugLogger.websocket("DEBUG", "Server nop received", { timestamp: new Date(this.lastNopAt).toISOString() });
           }
           if (msg.type === "tickle") {
@@ -1028,6 +1037,7 @@
           );
         };
         this.socket.onclose = (event) => {
+          this.clearNopWatchdog();
           const closeInfo = {
             code: event.code,
             reason: event.reason || "No reason provided",
@@ -1038,7 +1048,12 @@
             timestamp: (/* @__PURE__ */ new Date()).toISOString(),
             reconnectAttempts: this.reconnectAttempts
           });
-          const isPermanentClose = event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3;
+          const isNopTimeoutClose = event.code === _WebSocketClient.NOP_TIMEOUT_CLOSE_CODE && event.reason === "nop-timeout";
+          if (isNopTimeoutClose && this.forcedNopTimeoutDisconnect) {
+            this.forcedNopTimeoutDisconnect = false;
+            return;
+          }
+          const isPermanentClose = !isNopTimeoutClose && (event.code === 1008 || event.code === 4001 || event.code >= 4e3 && event.code < 5e3);
           if (isPermanentClose) {
             debugLogger.websocket(
               "ERROR",
@@ -1072,6 +1087,7 @@
      * Disconnect WebSocket
      */
     disconnect() {
+      this.clearNopWatchdog();
       if (this.socket) {
         try {
           debugLogger.websocket("INFO", "Disconnecting WebSocket", {
@@ -1103,10 +1119,43 @@
       this.reconnectAttempts = 0;
     }
     isConnectionHealthy() {
-      const NOP_TIMEOUT_MS = 6e4;
       if (this.socket?.readyState !== 1 /* OPEN */) return false;
       const age = Date.now() - this.lastNopAt;
-      return age >= 0 && age <= NOP_TIMEOUT_MS;
+      return age >= 0 && age <= _WebSocketClient.NOP_TIMEOUT;
+    }
+    armNopWatchdog() {
+      this.clearNopWatchdog();
+      this.nopTimer = setTimeout(() => {
+        this.nopTimer = null;
+        if (!this.isConnectionHealthy()) {
+          const closeInfo = {
+            code: _WebSocketClient.NOP_TIMEOUT_CLOSE_CODE,
+            reason: "nop-timeout",
+            wasClean: false
+          };
+          debugLogger.websocket(
+            "WARN",
+            "No server nop within window - forcing reconnect",
+            { ageMs: Date.now() - this.lastNopAt }
+          );
+          this.forcedNopTimeoutDisconnect = true;
+          try {
+            this.socket?.close(
+              _WebSocketClient.NOP_TIMEOUT_CLOSE_CODE,
+              "nop-timeout"
+            );
+          } catch {
+          }
+          globalEventBus.emit("websocket:disconnected", closeInfo);
+          globalEventBus.emit("websocket:state", "disconnected");
+        }
+      }, _WebSocketClient.NOP_TIMEOUT + _WebSocketClient.NOP_WATCHDOG_GRACE_MS);
+    }
+    clearNopWatchdog() {
+      if (this.nopTimer) {
+        clearTimeout(this.nopTimer);
+        this.nopTimer = null;
+      }
     }
   };
 
@@ -1585,6 +1634,7 @@
   var DEVICES_URL = `${API_BASE_URL}/devices`;
   var USER_INFO_URL = `${API_BASE_URL}/users/me`;
   var UPLOAD_REQUEST_URL = `${API_BASE_URL}/upload-request`;
+  var PERMANENTS_URL = `${API_BASE_URL}/permanents`;
   var MAX_INCREMENTAL_PUSH_PAGES = 11;
   function hasDisplayablePushContent(push) {
     if (push.type === "sms_changed") {
@@ -1619,6 +1669,79 @@
   var registrationPromise = null;
   function authHeaders(apiKey2) {
     return { "Access-Token": apiKey2 };
+  }
+  function asRecord(value) {
+    return value && typeof value === "object" ? value : null;
+  }
+  function stringValue(value) {
+    return typeof value === "string" && value.length > 0 ? value : void 0;
+  }
+  function numberValue(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+  }
+  function booleanValue(value) {
+    return typeof value === "boolean" ? value : void 0;
+  }
+  function getPayloadRecord(payload) {
+    const root = asRecord(payload);
+    if (!root) return null;
+    return asRecord(root.data) ?? root;
+  }
+  function normalizeSmsRecipient(value) {
+    const record = asRecord(value);
+    if (!record) return null;
+    const recipient = {
+      name: stringValue(record.name),
+      address: stringValue(record.address),
+      image_url: stringValue(record.image_url)
+    };
+    return recipient.name || recipient.address || recipient.image_url ? recipient : null;
+  }
+  function normalizeSmsMessage(value) {
+    const record = asRecord(value);
+    if (!record) return null;
+    const message = {
+      id: stringValue(record.id) ?? stringValue(record.iden),
+      type: stringValue(record.type),
+      body: stringValue(record.body),
+      timestamp: numberValue(record.timestamp),
+      image_url: stringValue(record.image_url),
+      encrypted: booleanValue(record.encrypted),
+      ciphertext: stringValue(record.ciphertext)
+    };
+    return message.body || message.timestamp || message.ciphertext ? message : null;
+  }
+  function normalizeSmsThread(value) {
+    const record = asRecord(value);
+    if (!record) return null;
+    const id = stringValue(record.id) ?? stringValue(record.iden) ?? stringValue(record.thread_id);
+    if (!id) return null;
+    const recipients = Array.isArray(record.recipients) ? record.recipients.map(normalizeSmsRecipient).filter((recipient) => recipient !== null) : void 0;
+    const latest = normalizeSmsMessage(record.latest) ?? normalizeSmsMessage(record.latest_message);
+    const messages = Array.isArray(record.messages) ? record.messages.map(normalizeSmsMessage).filter((message) => message !== null) : void 0;
+    return {
+      id,
+      ...recipients && recipients.length > 0 ? { recipients } : {},
+      ...latest ? { latest } : {},
+      ...messages && messages.length > 0 ? { messages } : {},
+      encrypted: booleanValue(record.encrypted),
+      ciphertext: stringValue(record.ciphertext)
+    };
+  }
+  function extractSmsThreads(payload) {
+    const record = getPayloadRecord(payload);
+    const threads = record && Array.isArray(record.threads) ? record.threads : [];
+    return threads.map(normalizeSmsThread).filter((thread) => thread !== null);
+  }
+  function extractSmsMessages(payload) {
+    const record = getPayloadRecord(payload);
+    if (!record) return [];
+    const directThread = Array.isArray(record.thread) ? record.thread : void 0;
+    const directMessages = Array.isArray(record.messages) ? record.messages : void 0;
+    const threadRecord = asRecord(record.thread);
+    const nestedMessages = threadRecord && Array.isArray(threadRecord.messages) ? threadRecord.messages : void 0;
+    const source = directThread ?? directMessages ?? nestedMessages ?? [];
+    return source.map(normalizeSmsMessage).filter((message) => message !== null);
   }
   function parseApiErrorMessage(errorText, fallback) {
     try {
@@ -1890,6 +2013,41 @@
       });
       throw error;
     }
+  }
+  async function fetchSmsThreads(apiKey2, deviceIden2) {
+    const url = `${PERMANENTS_URL}/${encodeURIComponent(deviceIden2)}_threads`;
+    debugLogger.api("INFO", "Fetching SMS threads", {
+      hasApiKey: !!apiKey2,
+      deviceIden: deviceIden2
+    });
+    const response = await fetch(url, { headers: authHeaders(apiKey2) });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch SMS threads: ${response.status}`);
+    }
+    const data = await response.json();
+    const threads = extractSmsThreads(data);
+    debugLogger.api("INFO", "SMS threads fetched successfully", {
+      count: threads.length
+    });
+    return threads;
+  }
+  async function fetchSmsThread(apiKey2, deviceIden2, threadId) {
+    const url = `${PERMANENTS_URL}/${encodeURIComponent(deviceIden2)}_thread_${encodeURIComponent(threadId)}`;
+    debugLogger.api("INFO", "Fetching SMS thread detail", {
+      hasApiKey: !!apiKey2,
+      deviceIden: deviceIden2,
+      threadId
+    });
+    const response = await fetch(url, { headers: authHeaders(apiKey2) });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch SMS thread ${threadId}: ${response.status}`);
+    }
+    const data = await response.json();
+    const messages = extractSmsMessages(data);
+    debugLogger.api("INFO", "SMS thread detail fetched successfully", {
+      count: messages.length
+    });
+    return messages;
   }
   async function ensureDeviceExists(apiKey2, deviceIden2) {
     const response = await fetch(
@@ -2324,7 +2482,7 @@
 
   // src/background/keepalive.ts
   var KEEPALIVE_ALARM = "criticalKeepalive";
-  var KEEPALIVE_INTERVAL_SECONDS = 20;
+  var KEEPALIVE_INTERVAL_SECONDS = 30;
   var activeCount = 0;
   function startCriticalKeepalive() {
     activeCount++;
@@ -2418,6 +2576,45 @@
     cachedAt: 0
   };
   var CACHE_TTL_MS = 5 * 60 * 1e3;
+  var MAX_RECENT_PUSHES = 200;
+  var EPHEMERAL_RETENTION_SECONDS = 24 * 60 * 60;
+  function isEphemeralPush(push) {
+    return push.type === "sms_changed" || push.type === "mirror";
+  }
+  function getCreatedSeconds(push) {
+    if (typeof push.created !== "number" || !Number.isFinite(push.created)) {
+      return 0;
+    }
+    return push.created > 1e10 ? Math.floor(push.created / 1e3) : push.created;
+  }
+  function getEphemeralBody(push) {
+    if ("body" in push && typeof push.body === "string") {
+      return push.body;
+    }
+    if (push.type === "sms_changed") {
+      return push.notifications?.[0]?.body ?? "";
+    }
+    return "";
+  }
+  function getDisplayMergeKey(push) {
+    return push.iden ?? `${push.type}|${getCreatedSeconds(push)}|${getEphemeralBody(push)}`;
+  }
+  function mergeKeepingEphemerals(fresh, previous) {
+    const nowSeconds = Math.floor(Date.now() / 1e3);
+    const freshKeys = new Set(fresh.map(getDisplayMergeKey));
+    const keptEphemerals = previous.filter((push) => {
+      if (!isEphemeralPush(push)) {
+        return false;
+      }
+      const created = getCreatedSeconds(push);
+      return created <= 0 || nowSeconds - created <= EPHEMERAL_RETENTION_SECONDS;
+    });
+    const merged = [
+      ...fresh,
+      ...keptEphemerals.filter((push) => !freshKeys.has(getDisplayMergeKey(push)))
+    ];
+    return merged.sort((left, right) => getCreatedSeconds(right) - getCreatedSeconds(left)).slice(0, MAX_RECENT_PUSHES);
+  }
   function isCacheFresh(cachedSession) {
     if (!cachedSession) {
       return false;
@@ -2492,10 +2689,13 @@
       ]);
       sessionCache.userInfo = userInfo;
       sessionCache.devices = devices;
-      sessionCache.recentPushes = displayPushes;
+      sessionCache.recentPushes = mergeKeepingEphemerals(
+        displayPushes,
+        sessionCache.recentPushes
+      );
       sessionCache.chats = chats;
       sessionCache.lastUpdated = Date.now();
-      const popupPushes = await getPopupRecentPushes(displayPushes);
+      const popupPushes = await getPopupRecentPushes(sessionCache.recentPushes);
       if (didRefreshUser && didRefreshDevices && didRefreshPushes && didRefreshChats) {
         try {
           await persistSessionCache();
@@ -2700,7 +2900,10 @@
           debugLogger.general("INFO", "Pipeline 2: Display fetch complete", {
             count: displayPushes.length
           });
-          sessionCache.recentPushes = displayPushes;
+          sessionCache.recentPushes = mergeKeepingEphemerals(
+            displayPushes,
+            sessionCache.recentPushes
+          );
           try {
             const chats = await fetchChats(apiKeyValue);
             sessionCache.chats = chats;
@@ -2788,7 +2991,10 @@
         sessionCache.lastModifiedCutoff = updatedCutoff ?? 0;
         debugLogger.general("DEBUG", "Pipeline 2: Refreshing display pushes");
         const displayPushes = await fetchDisplayPushes(apiKeyParam, 50);
-        sessionCache.recentPushes = displayPushes;
+        sessionCache.recentPushes = mergeKeepingEphemerals(
+          displayPushes,
+          sessionCache.recentPushes
+        );
         debugLogger.general("INFO", "Session refresh complete", {
           incrementalCount: incrementalPushes.length,
           displayCount: displayPushes.length
@@ -3189,6 +3395,7 @@
     async function reconcileWake2(reason) {
       await deps.hydrateConfig();
       await deps.stateMachineReady;
+      await deps.ensureRecoveryAlarms();
       const apiKey2 = deps.getApiKey();
       const socketHealthy = deps.isSocketHealthy();
       const stateMachine2 = deps.getStateMachine();
@@ -4842,12 +5049,50 @@
     }
   }
 
+  // src/background/sms-diagnostics.ts
+  var stats = {
+    received: 0,
+    shown: 0,
+    droppedEncrypted: 0,
+    droppedEmpty: 0,
+    droppedUnsupported: 0,
+    resolvedFromHistory: 0,
+    historyFetchFailed: 0
+  };
+  function recordSmsEphemeralReceived() {
+    stats.received += 1;
+  }
+  function recordSmsShown() {
+    stats.shown += 1;
+  }
+  function recordSmsDroppedEncrypted() {
+    stats.droppedEncrypted += 1;
+  }
+  function recordSmsDroppedEmpty() {
+    stats.droppedEmpty += 1;
+  }
+  function recordSmsDroppedUnsupported() {
+    stats.droppedUnsupported += 1;
+  }
+  function recordSmsResolvedFromHistory() {
+    stats.resolvedFromHistory += 1;
+  }
+  function recordSmsHistoryFetchFailed() {
+    stats.historyFetchFailed += 1;
+  }
+  function getSmsEphemeralStats() {
+    return { ...stats };
+  }
+
   // src/background/index.ts
   var DEFAULT_FILE_TYPE = "application/octet-stream";
   var MAX_FILE_NAME_LENGTH = 255;
   var MAX_FILE_TYPE_LENGTH = 255;
   var LONG_SLEEP_RECOVERY_ALARM = "longSleepRecovery";
   var LONG_SLEEP_RECOVERY_PERIOD_MINUTES = 5;
+  var WEBSOCKET_HEALTH_CHECK_ALARM = "websocketHealthCheck";
+  var WEBSOCKET_HEALTH_CHECK_PERIOD_MINUTES = 1;
+  var E2E_PASSWORD_NOTIFICATION_ID = "pushbullet-need-e2e-password";
   function buildUploadError(code, stage, message, status) {
     return {
       code,
@@ -4937,21 +5182,25 @@
     new Uint8Array(buffer).set(bytes);
     return buffer;
   }
-  function getAlarm(name) {
+  function getAllAlarms() {
     return new Promise((resolve) => {
-      chrome.alarms.get(name, (alarm) => {
-        resolve(alarm);
+      chrome.alarms.getAll((alarms) => {
+        resolve(alarms ?? []);
       });
     });
   }
-  async function ensureLongSleepRecoveryAlarm() {
-    const alarm = await getAlarm(LONG_SLEEP_RECOVERY_ALARM);
-    if (alarm) {
-      return;
+  async function ensureRecoveryAlarmsExist() {
+    const alarmNames = new Set((await getAllAlarms()).map((alarm) => alarm.name));
+    if (!alarmNames.has(LONG_SLEEP_RECOVERY_ALARM)) {
+      chrome.alarms.create(LONG_SLEEP_RECOVERY_ALARM, {
+        periodInMinutes: LONG_SLEEP_RECOVERY_PERIOD_MINUTES
+      });
     }
-    chrome.alarms.create(LONG_SLEEP_RECOVERY_ALARM, {
-      periodInMinutes: LONG_SLEEP_RECOVERY_PERIOD_MINUTES
-    });
+    if (!alarmNames.has(WEBSOCKET_HEALTH_CHECK_ALARM)) {
+      chrome.alarms.create(WEBSOCKET_HEALTH_CHECK_ALARM, {
+        periodInMinutes: WEBSOCKET_HEALTH_CHECK_PERIOD_MINUTES
+      });
+    }
   }
   function isStructuredUploadError(error) {
     return typeof error === "object" && error !== null && "code" in error && "stage" in error && "message" in error;
@@ -4976,6 +5225,7 @@
   }
   var notificationDataStore = /* @__PURE__ */ new Map();
   var MAX_NOTIFICATION_STORE_SIZE = 100;
+  var MAX_RECENT_PUSHES2 = 200;
   function addToNotificationStore(id, push) {
     if (notificationDataStore.size >= MAX_NOTIFICATION_STORE_SIZE) {
       const firstKey = notificationDataStore.keys().next().value;
@@ -4987,6 +5237,138 @@
   }
   function getNotificationStore() {
     return notificationDataStore;
+  }
+  function isSmsChangedPush2(push) {
+    return push.type === "sms_changed";
+  }
+  function hasSmsNotification2(push) {
+    return Array.isArray(push.notifications) && push.notifications.length > 0;
+  }
+  function shouldTrackSmsEphemeral(push) {
+    return push.type === "sms_changed" || push.type === "mirror" || !!push.encrypted;
+  }
+  function getTimestampSeconds(value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return void 0;
+    }
+    return value > 1e10 ? Math.floor(value / 1e3) : value;
+  }
+  function getSmsThreadTimestamp(thread) {
+    const latestTimestamp = getTimestampSeconds(thread.latest?.timestamp);
+    if (latestTimestamp) {
+      return latestTimestamp;
+    }
+    return Math.max(
+      0,
+      ...(thread.messages ?? []).map(
+        (message) => getTimestampSeconds(message.timestamp) ?? 0
+      )
+    );
+  }
+  function getLatestSmsThread(threads) {
+    return [...threads].sort(
+      (left, right) => getSmsThreadTimestamp(right) - getSmsThreadTimestamp(left)
+    )[0] ?? null;
+  }
+  function getLatestSmsMessage(thread, messages) {
+    const candidates = [...messages, ...thread.messages ?? []];
+    if (thread.latest) {
+      candidates.push(thread.latest);
+    }
+    return candidates.filter((message) => !!message.body || !!message.ciphertext).sort(
+      (left, right) => (getTimestampSeconds(right.timestamp) ?? 0) - (getTimestampSeconds(left.timestamp) ?? 0)
+    )[0] ?? null;
+  }
+  function getSmsTitle(thread) {
+    const names = (thread.recipients ?? []).map((recipient) => recipient.name || recipient.address).filter((value) => !!value);
+    return names.length > 0 ? names.join(", ") : "New SMS";
+  }
+  function getSmsImageUrl(thread, message) {
+    return message.image_url ?? thread.recipients?.find((recipient) => recipient.image_url)?.image_url;
+  }
+  async function showE2EPasswordPrompt() {
+    await createNotificationWithTimeout(
+      E2E_PASSWORD_NOTIFICATION_ID,
+      {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+        title: "Encrypted message received",
+        message: "Set your Pushbullet end-to-end password in Options to view encrypted SMS/notifications.",
+        priority: 2
+      },
+      void 0,
+      0
+    );
+  }
+  async function decryptSmsMessageIfNeeded(message) {
+    if (!message.encrypted || !message.ciphertext) {
+      return message;
+    }
+    const password = await storageRepository.getEncryptionPassword();
+    if (!password || !sessionCache.userInfo) {
+      await showE2EPasswordPrompt();
+      recordSmsDroppedEncrypted();
+      return null;
+    }
+    const key = await PushbulletCrypto.deriveKey(
+      password,
+      sessionCache.userInfo.iden
+    );
+    const decrypted = await PushbulletCrypto.decryptMessage(message.ciphertext, key);
+    const decryptedRecord = decrypted && typeof decrypted === "object" ? decrypted : {};
+    return {
+      ...message,
+      ...decryptedRecord,
+      encrypted: false
+    };
+  }
+  async function resolveSmsChangedFromHistory(push) {
+    const apiKey2 = getApiKey();
+    const smsDevice = sessionCache.devices.find((device) => device.has_sms && device.iden);
+    if (!apiKey2 || !smsDevice) {
+      return null;
+    }
+    try {
+      const threads = await fetchSmsThreads(apiKey2, smsDevice.iden);
+      const latestThread = getLatestSmsThread(threads);
+      if (!latestThread) {
+        return null;
+      }
+      const messages = await fetchSmsThread(apiKey2, smsDevice.iden, latestThread.id);
+      const latestMessage = getLatestSmsMessage(latestThread, messages);
+      if (!latestMessage) {
+        return null;
+      }
+      const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+      if (!decryptedMessage?.body) {
+        return null;
+      }
+      const timestamp = getTimestampSeconds(decryptedMessage.timestamp) ?? getTimestampSeconds(push.created) ?? Math.floor(Date.now() / 1e3);
+      return {
+        ...push,
+        created: timestamp,
+        modified: timestamp,
+        notifications: [
+          {
+            title: getSmsTitle(latestThread),
+            body: decryptedMessage.body,
+            timestamp,
+            image_url: getSmsImageUrl(latestThread, decryptedMessage)
+          }
+        ]
+      };
+    } catch (error) {
+      recordSmsHistoryFetchFailed();
+      debugLogger.general(
+        "WARN",
+        "Failed to resolve sms_changed from SMS history",
+        {
+          pushIden: push.iden,
+          error: error.message
+        }
+      );
+      return null;
+    }
   }
   var websocketClient2 = null;
   var ranReconnectAutoOpen = false;
@@ -5043,6 +5425,10 @@
   globalEventBus.on("websocket:push", async (push) => {
     await hydrateBackgroundConfig();
     performanceMonitor.recordPushReceived();
+    const trackSmsEphemeral = shouldTrackSmsEphemeral(push);
+    if (trackSmsEphemeral) {
+      recordSmsEphemeralReceived();
+    }
     let decryptedPush = push;
     let decryptionFailed = false;
     if ("encrypted" in push && push.encrypted && "ciphertext" in push) {
@@ -5082,12 +5468,19 @@
       }
     }
     if (decryptionFailed) {
+      const hasEncryptionPassword = !!await storageRepository.getEncryptionPassword();
+      if (trackSmsEphemeral) {
+        recordSmsDroppedEncrypted();
+      }
+      if (!hasEncryptionPassword) {
+        await showE2EPasswordPrompt();
+      }
       debugLogger.general(
         "WARN",
         "Skipping encrypted push due to decryption failure",
         {
           pushIden: push.iden,
-          hasEncryptionPassword: !!await storageRepository.getEncryptionPassword()
+          hasEncryptionPassword
         }
       );
       return;
@@ -5102,6 +5495,9 @@
     }
     const typeCheck = checkPushTypeSupport(decryptedPush.type);
     if (!typeCheck.supported) {
+      if (shouldTrackSmsEphemeral(decryptedPush)) {
+        recordSmsDroppedUnsupported();
+      }
       if (typeCheck.category === "known-unsupported") {
         debugLogger.general("WARN", "Received known unsupported push type", {
           pushType: decryptedPush.type,
@@ -5131,8 +5527,21 @@
         push: summarizePushForLog(decryptedPush)
       });
     }
+    if (isSmsChangedPush2(decryptedPush) && !hasSmsNotification2(decryptedPush)) {
+      const resolvedPush = await resolveSmsChangedFromHistory(decryptedPush);
+      if (!resolvedPush) {
+        recordSmsDroppedEmpty();
+        debugLogger.general("INFO", "Dropped empty sms_changed after history lookup", {
+          pushIden: decryptedPush.iden
+        });
+        return;
+      }
+      decryptedPush = resolvedPush;
+      recordSmsResolvedFromHistory();
+    }
     if (sessionCache.recentPushes) {
       sessionCache.recentPushes.unshift(decryptedPush);
+      sessionCache.recentPushes = sessionCache.recentPushes.slice(0, MAX_RECENT_PUSHES2);
       saveSessionCache(sessionCache);
       sessionCache.lastUpdated = Date.now();
       chrome.runtime.sendMessage({
@@ -5141,7 +5550,11 @@
       }).catch(() => {
       });
     }
-    showPushNotification(decryptedPush, notificationDataStore).catch((error) => {
+    showPushNotification(decryptedPush, notificationDataStore).then(() => {
+      if (shouldTrackSmsEphemeral(decryptedPush)) {
+        recordSmsShown();
+      }
+    }).catch((error) => {
       debugLogger.general("ERROR", "Failed to show notification", null, error);
       performanceMonitor.recordNotificationFailed();
     });
@@ -5242,8 +5655,28 @@
     getDeviceIden,
     getAutoOpenLinks,
     getDeviceNickname,
-    isSocketHealthy: () => !!websocketClient2?.isConnected?.() && !!websocketClient2?.isConnectionHealthy?.()
+    isSocketHealthy: () => !!websocketClient2?.isConnected?.() && !!websocketClient2?.isConnectionHealthy?.(),
+    ensureRecoveryAlarms: ensureRecoveryAlarmsExist
   });
+  function installIdleWakeDetection() {
+    try {
+      chrome.idle.setDetectionInterval(60);
+      chrome.idle.onStateChanged.addListener((state) => {
+        if (state === "active") {
+          debugLogger.general(
+            "INFO",
+            "[Idle] Returned to active - reconciling wake"
+          );
+          void reconcileWake("idle-active");
+        }
+      });
+    } catch (error) {
+      debugLogger.general("WARN", "chrome.idle unavailable", {
+        error: String(error)
+      });
+    }
+  }
+  installIdleWakeDetection();
   async function getPopupRecentPushes2() {
     const onlyThisDevice = await storageRepository.getOnlyThisDevice() || false;
     const deviceIden2 = await storageRepository.getDeviceIden();
@@ -5313,24 +5746,30 @@
   function connectWebSocket() {
     if (websocketClient2) {
       const isConnected = websocketClient2.isConnected();
+      const isHealthy = websocketClient2.isConnectionHealthy();
       const isConnecting = websocketClient2.getReadyState() === WebSocket.CONNECTING;
-      if (isConnected || isConnecting) {
+      const isLive = isConnected && isHealthy;
+      if (isLive || isConnecting) {
         debugLogger.websocket(
           "DEBUG",
-          "WebSocket already connected/connecting, skipping duplicate call",
+          "WebSocket live or connecting, skipping duplicate connect",
           {
             isConnected,
+            isHealthy,
             isConnecting,
             readyState: websocketClient2.getReadyState()
           }
         );
         return;
       }
-    }
-    if (websocketClient2) {
       debugLogger.websocket(
         "INFO",
-        "Disposing existing WebSocket before reconnecting"
+        "Disposing stale/unhealthy WebSocket before reconnecting",
+        {
+          isConnected,
+          isHealthy,
+          readyState: websocketClient2.getReadyState()
+        }
       );
       websocketClient2.disconnect();
       websocketClient2 = null;
@@ -5383,8 +5822,8 @@
       await reconcileWake(LONG_SLEEP_RECOVERY_ALARM);
       return;
     }
-    if (alarm.name === "websocketHealthCheck") {
-      await reconcileWake("websocketHealthCheck");
+    if (alarm.name === WEBSOCKET_HEALTH_CHECK_ALARM) {
+      await reconcileWake(WEBSOCKET_HEALTH_CHECK_ALARM);
       const currentState = stateMachine.getCurrentState();
       debugLogger.general(
         "DEBUG",
@@ -5810,6 +6249,7 @@
           initializationStats: initTracker.exportData(),
           mv3LifecycleStats,
           // Add the new data object
+          smsEphemeralStats: getSmsEphemeralStats(),
           errors: {
             total: logData.summary.errors,
             last24h: logData.summary.errors,
@@ -6022,6 +6462,11 @@
     debugLogger.notifications("INFO", "Notification clicked", {
       notificationId
     });
+    if (notificationId === E2E_PASSWORD_NOTIFICATION_ID) {
+      chrome.runtime.openOptionsPage();
+      chrome.notifications.clear(notificationId);
+      return;
+    }
     const push = notificationDataStore.get(notificationId);
     if (!push) {
       debugLogger.notifications(
@@ -6073,13 +6518,13 @@
   });
   chrome.runtime.onStartup.addListener(async () => {
     await ensureDebugConfigLoadedOnce();
-    await ensureLongSleepRecoveryAlarm();
+    await ensureRecoveryAlarmsExist();
     void bootstrap("startup");
     setTimeout(checkExtensionHealth, 5e3);
   });
   chrome.runtime.onInstalled.addListener(async () => {
     await ensureDebugConfigLoadedOnce();
-    await ensureLongSleepRecoveryAlarm();
+    await ensureRecoveryAlarmsExist();
     void bootstrap("install");
   });
   async function checkExtensionHealth() {

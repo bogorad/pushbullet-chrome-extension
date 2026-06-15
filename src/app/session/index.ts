@@ -35,6 +35,59 @@ export const sessionCache: SessionCache = {
  * Cache older than this will be considered stale
  */
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_RECENT_PUSHES = 200;
+const EPHEMERAL_RETENTION_SECONDS = 24 * 60 * 60;
+
+function isEphemeralPush(push: Push): boolean {
+  return push.type === "sms_changed" || push.type === "mirror";
+}
+
+function getCreatedSeconds(push: Push): number {
+  if (typeof push.created !== "number" || !Number.isFinite(push.created)) {
+    return 0;
+  }
+
+  return push.created > 10_000_000_000
+    ? Math.floor(push.created / 1000)
+    : push.created;
+}
+
+function getEphemeralBody(push: Push): string {
+  if ("body" in push && typeof push.body === "string") {
+    return push.body;
+  }
+
+  if (push.type === "sms_changed") {
+    return push.notifications?.[0]?.body ?? "";
+  }
+
+  return "";
+}
+
+function getDisplayMergeKey(push: Push): string {
+  return push.iden ?? `${push.type}|${getCreatedSeconds(push)}|${getEphemeralBody(push)}`;
+}
+
+export function mergeKeepingEphemerals(fresh: Push[], previous: Push[]): Push[] {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const freshKeys = new Set(fresh.map(getDisplayMergeKey));
+  const keptEphemerals = previous.filter((push) => {
+    if (!isEphemeralPush(push)) {
+      return false;
+    }
+
+    const created = getCreatedSeconds(push);
+    return created <= 0 || nowSeconds - created <= EPHEMERAL_RETENTION_SECONDS;
+  });
+  const merged = [
+    ...fresh,
+    ...keptEphemerals.filter((push) => !freshKeys.has(getDisplayMergeKey(push))),
+  ];
+
+  return merged
+    .sort((left, right) => getCreatedSeconds(right) - getCreatedSeconds(left))
+    .slice(0, MAX_RECENT_PUSHES);
+}
 
 /**
  * Check if cached session data is fresh enough to use
@@ -140,11 +193,14 @@ async function refreshSessionInBackground(apiKey: string): Promise<void> {
     // Update in-memory cache
     sessionCache.userInfo = userInfo;
     sessionCache.devices = devices;
-    sessionCache.recentPushes = displayPushes;
+    sessionCache.recentPushes = mergeKeepingEphemerals(
+      displayPushes,
+      sessionCache.recentPushes,
+    );
     sessionCache.chats = chats;
     sessionCache.lastUpdated = Date.now();
 
-    const popupPushes = await getPopupRecentPushes(displayPushes);
+    const popupPushes = await getPopupRecentPushes(sessionCache.recentPushes);
 
     if (didRefreshUser && didRefreshDevices && didRefreshPushes && didRefreshChats) {
       try {
@@ -480,7 +536,10 @@ export async function initializeSessionCache(
         });
 
         // Store display pushes in session cache for popup consumption
-        sessionCache.recentPushes = displayPushes;
+        sessionCache.recentPushes = mergeKeepingEphemerals(
+          displayPushes,
+          sessionCache.recentPushes,
+        );
 
         try {
           const chats = await fetchChats(apiKeyValue);
@@ -607,7 +666,10 @@ export async function refreshSessionCache(apiKeyParam: string): Promise<void> {
       debugLogger.general('DEBUG', 'Pipeline 2: Refreshing display pushes');
 
       const displayPushes = await fetchDisplayPushes(apiKeyParam, 50);
-      sessionCache.recentPushes = displayPushes;
+      sessionCache.recentPushes = mergeKeepingEphemerals(
+        displayPushes,
+        sessionCache.recentPushes,
+      );
 
       debugLogger.general('INFO', 'Session refresh complete', {
         incrementalCount: incrementalPushes.length,

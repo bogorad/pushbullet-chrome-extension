@@ -9,6 +9,7 @@ const PUSHES_URL = `${API_BASE_URL}/pushes`;
 const DEVICES_URL = `${API_BASE_URL}/devices`;
 const USER_INFO_URL = `${API_BASE_URL}/users/me`;
 const UPLOAD_REQUEST_URL = `${API_BASE_URL}/upload-request`;
+const PERMANENTS_URL = `${API_BASE_URL}/permanents`;
 const MAX_INCREMENTAL_PUSH_PAGES = 11;
 
 type HeadersInit = Record<string, string>;
@@ -31,6 +32,31 @@ export interface SendFilePushRequest {
   device_iden?: string;
   email?: string;
   source_device_iden?: string;
+}
+
+export interface SmsRecipient {
+  name?: string;
+  address?: string;
+  image_url?: string;
+}
+
+export interface SmsMessage {
+  id?: string;
+  type?: 'incoming' | 'outgoing' | string;
+  body?: string;
+  timestamp?: number;
+  image_url?: string;
+  encrypted?: boolean;
+  ciphertext?: string;
+}
+
+export interface SmsThread {
+  id: string;
+  recipients?: SmsRecipient[];
+  latest?: SmsMessage;
+  messages?: SmsMessage[];
+  encrypted?: boolean;
+  ciphertext?: string;
 }
 
 interface SendPushTarget {
@@ -108,6 +134,123 @@ let registrationPromise: Promise<{ deviceIden: string; needsUpdate: boolean }> |
 
 function authHeaders(apiKey: string): HeadersInit {
   return { 'Access-Token': apiKey };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function getPayloadRecord(payload: unknown): Record<string, unknown> | null {
+  const root = asRecord(payload);
+  if (!root) return null;
+  return asRecord(root.data) ?? root;
+}
+
+function normalizeSmsRecipient(value: unknown): SmsRecipient | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const recipient: SmsRecipient = {
+    name: stringValue(record.name),
+    address: stringValue(record.address),
+    image_url: stringValue(record.image_url),
+  };
+
+  return recipient.name || recipient.address || recipient.image_url
+    ? recipient
+    : null;
+}
+
+function normalizeSmsMessage(value: unknown): SmsMessage | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const message: SmsMessage = {
+    id: stringValue(record.id) ?? stringValue(record.iden),
+    type: stringValue(record.type),
+    body: stringValue(record.body),
+    timestamp: numberValue(record.timestamp),
+    image_url: stringValue(record.image_url),
+    encrypted: booleanValue(record.encrypted),
+    ciphertext: stringValue(record.ciphertext),
+  };
+
+  return message.body || message.timestamp || message.ciphertext
+    ? message
+    : null;
+}
+
+function normalizeSmsThread(value: unknown): SmsThread | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const id =
+    stringValue(record.id) ??
+    stringValue(record.iden) ??
+    stringValue(record.thread_id);
+  if (!id) return null;
+
+  const recipients = Array.isArray(record.recipients)
+    ? record.recipients
+      .map(normalizeSmsRecipient)
+      .filter((recipient): recipient is SmsRecipient => recipient !== null)
+    : undefined;
+  const latest =
+    normalizeSmsMessage(record.latest) ??
+    normalizeSmsMessage(record.latest_message);
+  const messages = Array.isArray(record.messages)
+    ? record.messages
+      .map(normalizeSmsMessage)
+      .filter((message): message is SmsMessage => message !== null)
+    : undefined;
+
+  return {
+    id,
+    ...(recipients && recipients.length > 0 ? { recipients } : {}),
+    ...(latest ? { latest } : {}),
+    ...(messages && messages.length > 0 ? { messages } : {}),
+    encrypted: booleanValue(record.encrypted),
+    ciphertext: stringValue(record.ciphertext),
+  };
+}
+
+function extractSmsThreads(payload: unknown): SmsThread[] {
+  const record = getPayloadRecord(payload);
+  const threads = record && Array.isArray(record.threads) ? record.threads : [];
+  return threads
+    .map(normalizeSmsThread)
+    .filter((thread): thread is SmsThread => thread !== null);
+}
+
+function extractSmsMessages(payload: unknown): SmsMessage[] {
+  const record = getPayloadRecord(payload);
+  if (!record) return [];
+
+  const directThread = Array.isArray(record.thread) ? record.thread : undefined;
+  const directMessages = Array.isArray(record.messages) ? record.messages : undefined;
+  const threadRecord = asRecord(record.thread);
+  const nestedMessages = threadRecord && Array.isArray(threadRecord.messages)
+    ? threadRecord.messages
+    : undefined;
+  const source = directThread ?? directMessages ?? nestedMessages ?? [];
+
+  return source
+    .map(normalizeSmsMessage)
+    .filter((message): message is SmsMessage => message !== null);
 }
 
 function parseApiErrorMessage(errorText: string, fallback: string): string {
@@ -458,6 +601,54 @@ export async function fetchDisplayPushes(
     });
     throw error;
   }
+}
+
+export async function fetchSmsThreads(
+  apiKey: string,
+  deviceIden: string,
+): Promise<SmsThread[]> {
+  const url = `${PERMANENTS_URL}/${encodeURIComponent(deviceIden)}_threads`;
+  debugLogger.api('INFO', 'Fetching SMS threads', {
+    hasApiKey: !!apiKey,
+    deviceIden,
+  });
+
+  const response = await fetch(url, { headers: authHeaders(apiKey) });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch SMS threads: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const threads = extractSmsThreads(data);
+  debugLogger.api('INFO', 'SMS threads fetched successfully', {
+    count: threads.length,
+  });
+  return threads;
+}
+
+export async function fetchSmsThread(
+  apiKey: string,
+  deviceIden: string,
+  threadId: string,
+): Promise<SmsMessage[]> {
+  const url = `${PERMANENTS_URL}/${encodeURIComponent(deviceIden)}_thread_${encodeURIComponent(threadId)}`;
+  debugLogger.api('INFO', 'Fetching SMS thread detail', {
+    hasApiKey: !!apiKey,
+    deviceIden,
+    threadId,
+  });
+
+  const response = await fetch(url, { headers: authHeaders(apiKey) });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch SMS thread ${threadId}: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const messages = extractSmsMessages(data);
+  debugLogger.api('INFO', 'SMS thread detail fetched successfully', {
+    count: messages.length,
+  });
+  return messages;
 }
 
 export async function ensureDeviceExists(apiKey: string, deviceIden: string): Promise<boolean> {

@@ -10,6 +10,7 @@ export interface LifecycleCoordinatorDeps {
   getAutoOpenLinks: () => boolean;
   getDeviceNickname: () => string;
   isSocketHealthy: () => boolean;
+  ensureRecoveryAlarms: () => Promise<void>;
 }
 
 export type BootstrapTrigger = 'startup' | 'install' | 'wakeup';
@@ -18,6 +19,7 @@ export function createLifecycleCoordinator(deps: LifecycleCoordinatorDeps) {
   async function reconcileWake(reason: string): Promise<void> {
     await deps.hydrateConfig();
     await deps.stateMachineReady;
+    await deps.ensureRecoveryAlarms();
 
     const apiKey = deps.getApiKey();
     const socketHealthy = deps.isSocketHealthy();
