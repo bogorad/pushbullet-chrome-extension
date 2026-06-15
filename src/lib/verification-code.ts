@@ -8,14 +8,13 @@ const VERIFICATION_WORD_PATTERN =
   /(?:\b(?:verification|security|login|auth(?:entication)?|sms)\s+)?\b(?:code|passcode|otp)\b|\bone[-\s]?time\s+password\b/i;
 const TRAILING_VERIFICATION_CONTEXT_PATTERN =
   /^\s*(?:is|as|=|:)?\s*(?:your|the|a|an)?\s*(?:verification\s+|security\s+|login\s+|auth(?:entication)?\s+|sms\s+)?(?:code|passcode|otp)\b/i;
-const CLAUSE_BREAK_PATTERN = /[.!?\n]/;
+const CLAUSE_BREAK_PATTERN = /[.!?]/;
 
 function currentClauseTail(text: string): string {
   const lastBreak = Math.max(
     text.lastIndexOf('.'),
     text.lastIndexOf('!'),
     text.lastIndexOf('?'),
-    text.lastIndexOf('\n'),
   );
   return text.slice(lastBreak + 1);
 }

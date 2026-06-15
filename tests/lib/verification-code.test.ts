@@ -25,6 +25,16 @@ describe('extractVerificationCode', () => {
     expect(extractVerificationCode('SMS', 'abc-pqr is your code.')).toBe('abc-pqr');
   });
 
+  it('extracts codes on the next line after the code phrase', () => {
+    expect(extractVerificationCode('SMS', 'Your verification code is:\n123456')).toBe(
+      '123456',
+    );
+  });
+
+  it('extracts codes on the previous line before the code phrase', () => {
+    expect(extractVerificationCode('SMS', '123456\nis your OTP')).toBe('123456');
+  });
+
   it('ignores phone numbers after code help text', () => {
     expect(
       extractVerificationCode('SMS', 'Need help with your code? Call 800-555-1212.'),

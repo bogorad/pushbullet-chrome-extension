@@ -3609,13 +3609,12 @@
   var MAX_CONTEXT_CHARS = 48;
   var VERIFICATION_WORD_PATTERN = /(?:\b(?:verification|security|login|auth(?:entication)?|sms)\s+)?\b(?:code|passcode|otp)\b|\bone[-\s]?time\s+password\b/i;
   var TRAILING_VERIFICATION_CONTEXT_PATTERN = /^\s*(?:is|as|=|:)?\s*(?:your|the|a|an)?\s*(?:verification\s+|security\s+|login\s+|auth(?:entication)?\s+|sms\s+)?(?:code|passcode|otp)\b/i;
-  var CLAUSE_BREAK_PATTERN = /[.!?\n]/;
+  var CLAUSE_BREAK_PATTERN = /[.!?]/;
   function currentClauseTail(text) {
     const lastBreak = Math.max(
       text.lastIndexOf("."),
       text.lastIndexOf("!"),
-      text.lastIndexOf("?"),
-      text.lastIndexOf("\n")
+      text.lastIndexOf("?")
     );
     return text.slice(lastBreak + 1);
   }
