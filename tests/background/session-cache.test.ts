@@ -275,6 +275,13 @@ vi.mock('../../src/background/utils', () => ({
   checkPollingMode: vi.fn(),
   performPollingFetch: vi.fn().mockResolvedValue(undefined),
   performWebSocketHealthCheck: vi.fn(),
+  getPushVerificationCode: vi.fn((push: Push) => {
+    const sms = push.type === 'sms_changed' ? push.notifications?.[0] : null;
+    const text = `${sms?.title ?? ''} ${sms?.body ?? ''}`;
+    return text.toLowerCase().includes('code')
+      ? text.match(/\b(\d{6})\b/)?.[1] ?? null
+      : null;
+  }),
   pushLink: vi.fn(),
   pushNote: vi.fn(),
   refreshPushes: vi.fn().mockResolvedValue(undefined),
@@ -339,6 +346,7 @@ function installChromeMock(): void {
       clear: vi.fn(),
       create: vi.fn(),
       onClicked: { addListener: vi.fn() },
+      onButtonClicked: { addListener: vi.fn() },
     },
     idle: {
       setDetectionInterval: vi.fn(),
@@ -526,6 +534,50 @@ describe('background GET_SESSION_DATA session cache', () => {
     mocks.reconcileWake.mockResolvedValue(undefined);
     mocks.webSocketClients.length = 0;
     mocks.serviceWorkerCreate.mockResolvedValue(mocks.stateMachine);
+  });
+
+  it('copies a detected SMS verification code from notification button clicks', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      clipboard: { writeText },
+    });
+
+    await loadBackgroundRegistrations();
+    const background = await import('../../src/background/index');
+    background.addToNotificationStore('sms-notification', {
+      created: 100,
+      iden: 'sms-code',
+      notifications: [
+        {
+          title: 'SMS',
+          body: 'the code it 527176.',
+        },
+      ],
+      type: 'sms_changed',
+    } satisfies Push);
+
+    const buttonHandler = chrome.notifications.onButtonClicked.addListener.mock
+      .calls[0]?.[0];
+    if (!buttonHandler) {
+      throw new Error('Expected notification button handler registration');
+    }
+
+    buttonHandler('sms-notification', 0);
+    await flushBackgroundRefresh();
+
+    expect(writeText).toHaveBeenCalledWith('527176');
+    expect(mocks.createNotificationWithTimeout).toHaveBeenCalledWith(
+      expect.stringMatching(/^pushbullet-code-copied-/),
+      expect.objectContaining({
+        title: 'Code copied',
+        message: 'Code 527176 copied to clipboard',
+      }),
+      undefined,
+      3000,
+    );
+    expect(chrome.notifications.clear).toHaveBeenCalledWith('sms-notification');
+    expect(chrome.windows.create).not.toHaveBeenCalled();
   });
 
   it('responds from populated cache before device and chat refresh completes', async () => {
@@ -1648,6 +1700,66 @@ describe('background GET_SESSION_DATA session cache', () => {
     await pushHandler({
       created: pushTimestampSeconds,
       iden: 'sms-tickle',
+      notifications: [],
+      source_device_iden: 'phone-1',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        created: pushTimestampSeconds,
+        notifications: [
+          expect.objectContaining({
+            title: 'Alice',
+            body: 'same second body',
+            timestamp: pushTimestampSeconds,
+          }),
+        ],
+      }),
+      expect.any(Map),
+    );
+  });
+
+  it('allows same-second SMS when created is coarse and modified is sub-second', async () => {
+    const pushTimestampSeconds = 1_700_000_000;
+
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-mixed-precision',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'same second body', timestamp: 1_700_000_000_700 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockResolvedValue([
+      {
+        id: 'message-same-second',
+        type: 'incoming',
+        body: 'same second body',
+        timestamp: 1_700_000_000_700,
+      },
+    ]);
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: pushTimestampSeconds,
+      iden: 'sms-tickle',
+      modified: 1_700_000_000.2,
       notifications: [],
       source_device_iden: 'phone-1',
       type: 'sms_changed',

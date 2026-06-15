@@ -35,6 +35,10 @@ type SmsChangedPushWithNotification = SmsChangedPush & {
 };
 type FilePushWithMmsFields = FilePush & { title?: string };
 type MirrorPushWithImage = MirrorPush & { image_url?: string };
+interface PushDisplayText {
+  title: string;
+  message: string;
+}
 type HealthCheckWebSocketClient = {
   isConnected: () => boolean;
   isConnectionHealthy: () => boolean;
@@ -125,6 +129,66 @@ function isFilePush(push: Push): push is FilePush {
 
 function hasSmsNotification(push: SmsChangedPush): push is SmsChangedPushWithNotification {
   return Array.isArray(push.notifications) && push.notifications.length > 0;
+}
+
+export function extractVerificationCode(title: string, message: string): string | null {
+  const fullText = `${title} ${message}`;
+  if (!fullText.toLowerCase().includes("code")) {
+    return null;
+  }
+
+  return fullText.match(/\b(\d{6})\b/)?.[1] ?? null;
+}
+
+function getPushDisplayText(push: Push): PushDisplayText {
+  if (push.type === "note") {
+    return {
+      title: push.title || "New Note",
+      message: push.body || "",
+    };
+  }
+
+  if (push.type === "link") {
+    return {
+      title: push.title || push.url || "New Link",
+      message: push.url || "",
+    };
+  }
+
+  if (isFilePush(push)) {
+    const filePush = push as FilePushWithMmsFields;
+    return {
+      title: filePush.title || `New File: ${filePush.file_name || "unknown file"}`,
+      message: filePush.body || filePush.file_type || "",
+    };
+  }
+
+  if (isMirrorPush(push)) {
+    return {
+      title: push.application_name && push.title
+        ? `${push.application_name}: ${push.title}`
+        : push.title || push.application_name || "Notification",
+      message: push.body || "",
+    };
+  }
+
+  if (isSmsChangedPush(push) && hasSmsNotification(push)) {
+    const sms = push.notifications[0];
+    return {
+      title: sms.title || "New SMS",
+      message: sms.body || "",
+    };
+  }
+
+  return {
+    title: "Pushbullet",
+    message: `New ${push.type}`,
+  };
+}
+
+export function getPushVerificationCode(push: Push): string | null {
+  const { title, message } = getPushDisplayText(push);
+  return extractVerificationCode(title, message);
 }
 
 function getBase64DecodedLength(base64: string): number {
@@ -729,6 +793,16 @@ export async function showPushNotification(
     // Add optional properties if they exist
     if (notificationOptions.imageUrl) {
       finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
+    }
+
+    const verificationCode = extractVerificationCode(
+      finalNotificationOptions.title,
+      finalNotificationOptions.message,
+    );
+    if (verificationCode) {
+      finalNotificationOptions.buttons = [
+        { title: `Copy Code: ${verificationCode}` },
+      ];
     }
 
     await createNotificationWithTimeout(

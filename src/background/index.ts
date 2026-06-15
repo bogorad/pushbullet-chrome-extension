@@ -72,6 +72,7 @@ import {
   updatePopupConnectionState,
   pushLink,
   pushNote,
+  getPushVerificationCode,
 } from "./utils";
 import { autoOpenOfflineLinks } from "./links";
 import { orchestrateInitialization } from "./startup";
@@ -329,6 +330,10 @@ interface SmsChangedOrderTimestamp {
   timestamp: number;
   hasSubSecondPrecision: boolean;
 }
+interface SmsChangedTimestampInfo {
+  seconds: number;
+  orderTimestamp: SmsChangedOrderTimestamp;
+}
 
 function isSmsChangedPush(push: Push): push is SmsChangedPush {
   return push.type === "sms_changed";
@@ -349,7 +354,7 @@ function getTimestampSeconds(value: number | undefined): number | undefined {
     return undefined;
   }
 
-  return value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+  return value > 10_000_000_000 ? Math.floor(value / 1000) : Math.floor(value);
 }
 
 function getTimestampOrderValue(value: number | undefined): number | undefined {
@@ -413,32 +418,48 @@ function getLatestCorrelatedSmsMessage(
     )[0] ?? null;
 }
 
-function getSmsChangedTimestamp(push: SmsChangedPush): number | null {
-  const created = getTimestampSeconds(push.created) ?? 0;
-  const modified = getTimestampSeconds(push.modified) ?? 0;
-  const timestamp = Math.max(created, modified);
-  return timestamp > 0 ? timestamp : null;
-}
-
-function getSmsChangedOrderTimestamp(
+function getSmsChangedTimestamp(
   push: SmsChangedPush,
-): SmsChangedOrderTimestamp | null {
+): SmsChangedTimestampInfo | null {
   const timestamps = [push.created, push.modified]
     .map((value) => {
-      const timestamp = getTimestampOrderValue(value);
-      if (!timestamp) {
+      const seconds = getTimestampSeconds(value);
+      const orderTimestamp = getTimestampOrderValue(value);
+      if (!seconds || !orderTimestamp) {
         return null;
       }
 
       return {
-        timestamp,
+        seconds,
+        orderTimestamp,
         hasSubSecondPrecision: hasSubSecondPrecision(value),
       };
     })
-    .filter((value): value is SmsChangedOrderTimestamp => value !== null)
-    .sort((left, right) => right.timestamp - left.timestamp);
+    .filter((value): value is {
+      seconds: number;
+      orderTimestamp: number;
+      hasSubSecondPrecision: boolean;
+    } => value !== null);
 
-  return timestamps[0] ?? null;
+  if (timestamps.length === 0) {
+    return null;
+  }
+
+  const winningSeconds = Math.max(...timestamps.map((value) => value.seconds));
+  const winners = timestamps
+    .filter((value) => value.seconds === winningSeconds)
+    .sort((left, right) => right.orderTimestamp - left.orderTimestamp);
+  const winner = winners[0]!;
+
+  return {
+    seconds: winningSeconds,
+    orderTimestamp: {
+      timestamp: winner.orderTimestamp,
+      hasSubSecondPrecision:
+        winner.hasSubSecondPrecision &&
+        winners.every((value) => value.hasSubSecondPrecision),
+    },
+  };
 }
 
 function isSmsHistoryTimestampCorrelated(
@@ -566,12 +587,13 @@ async function resolveSmsChangedFromHistory(
 ): Promise<SmsChangedPush | null> {
   const apiKey = getApiKey();
   const smsDevice = getSmsHistoryDevice(push);
-  const pushTimestamp = getSmsChangedTimestamp(push);
-  const pushOrderTimestamp = getSmsChangedOrderTimestamp(push);
+  const pushTimestampInfo = getSmsChangedTimestamp(push);
 
-  if (!apiKey || !smsDevice || !pushTimestamp || !pushOrderTimestamp) {
+  if (!apiKey || !smsDevice || !pushTimestampInfo) {
     return null;
   }
+  const pushTimestamp = pushTimestampInfo.seconds;
+  const pushOrderTimestamp = pushTimestampInfo.orderTimestamp;
 
   try {
     const threads = await fetchSmsThreads(apiKey, smsDevice.iden);
@@ -2092,33 +2114,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// Notification clicked handler
-chrome.notifications.onClicked.addListener((notificationId: string) => {
-  debugLogger.notifications("INFO", "Notification clicked", {
-    notificationId,
-  });
-
-  if (notificationId === E2E_PASSWORD_NOTIFICATION_ID) {
-    chrome.runtime.openOptionsPage();
-    chrome.notifications.clear(notificationId);
-    return;
-  }
-
-  // Get the push data from the notification store
-  const push = notificationDataStore.get(notificationId);
-
-  if (!push) {
-    debugLogger.notifications(
-      "WARN",
-      "No push data found for clicked notification",
-      {
-        notificationId,
-      },
-    );
-    return;
-  }
-
-  // Open notification detail page in a popup window
+function openNotificationDetailWindow(notificationId: string): void {
   const detailUrl = chrome.runtime.getURL(
     `notification-detail.html?id=${encodeURIComponent(notificationId)}`,
   );
@@ -2156,7 +2152,101 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 
   // Clear the notification after opening
   chrome.notifications.clear(notificationId);
+}
+
+async function writeTextToClipboard(text: string): Promise<boolean> {
+  try {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (!clipboard?.writeText) {
+      return false;
+    }
+
+    await clipboard.writeText(text);
+    return true;
+  } catch (error) {
+    debugLogger.notifications(
+      "WARN",
+      "Failed to copy notification code directly",
+      { error: (error as Error).message },
+    );
+    return false;
+  }
+}
+
+// Notification clicked handler
+chrome.notifications.onClicked.addListener((notificationId: string) => {
+  debugLogger.notifications("INFO", "Notification clicked", {
+    notificationId,
+  });
+
+  if (notificationId === E2E_PASSWORD_NOTIFICATION_ID) {
+    chrome.runtime.openOptionsPage();
+    chrome.notifications.clear(notificationId);
+    return;
+  }
+
+  // Get the push data from the notification store
+  const push = notificationDataStore.get(notificationId);
+
+  if (!push) {
+    debugLogger.notifications(
+      "WARN",
+      "No push data found for clicked notification",
+      {
+        notificationId,
+      },
+    );
+    return;
+  }
+
+  openNotificationDetailWindow(notificationId);
 });
+
+chrome.notifications.onButtonClicked.addListener(
+  (notificationId: string, buttonIndex: number) => {
+    debugLogger.notifications("INFO", "Notification button clicked", {
+      notificationId,
+      buttonIndex,
+    });
+
+    if (buttonIndex !== 0) {
+      return;
+    }
+
+    const push = notificationDataStore.get(notificationId);
+    const code = push ? getPushVerificationCode(push) : null;
+    if (!code) {
+      debugLogger.notifications(
+        "WARN",
+        "No verification code found for notification button",
+        { notificationId },
+      );
+      openNotificationDetailWindow(notificationId);
+      return;
+    }
+
+    void (async () => {
+      const copied = await writeTextToClipboard(code);
+      if (!copied) {
+        openNotificationDetailWindow(notificationId);
+        return;
+      }
+
+      await createNotificationWithTimeout(
+        `pushbullet-code-copied-${Date.now()}`,
+        {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+          title: "Code copied",
+          message: `Code ${code} copied to clipboard`,
+        },
+        undefined,
+        3000,
+      );
+      chrome.notifications.clear(notificationId);
+    })();
+  },
+);
 
 debugLogger.general("INFO", "Background service worker initialized", {
   timestamp: new Date().toISOString(),

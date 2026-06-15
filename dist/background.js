@@ -767,6 +767,12 @@
     if (options.imageUrl) {
       safeOptions.imageUrl = options.imageUrl;
     }
+    if (options.buttons?.length) {
+      safeOptions.buttons = options.buttons.slice(0, 2).map((button) => ({
+        title: button.title,
+        ...button.iconUrl ? { iconUrl: button.iconUrl } : {}
+      }));
+    }
     debugLogger.notifications(
       "DEBUG",
       "Creating notification with safe options",
@@ -3826,6 +3832,55 @@
   function hasSmsNotification(push) {
     return Array.isArray(push.notifications) && push.notifications.length > 0;
   }
+  function extractVerificationCode(title, message) {
+    const fullText = `${title} ${message}`;
+    if (!fullText.toLowerCase().includes("code")) {
+      return null;
+    }
+    return fullText.match(/\b(\d{6})\b/)?.[1] ?? null;
+  }
+  function getPushDisplayText(push) {
+    if (push.type === "note") {
+      return {
+        title: push.title || "New Note",
+        message: push.body || ""
+      };
+    }
+    if (push.type === "link") {
+      return {
+        title: push.title || push.url || "New Link",
+        message: push.url || ""
+      };
+    }
+    if (isFilePush(push)) {
+      const filePush = push;
+      return {
+        title: filePush.title || `New File: ${filePush.file_name || "unknown file"}`,
+        message: filePush.body || filePush.file_type || ""
+      };
+    }
+    if (isMirrorPush(push)) {
+      return {
+        title: push.application_name && push.title ? `${push.application_name}: ${push.title}` : push.title || push.application_name || "Notification",
+        message: push.body || ""
+      };
+    }
+    if (isSmsChangedPush(push) && hasSmsNotification(push)) {
+      const sms = push.notifications[0];
+      return {
+        title: sms.title || "New SMS",
+        message: sms.body || ""
+      };
+    }
+    return {
+      title: "Pushbullet",
+      message: `New ${push.type}`
+    };
+  }
+  function getPushVerificationCode(push) {
+    const { title, message } = getPushDisplayText(push);
+    return extractVerificationCode(title, message);
+  }
   function getBase64DecodedLength(base64) {
     const paddingLength = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
     return Math.floor(base64.length * 3 / 4) - paddingLength;
@@ -4266,6 +4321,15 @@
       };
       if (notificationOptions.imageUrl) {
         finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
+      }
+      const verificationCode = extractVerificationCode(
+        finalNotificationOptions.title,
+        finalNotificationOptions.message
+      );
+      if (verificationCode) {
+        finalNotificationOptions.buttons = [
+          { title: `Copy Code: ${verificationCode}` }
+        ];
       }
       await createNotificationWithTimeout(
         notificationId,
@@ -5252,7 +5316,7 @@
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
       return void 0;
     }
-    return value > 1e10 ? Math.floor(value / 1e3) : value;
+    return value > 1e10 ? Math.floor(value / 1e3) : Math.floor(value);
   }
   function getTimestampOrderValue(value) {
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -5296,23 +5360,31 @@
     )[0] ?? null;
   }
   function getSmsChangedTimestamp(push) {
-    const created = getTimestampSeconds(push.created) ?? 0;
-    const modified = getTimestampSeconds(push.modified) ?? 0;
-    const timestamp = Math.max(created, modified);
-    return timestamp > 0 ? timestamp : null;
-  }
-  function getSmsChangedOrderTimestamp(push) {
     const timestamps = [push.created, push.modified].map((value) => {
-      const timestamp = getTimestampOrderValue(value);
-      if (!timestamp) {
+      const seconds = getTimestampSeconds(value);
+      const orderTimestamp = getTimestampOrderValue(value);
+      if (!seconds || !orderTimestamp) {
         return null;
       }
       return {
-        timestamp,
+        seconds,
+        orderTimestamp,
         hasSubSecondPrecision: hasSubSecondPrecision(value)
       };
-    }).filter((value) => value !== null).sort((left, right) => right.timestamp - left.timestamp);
-    return timestamps[0] ?? null;
+    }).filter((value) => value !== null);
+    if (timestamps.length === 0) {
+      return null;
+    }
+    const winningSeconds = Math.max(...timestamps.map((value) => value.seconds));
+    const winners = timestamps.filter((value) => value.seconds === winningSeconds).sort((left, right) => right.orderTimestamp - left.orderTimestamp);
+    const winner = winners[0];
+    return {
+      seconds: winningSeconds,
+      orderTimestamp: {
+        timestamp: winner.orderTimestamp,
+        hasSubSecondPrecision: winner.hasSubSecondPrecision && winners.every((value) => value.hasSubSecondPrecision)
+      }
+    };
   }
   function isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp) {
     if (!messageTimestamp) {
@@ -5399,11 +5471,12 @@
   async function resolveSmsChangedFromHistory(push) {
     const apiKey2 = getApiKey();
     const smsDevice = getSmsHistoryDevice(push);
-    const pushTimestamp = getSmsChangedTimestamp(push);
-    const pushOrderTimestamp = getSmsChangedOrderTimestamp(push);
-    if (!apiKey2 || !smsDevice || !pushTimestamp || !pushOrderTimestamp) {
+    const pushTimestampInfo = getSmsChangedTimestamp(push);
+    if (!apiKey2 || !smsDevice || !pushTimestampInfo) {
       return null;
     }
+    const pushTimestamp = pushTimestampInfo.seconds;
+    const pushOrderTimestamp = pushTimestampInfo.orderTimestamp;
     try {
       const threads = await fetchSmsThreads(apiKey2, smsDevice.iden);
       const correlatedThreads = getCorrelatedSmsThreads(threads, pushTimestamp);
@@ -6570,26 +6643,7 @@
     }
     return false;
   });
-  chrome.notifications.onClicked.addListener((notificationId) => {
-    debugLogger.notifications("INFO", "Notification clicked", {
-      notificationId
-    });
-    if (notificationId === E2E_PASSWORD_NOTIFICATION_ID) {
-      chrome.runtime.openOptionsPage();
-      chrome.notifications.clear(notificationId);
-      return;
-    }
-    const push = notificationDataStore.get(notificationId);
-    if (!push) {
-      debugLogger.notifications(
-        "WARN",
-        "No push data found for clicked notification",
-        {
-          notificationId
-        }
-      );
-      return;
-    }
+  function openNotificationDetailWindow(notificationId) {
     const detailUrl = chrome.runtime.getURL(
       `notification-detail.html?id=${encodeURIComponent(notificationId)}`
     );
@@ -6624,7 +6678,87 @@
       }
     );
     chrome.notifications.clear(notificationId);
+  }
+  async function writeTextToClipboard(text) {
+    try {
+      const clipboard = globalThis.navigator?.clipboard;
+      if (!clipboard?.writeText) {
+        return false;
+      }
+      await clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      debugLogger.notifications(
+        "WARN",
+        "Failed to copy notification code directly",
+        { error: error.message }
+      );
+      return false;
+    }
+  }
+  chrome.notifications.onClicked.addListener((notificationId) => {
+    debugLogger.notifications("INFO", "Notification clicked", {
+      notificationId
+    });
+    if (notificationId === E2E_PASSWORD_NOTIFICATION_ID) {
+      chrome.runtime.openOptionsPage();
+      chrome.notifications.clear(notificationId);
+      return;
+    }
+    const push = notificationDataStore.get(notificationId);
+    if (!push) {
+      debugLogger.notifications(
+        "WARN",
+        "No push data found for clicked notification",
+        {
+          notificationId
+        }
+      );
+      return;
+    }
+    openNotificationDetailWindow(notificationId);
   });
+  chrome.notifications.onButtonClicked.addListener(
+    (notificationId, buttonIndex) => {
+      debugLogger.notifications("INFO", "Notification button clicked", {
+        notificationId,
+        buttonIndex
+      });
+      if (buttonIndex !== 0) {
+        return;
+      }
+      const push = notificationDataStore.get(notificationId);
+      const code = push ? getPushVerificationCode(push) : null;
+      if (!code) {
+        debugLogger.notifications(
+          "WARN",
+          "No verification code found for notification button",
+          { notificationId }
+        );
+        openNotificationDetailWindow(notificationId);
+        return;
+      }
+      void (async () => {
+        const copied = await writeTextToClipboard(code);
+        if (!copied) {
+          openNotificationDetailWindow(notificationId);
+          return;
+        }
+        await createNotificationWithTimeout(
+          `pushbullet-code-copied-${Date.now()}`,
+          {
+            type: "basic",
+            iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+            title: "Code copied",
+            message: `Code ${code} copied to clipboard`
+          },
+          void 0,
+          3e3
+        );
+        chrome.notifications.clear(notificationId);
+      })();
+    }
+  );
   debugLogger.general("INFO", "Background service worker initialized", {
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });

@@ -443,6 +443,30 @@ describe('showPushNotification - Notification Creation', () => {
     expect(notificationOptions.iconUrl).toBeDefined();
   });
 
+  it('should add a copy-code button for SMS verification codes', async () => {
+    const push = {
+      type: 'sms_changed',
+      notifications: [
+        {
+          title: 'SMS',
+          body: 'the code it 527176.',
+        },
+      ],
+    };
+
+    await showPushNotification(push);
+
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
+
+    expect(notificationOptions.type).toBe('basic');
+    expect(notificationOptions.title).toBe('SMS');
+    expect(notificationOptions.message).toBe('the code it 527176.');
+    expect(notificationOptions.buttons).toEqual([
+      { title: 'Copy Code: 527176' },
+    ]);
+  });
+
   it('should handle MMS-style file push with title', async () => {
     // Arrange
     const push = { 

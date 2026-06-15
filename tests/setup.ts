@@ -87,7 +87,13 @@ const createChromeMock = () => {
     },
     notifications: {
       create: vi.fn(),
-      clear: vi.fn()
+      clear: vi.fn(),
+      onClicked: {
+        addListener: vi.fn()
+      },
+      onButtonClicked: {
+        addListener: vi.fn()
+      }
     },
     idle: {
       setDetectionInterval: vi.fn(),

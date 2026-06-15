@@ -29,6 +29,12 @@ export function createNotificationWithTimeout(
   if (options.imageUrl) {
     safeOptions.imageUrl = options.imageUrl;
   }
+  if (options.buttons?.length) {
+    safeOptions.buttons = options.buttons.slice(0, 2).map((button) => ({
+      title: button.title,
+      ...(button.iconUrl ? { iconUrl: button.iconUrl } : {}),
+    }));
+  }
 
   // Log what we're creating
   debugLogger.notifications(
