@@ -5374,6 +5374,7 @@
       if (correlatedThreads.length === 0) {
         return null;
       }
+      let bestCandidate = null;
       for (const thread of correlatedThreads) {
         const messages = await fetchSmsThread(apiKey2, smsDevice.iden, thread.id);
         const latestMessage = getLatestCorrelatedSmsMessage(
@@ -5385,26 +5386,37 @@
           continue;
         }
         const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+        const body = decryptedMessage?.body;
         const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
-        if (!decryptedMessage?.body || !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)) {
+        if (!body || !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)) {
           continue;
         }
         const timestamp = messageTimestamp ?? pushTimestamp;
-        return {
-          ...push,
-          created: timestamp,
-          modified: timestamp,
-          notifications: [
-            {
-              title: getSmsTitle(thread),
-              body: decryptedMessage.body,
-              timestamp,
-              image_url: getSmsImageUrl(thread, decryptedMessage)
-            }
-          ]
-        };
+        if (!bestCandidate || timestamp > bestCandidate.timestamp) {
+          bestCandidate = {
+            thread,
+            message: decryptedMessage,
+            body,
+            timestamp
+          };
+        }
       }
-      return null;
+      if (!bestCandidate) {
+        return null;
+      }
+      return {
+        ...push,
+        created: bestCandidate.timestamp,
+        modified: bestCandidate.timestamp,
+        notifications: [
+          {
+            title: getSmsTitle(bestCandidate.thread),
+            body: bestCandidate.body,
+            timestamp: bestCandidate.timestamp,
+            image_url: getSmsImageUrl(bestCandidate.thread, bestCandidate.message)
+          }
+        ]
+      };
     } catch (error) {
       recordSmsHistoryFetchFailed();
       debugLogger.general(

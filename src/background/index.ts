@@ -318,6 +318,12 @@ type SmsNotification = NonNullable<SmsChangedPush["notifications"]>[number];
 type SmsChangedPushWithNotification = SmsChangedPush & {
   notifications: [SmsNotification, ...SmsNotification[]];
 };
+interface SmsHistoryCandidate {
+  thread: SmsThread;
+  message: SmsMessage;
+  body: string;
+  timestamp: number;
+}
 
 function isSmsChangedPush(push: Push): push is SmsChangedPush {
   return push.type === "sms_changed";
@@ -512,6 +518,8 @@ async function resolveSmsChangedFromHistory(
       return null;
     }
 
+    let bestCandidate: SmsHistoryCandidate | null = null;
+
     for (const thread of correlatedThreads) {
       const messages = await fetchSmsThread(apiKey, smsDevice.iden, thread.id);
       const latestMessage = getLatestCorrelatedSmsMessage(
@@ -524,9 +532,10 @@ async function resolveSmsChangedFromHistory(
       }
 
       const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+      const body = decryptedMessage?.body;
       const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
       if (
-        !decryptedMessage?.body ||
+        !body ||
         !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)
       ) {
         continue;
@@ -534,22 +543,33 @@ async function resolveSmsChangedFromHistory(
 
       const timestamp = messageTimestamp ?? pushTimestamp;
 
-      return {
-        ...push,
-        created: timestamp,
-        modified: timestamp,
-        notifications: [
-          {
-            title: getSmsTitle(thread),
-            body: decryptedMessage.body,
-            timestamp,
-            image_url: getSmsImageUrl(thread, decryptedMessage),
-          },
-        ],
-      };
+      if (!bestCandidate || timestamp > bestCandidate.timestamp) {
+        bestCandidate = {
+          thread,
+          message: decryptedMessage,
+          body,
+          timestamp,
+        };
+      }
     }
 
-    return null;
+    if (!bestCandidate) {
+      return null;
+    }
+
+    return {
+      ...push,
+      created: bestCandidate.timestamp,
+      modified: bestCandidate.timestamp,
+      notifications: [
+        {
+          title: getSmsTitle(bestCandidate.thread),
+          body: bestCandidate.body,
+          timestamp: bestCandidate.timestamp,
+          image_url: getSmsImageUrl(bestCandidate.thread, bestCandidate.message),
+        },
+      ],
+    };
   } catch (error) {
     recordSmsHistoryFetchFailed();
     debugLogger.general(

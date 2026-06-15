@@ -1228,4 +1228,97 @@ describe('background GET_SESSION_DATA session cache', () => {
       expect.any(Map),
     );
   });
+
+  it('chooses the newest correlated SMS across competing active threads', async () => {
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-unrelated',
+        recipients: [{ name: 'Mallory' }],
+        latest: { body: 'newer unrelated body', timestamp: 105 },
+      },
+      {
+        id: 'thread-real',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'correct body', timestamp: 100 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockImplementation(
+      async (_apiKey: string, _deviceIden: string, threadId: string) => {
+        if (threadId === 'thread-unrelated') {
+          return [
+            {
+              id: 'message-newer-unrelated',
+              type: 'incoming',
+              body: 'newer unrelated body',
+              timestamp: 105,
+            },
+            {
+              id: 'message-older-unrelated',
+              type: 'incoming',
+              body: 'older unrelated body',
+              timestamp: 99,
+            },
+          ];
+        }
+
+        return [
+          {
+            id: 'message-correct',
+            type: 'incoming',
+            body: 'correct body',
+            timestamp: 100,
+          },
+        ];
+      },
+    );
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: 100,
+      iden: 'sms-tickle',
+      notifications: [],
+      source_device_iden: 'phone-1',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.fetchSmsThread).toHaveBeenCalledWith(
+      'test-api-key',
+      'phone-1',
+      'thread-unrelated',
+    );
+    expect(mocks.fetchSmsThread).toHaveBeenCalledWith(
+      'test-api-key',
+      'phone-1',
+      'thread-real',
+    );
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        created: 100,
+        notifications: [
+          expect.objectContaining({
+            title: 'Alice',
+            body: 'correct body',
+            timestamp: 100,
+          }),
+        ],
+      }),
+      expect.any(Map),
+    );
+  });
 });
