@@ -962,7 +962,7 @@ describe('background GET_SESSION_DATA session cache', () => {
       {
         id: 'thread-1',
         recipients: [{ name: 'Alice' }],
-        latest: { body: 'old body', timestamp: 10 },
+        latest: { body: 'old body', timestamp: 20 },
       },
     ]);
     mocks.fetchSmsThread.mockResolvedValue([
@@ -979,8 +979,10 @@ describe('background GET_SESSION_DATA session cache', () => {
     }
 
     await pushHandler({
+      created: 20,
       iden: 'sms-tickle',
       notifications: [],
+      source_device_iden: 'phone-1',
       type: 'sms_changed',
     } satisfies Push);
 
@@ -1007,6 +1009,103 @@ describe('background GET_SESSION_DATA session cache', () => {
           }),
         ]),
       }),
+    );
+  });
+
+  it('ignores stale empty sms_changed pushes instead of replaying old SMS history', async () => {
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-1',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'old body', timestamp: 10 },
+      },
+    ]);
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: 1_000,
+      iden: 'sms-delete-or-read-tickle',
+      notifications: [],
+      source_device_iden: 'phone-1',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.fetchSmsThreads).toHaveBeenCalledWith('test-api-key', 'phone-1');
+    expect(mocks.fetchSmsThread).not.toHaveBeenCalled();
+    expect(mocks.showPushNotification).not.toHaveBeenCalled();
+  });
+
+  it('uses the source SMS device when multiple SMS-capable devices exist', async () => {
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Old Phone',
+      } satisfies Device,
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-2',
+        nickname: 'New Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-2',
+        recipients: [{ name: 'Bob' }],
+        latest: { body: 'fresh body', timestamp: 50 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockResolvedValue([
+      { id: 'message-2', type: 'incoming', body: 'fresh body', timestamp: 50 },
+    ]);
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: 50,
+      iden: 'sms-tickle',
+      notifications: [],
+      source_device_iden: 'phone-2',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.fetchSmsThreads).toHaveBeenCalledWith('test-api-key', 'phone-2');
+    expect(mocks.fetchSmsThread).toHaveBeenCalledWith('test-api-key', 'phone-2', 'thread-2');
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notifications: [
+          expect.objectContaining({
+            title: 'Bob',
+            body: 'fresh body',
+          }),
+        ],
+      }),
+      expect.any(Map),
     );
   });
 });

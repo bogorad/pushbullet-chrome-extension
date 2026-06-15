@@ -3,6 +3,7 @@
 ## General
 
 Use beads instead of native task management.
+Use `record-activity` after material changes; write concise notes in the repo-root `activity/` directory.
 On any change, bump the patch version (`zz` in `xx.yy.zz`) in all relevant version files: `package.json`, `manifest.json`, and `options.html`.
 
 ## Build Commands

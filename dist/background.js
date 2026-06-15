@@ -5226,6 +5226,7 @@
   var notificationDataStore = /* @__PURE__ */ new Map();
   var MAX_NOTIFICATION_STORE_SIZE = 100;
   var MAX_RECENT_PUSHES2 = 200;
+  var SMS_HISTORY_CORRELATION_WINDOW_SECONDS = 5 * 60;
   function addToNotificationStore(id, push) {
     if (notificationDataStore.size >= MAX_NOTIFICATION_STORE_SIZE) {
       const firstKey = notificationDataStore.keys().next().value;
@@ -5265,11 +5266,6 @@
       )
     );
   }
-  function getLatestSmsThread(threads) {
-    return [...threads].sort(
-      (left, right) => getSmsThreadTimestamp(right) - getSmsThreadTimestamp(left)
-    )[0] ?? null;
-  }
   function getLatestSmsMessage(thread, messages) {
     const candidates = [...messages, ...thread.messages ?? []];
     if (thread.latest) {
@@ -5278,6 +5274,47 @@
     return candidates.filter((message) => !!message.body || !!message.ciphertext).sort(
       (left, right) => (getTimestampSeconds(right.timestamp) ?? 0) - (getTimestampSeconds(left.timestamp) ?? 0)
     )[0] ?? null;
+  }
+  function getSmsChangedTimestamp(push) {
+    const created = getTimestampSeconds(push.created) ?? 0;
+    const modified = getTimestampSeconds(push.modified) ?? 0;
+    const timestamp = Math.max(created, modified);
+    return timestamp > 0 ? timestamp : null;
+  }
+  function isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp) {
+    if (!messageTimestamp) {
+      return false;
+    }
+    return Math.abs(messageTimestamp - pushTimestamp) <= SMS_HISTORY_CORRELATION_WINDOW_SECONDS;
+  }
+  function getSmsHistoryDevice(push) {
+    const smsDevices = sessionCache.devices.filter(
+      (device) => device.has_sms && !!device.iden
+    );
+    if (smsDevices.length === 0) {
+      return null;
+    }
+    const correlatedDeviceIdens = [
+      push.source_device_iden,
+      push.target_device_iden
+    ].filter((iden) => !!iden);
+    for (const iden of correlatedDeviceIdens) {
+      const device = smsDevices.find((candidate) => candidate.iden === iden);
+      if (device) {
+        return device;
+      }
+    }
+    return smsDevices.length === 1 ? smsDevices[0] : null;
+  }
+  function getCorrelatedSmsThreads(threads, pushTimestamp) {
+    return threads.filter(
+      (thread) => isSmsHistoryTimestampCorrelated(
+        getSmsThreadTimestamp(thread),
+        pushTimestamp
+      )
+    ).sort(
+      (left, right) => getSmsThreadTimestamp(right) - getSmsThreadTimestamp(left)
+    );
   }
   function getSmsTitle(thread) {
     const names = (thread.recipients ?? []).map((recipient) => recipient.name || recipient.address).filter((value) => !!value);
@@ -5324,39 +5361,44 @@
   }
   async function resolveSmsChangedFromHistory(push) {
     const apiKey2 = getApiKey();
-    const smsDevice = sessionCache.devices.find((device) => device.has_sms && device.iden);
-    if (!apiKey2 || !smsDevice) {
+    const smsDevice = getSmsHistoryDevice(push);
+    const pushTimestamp = getSmsChangedTimestamp(push);
+    if (!apiKey2 || !smsDevice || !pushTimestamp) {
       return null;
     }
     try {
       const threads = await fetchSmsThreads(apiKey2, smsDevice.iden);
-      const latestThread = getLatestSmsThread(threads);
-      if (!latestThread) {
+      const correlatedThreads = getCorrelatedSmsThreads(threads, pushTimestamp);
+      if (correlatedThreads.length === 0) {
         return null;
       }
-      const messages = await fetchSmsThread(apiKey2, smsDevice.iden, latestThread.id);
-      const latestMessage = getLatestSmsMessage(latestThread, messages);
-      if (!latestMessage) {
-        return null;
+      for (const thread of correlatedThreads) {
+        const messages = await fetchSmsThread(apiKey2, smsDevice.iden, thread.id);
+        const latestMessage = getLatestSmsMessage(thread, messages);
+        if (!latestMessage) {
+          continue;
+        }
+        const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+        const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
+        if (!decryptedMessage?.body || !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)) {
+          continue;
+        }
+        const timestamp = messageTimestamp ?? pushTimestamp;
+        return {
+          ...push,
+          created: timestamp,
+          modified: timestamp,
+          notifications: [
+            {
+              title: getSmsTitle(thread),
+              body: decryptedMessage.body,
+              timestamp,
+              image_url: getSmsImageUrl(thread, decryptedMessage)
+            }
+          ]
+        };
       }
-      const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
-      if (!decryptedMessage?.body) {
-        return null;
-      }
-      const timestamp = getTimestampSeconds(decryptedMessage.timestamp) ?? getTimestampSeconds(push.created) ?? Math.floor(Date.now() / 1e3);
-      return {
-        ...push,
-        created: timestamp,
-        modified: timestamp,
-        notifications: [
-          {
-            title: getSmsTitle(latestThread),
-            body: decryptedMessage.body,
-            timestamp,
-            image_url: getSmsImageUrl(latestThread, decryptedMessage)
-          }
-        ]
-      };
+      return null;
     } catch (error) {
       recordSmsHistoryFetchFailed();
       debugLogger.general(
