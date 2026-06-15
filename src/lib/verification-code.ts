@@ -7,7 +7,7 @@ const MAX_CONTEXT_CHARS = 48;
 const VERIFICATION_WORD_SOURCE =
   '(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp)\\b|\\bone[-\\s]?time\\s+password\\b)';
 const DIRECT_LEADING_CONTEXT_PATTERN = new RegExp(
-  `${VERIFICATION_WORD_SOURCE}(?:\\s*(?:is|it|as|=|:)\\s*){0,2}$`,
+  `${VERIFICATION_WORD_SOURCE}(?:\\s*(?:is|it|as|=|:)?\\s*){0,2}$`,
   'i',
 );
 const DIRECT_TRAILING_CONTEXT_PATTERN = new RegExp(

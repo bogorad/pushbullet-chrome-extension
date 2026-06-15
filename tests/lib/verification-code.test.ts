@@ -31,6 +31,12 @@ describe('extractVerificationCode', () => {
     );
   });
 
+  it('extracts codes on the next line directly after the code phrase', () => {
+    expect(extractVerificationCode('SMS', 'Your verification code\n123456')).toBe(
+      '123456',
+    );
+  });
+
   it('extracts codes on the previous line before the code phrase', () => {
     expect(extractVerificationCode('SMS', '123456\nis your OTP')).toBe('123456');
   });
