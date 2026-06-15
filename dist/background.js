@@ -5227,7 +5227,6 @@
   var MAX_NOTIFICATION_STORE_SIZE = 100;
   var MAX_RECENT_PUSHES2 = 200;
   var SMS_HISTORY_CORRELATION_WINDOW_SECONDS = 5 * 60;
-  var SMS_HISTORY_FORWARD_SKEW_SECONDS = 15;
   function addToNotificationStore(id, push) {
     if (notificationDataStore.size >= MAX_NOTIFICATION_STORE_SIZE) {
       const firstKey = notificationDataStore.keys().next().value;
@@ -5286,7 +5285,7 @@
     if (!messageTimestamp) {
       return false;
     }
-    return messageTimestamp >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS && messageTimestamp <= pushTimestamp + SMS_HISTORY_FORWARD_SKEW_SECONDS;
+    return messageTimestamp >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS && messageTimestamp <= pushTimestamp;
   }
   function getSmsHistoryDevice(push) {
     const smsDevices = sessionCache.devices.filter(

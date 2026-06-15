@@ -292,7 +292,6 @@ const notificationDataStore = new Map<string, Push>();
 const MAX_NOTIFICATION_STORE_SIZE = 100;
 const MAX_RECENT_PUSHES = 200;
 const SMS_HISTORY_CORRELATION_WINDOW_SECONDS = 5 * 60;
-const SMS_HISTORY_FORWARD_SKEW_SECONDS = 15;
 
 /**
  * Add notification to store with size limit
@@ -390,7 +389,7 @@ function isSmsHistoryTimestampCorrelated(
   }
 
   return messageTimestamp >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS &&
-    messageTimestamp <= pushTimestamp + SMS_HISTORY_FORWARD_SKEW_SECONDS;
+    messageTimestamp <= pushTimestamp;
 }
 
 function getSmsHistoryDevice(push: SmsChangedPush): Device | null {

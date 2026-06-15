@@ -1109,7 +1109,7 @@ describe('background GET_SESSION_DATA session cache', () => {
     );
   });
 
-  it('ignores future SMS history updates within the old broad correlation window', async () => {
+  it('ignores SMS history updates a few seconds after the tickle', async () => {
     mocks.sessionCache.devices = [
       {
         active: true,
@@ -1122,7 +1122,7 @@ describe('background GET_SESSION_DATA session cache', () => {
       {
         id: 'thread-newer-unrelated',
         recipients: [{ name: 'Mallory' }],
-        latest: { body: 'newer unrelated body', timestamp: 200 },
+        latest: { body: 'newer unrelated body', timestamp: 105 },
       },
     ]);
 
