@@ -325,6 +325,10 @@ interface SmsHistoryCandidate {
   timestamp: number;
   orderTimestamp: number;
 }
+interface SmsChangedOrderTimestamp {
+  timestamp: number;
+  hasSubSecondPrecision: boolean;
+}
 
 function isSmsChangedPush(push: Push): push is SmsChangedPush {
   return push.type === "sms_changed";
@@ -356,6 +360,18 @@ function getTimestampOrderValue(value: number | undefined): number | undefined {
   return value > 10_000_000_000 ? value / 1000 : value;
 }
 
+function hasSubSecondPrecision(value: number | undefined): boolean {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return false;
+  }
+
+  if (value > 10_000_000_000) {
+    return value % 1000 !== 0;
+  }
+
+  return !Number.isInteger(value);
+}
+
 function getSmsThreadTimestamp(thread: SmsThread): number {
   const latestTimestamp = getTimestampSeconds(thread.latest?.timestamp);
   if (latestTimestamp) {
@@ -374,7 +390,7 @@ function getLatestCorrelatedSmsMessage(
   thread: SmsThread,
   messages: SmsMessage[],
   pushTimestamp: number,
-  pushOrderTimestamp: number,
+  pushOrderTimestamp: SmsChangedOrderTimestamp,
 ): SmsMessage | null {
   const candidates = [...messages, ...(thread.messages ?? [])];
   if (thread.latest) {
@@ -404,11 +420,25 @@ function getSmsChangedTimestamp(push: SmsChangedPush): number | null {
   return timestamp > 0 ? timestamp : null;
 }
 
-function getSmsChangedOrderTimestamp(push: SmsChangedPush): number | null {
-  const created = getTimestampOrderValue(push.created) ?? 0;
-  const modified = getTimestampOrderValue(push.modified) ?? 0;
-  const timestamp = Math.max(created, modified);
-  return timestamp > 0 ? timestamp : null;
+function getSmsChangedOrderTimestamp(
+  push: SmsChangedPush,
+): SmsChangedOrderTimestamp | null {
+  const timestamps = [push.created, push.modified]
+    .map((value) => {
+      const timestamp = getTimestampOrderValue(value);
+      if (!timestamp) {
+        return null;
+      }
+
+      return {
+        timestamp,
+        hasSubSecondPrecision: hasSubSecondPrecision(value),
+      };
+    })
+    .filter((value): value is SmsChangedOrderTimestamp => value !== null)
+    .sort((left, right) => right.timestamp - left.timestamp);
+
+  return timestamps[0] ?? null;
 }
 
 function isSmsHistoryTimestampCorrelated(
@@ -425,10 +455,15 @@ function isSmsHistoryTimestampCorrelated(
 
 function isSmsHistoryOrderCorrelated(
   messageTimestamp: number | undefined,
-  pushOrderTimestamp: number,
+  pushOrderTimestamp: SmsChangedOrderTimestamp,
 ): boolean {
+  if (!pushOrderTimestamp.hasSubSecondPrecision) {
+    return true;
+  }
+
   const messageOrderTimestamp = getTimestampOrderValue(messageTimestamp);
-  return !!messageOrderTimestamp && messageOrderTimestamp <= pushOrderTimestamp;
+  return !!messageOrderTimestamp &&
+    messageOrderTimestamp <= pushOrderTimestamp.timestamp;
 }
 
 function getSmsHistoryDevice(push: SmsChangedPush): Device | null {

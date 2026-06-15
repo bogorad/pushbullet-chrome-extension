@@ -1608,4 +1608,63 @@ describe('background GET_SESSION_DATA session cache', () => {
       expect.any(Map),
     );
   });
+
+  it('allows same-second millisecond SMS when the tickle has second precision', async () => {
+    const pushTimestampSeconds = 1_700_000_000;
+
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-second-precision',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'same second body', timestamp: 1_700_000_000_700 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockResolvedValue([
+      {
+        id: 'message-same-second',
+        type: 'incoming',
+        body: 'same second body',
+        timestamp: 1_700_000_000_700,
+      },
+    ]);
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: pushTimestampSeconds,
+      iden: 'sms-tickle',
+      notifications: [],
+      source_device_iden: 'phone-1',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        created: pushTimestampSeconds,
+        notifications: [
+          expect.objectContaining({
+            title: 'Alice',
+            body: 'same second body',
+            timestamp: pushTimestampSeconds,
+          }),
+        ],
+      }),
+      expect.any(Map),
+    );
+  });
 });

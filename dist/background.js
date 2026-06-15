@@ -5260,6 +5260,15 @@
     }
     return value > 1e10 ? value / 1e3 : value;
   }
+  function hasSubSecondPrecision(value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return false;
+    }
+    if (value > 1e10) {
+      return value % 1e3 !== 0;
+    }
+    return !Number.isInteger(value);
+  }
   function getSmsThreadTimestamp(thread) {
     const latestTimestamp = getTimestampSeconds(thread.latest?.timestamp);
     if (latestTimestamp) {
@@ -5293,10 +5302,17 @@
     return timestamp > 0 ? timestamp : null;
   }
   function getSmsChangedOrderTimestamp(push) {
-    const created = getTimestampOrderValue(push.created) ?? 0;
-    const modified = getTimestampOrderValue(push.modified) ?? 0;
-    const timestamp = Math.max(created, modified);
-    return timestamp > 0 ? timestamp : null;
+    const timestamps = [push.created, push.modified].map((value) => {
+      const timestamp = getTimestampOrderValue(value);
+      if (!timestamp) {
+        return null;
+      }
+      return {
+        timestamp,
+        hasSubSecondPrecision: hasSubSecondPrecision(value)
+      };
+    }).filter((value) => value !== null).sort((left, right) => right.timestamp - left.timestamp);
+    return timestamps[0] ?? null;
   }
   function isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp) {
     if (!messageTimestamp) {
@@ -5305,8 +5321,11 @@
     return messageTimestamp >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS && messageTimestamp <= pushTimestamp;
   }
   function isSmsHistoryOrderCorrelated(messageTimestamp, pushOrderTimestamp) {
+    if (!pushOrderTimestamp.hasSubSecondPrecision) {
+      return true;
+    }
     const messageOrderTimestamp = getTimestampOrderValue(messageTimestamp);
-    return !!messageOrderTimestamp && messageOrderTimestamp <= pushOrderTimestamp;
+    return !!messageOrderTimestamp && messageOrderTimestamp <= pushOrderTimestamp.timestamp;
   }
   function getSmsHistoryDevice(push) {
     const smsDevices = sessionCache.devices.filter(
