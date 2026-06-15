@@ -323,6 +323,7 @@ interface SmsHistoryCandidate {
   message: SmsMessage;
   body: string;
   timestamp: number;
+  orderTimestamp: number;
 }
 
 function isSmsChangedPush(push: Push): push is SmsChangedPush {
@@ -345,6 +346,14 @@ function getTimestampSeconds(value: number | undefined): number | undefined {
   }
 
   return value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+}
+
+function getTimestampOrderValue(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return value > 10_000_000_000 ? value / 1000 : value;
 }
 
 function getSmsThreadTimestamp(thread: SmsThread): number {
@@ -521,35 +530,54 @@ async function resolveSmsChangedFromHistory(
     let bestCandidate: SmsHistoryCandidate | null = null;
 
     for (const thread of correlatedThreads) {
-      const messages = await fetchSmsThread(apiKey, smsDevice.iden, thread.id);
-      const latestMessage = getLatestCorrelatedSmsMessage(
-        thread,
-        messages,
-        pushTimestamp,
-      );
-      if (!latestMessage) {
-        continue;
-      }
-
-      const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
-      const body = decryptedMessage?.body;
-      const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
-      if (
-        !body ||
-        !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)
-      ) {
-        continue;
-      }
-
-      const timestamp = messageTimestamp ?? pushTimestamp;
-
-      if (!bestCandidate || timestamp > bestCandidate.timestamp) {
-        bestCandidate = {
+      try {
+        const messages = await fetchSmsThread(apiKey, smsDevice.iden, thread.id);
+        const latestMessage = getLatestCorrelatedSmsMessage(
           thread,
-          message: decryptedMessage,
-          body,
-          timestamp,
-        };
+          messages,
+          pushTimestamp,
+        );
+        if (!latestMessage) {
+          continue;
+        }
+
+        const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+        const body = decryptedMessage?.body;
+        const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
+        if (
+          !body ||
+          !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)
+        ) {
+          continue;
+        }
+
+        const timestamp = messageTimestamp ?? pushTimestamp;
+        const orderTimestamp =
+          getTimestampOrderValue(decryptedMessage.timestamp) ?? timestamp;
+
+        if (
+          !bestCandidate ||
+          orderTimestamp > bestCandidate.orderTimestamp
+        ) {
+          bestCandidate = {
+            thread,
+            message: decryptedMessage,
+            body,
+            timestamp,
+            orderTimestamp,
+          };
+        }
+      } catch (error) {
+        recordSmsHistoryFetchFailed();
+        debugLogger.general(
+          "WARN",
+          "Failed to inspect SMS history thread",
+          {
+            pushIden: push.iden,
+            threadId: thread.id,
+            error: (error as Error).message,
+          },
+        );
       }
     }
 

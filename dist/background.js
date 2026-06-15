@@ -5254,6 +5254,12 @@
     }
     return value > 1e10 ? Math.floor(value / 1e3) : value;
   }
+  function getTimestampOrderValue(value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return void 0;
+    }
+    return value > 1e10 ? value / 1e3 : value;
+  }
   function getSmsThreadTimestamp(thread) {
     const latestTimestamp = getTimestampSeconds(thread.latest?.timestamp);
     if (latestTimestamp) {
@@ -5376,29 +5382,44 @@
       }
       let bestCandidate = null;
       for (const thread of correlatedThreads) {
-        const messages = await fetchSmsThread(apiKey2, smsDevice.iden, thread.id);
-        const latestMessage = getLatestCorrelatedSmsMessage(
-          thread,
-          messages,
-          pushTimestamp
-        );
-        if (!latestMessage) {
-          continue;
-        }
-        const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
-        const body = decryptedMessage?.body;
-        const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
-        if (!body || !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)) {
-          continue;
-        }
-        const timestamp = messageTimestamp ?? pushTimestamp;
-        if (!bestCandidate || timestamp > bestCandidate.timestamp) {
-          bestCandidate = {
+        try {
+          const messages = await fetchSmsThread(apiKey2, smsDevice.iden, thread.id);
+          const latestMessage = getLatestCorrelatedSmsMessage(
             thread,
-            message: decryptedMessage,
-            body,
-            timestamp
-          };
+            messages,
+            pushTimestamp
+          );
+          if (!latestMessage) {
+            continue;
+          }
+          const decryptedMessage = await decryptSmsMessageIfNeeded(latestMessage);
+          const body = decryptedMessage?.body;
+          const messageTimestamp = getTimestampSeconds(decryptedMessage?.timestamp);
+          if (!body || !isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp)) {
+            continue;
+          }
+          const timestamp = messageTimestamp ?? pushTimestamp;
+          const orderTimestamp = getTimestampOrderValue(decryptedMessage.timestamp) ?? timestamp;
+          if (!bestCandidate || orderTimestamp > bestCandidate.orderTimestamp) {
+            bestCandidate = {
+              thread,
+              message: decryptedMessage,
+              body,
+              timestamp,
+              orderTimestamp
+            };
+          }
+        } catch (error) {
+          recordSmsHistoryFetchFailed();
+          debugLogger.general(
+            "WARN",
+            "Failed to inspect SMS history thread",
+            {
+              pushIden: push.iden,
+              threadId: thread.id,
+              error: error.message
+            }
+          );
         }
       }
       if (!bestCandidate) {

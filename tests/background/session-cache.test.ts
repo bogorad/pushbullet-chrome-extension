@@ -1321,4 +1321,161 @@ describe('background GET_SESSION_DATA session cache', () => {
       expect.any(Map),
     );
   });
+
+  it('keeps a resolved SMS when a later active thread lookup fails', async () => {
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-real',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'correct body', timestamp: 100 },
+      },
+      {
+        id: 'thread-broken',
+        recipients: [{ name: 'Mallory' }],
+        latest: { body: 'older body', timestamp: 99 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockImplementation(
+      async (_apiKey: string, _deviceIden: string, threadId: string) => {
+        if (threadId === 'thread-broken') {
+          throw new Error('thread fetch failed');
+        }
+
+        return [
+          {
+            id: 'message-correct',
+            type: 'incoming',
+            body: 'correct body',
+            timestamp: 100,
+          },
+        ];
+      },
+    );
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: 100,
+      iden: 'sms-tickle',
+      notifications: [],
+      source_device_iden: 'phone-1',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.fetchSmsThread).toHaveBeenCalledWith(
+      'test-api-key',
+      'phone-1',
+      'thread-real',
+    );
+    expect(mocks.fetchSmsThread).toHaveBeenCalledWith(
+      'test-api-key',
+      'phone-1',
+      'thread-broken',
+    );
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        notifications: [
+          expect.objectContaining({
+            title: 'Alice',
+            body: 'correct body',
+          }),
+        ],
+      }),
+      expect.any(Map),
+    );
+  });
+
+  it('uses millisecond precision to break same-second SMS history ties', async () => {
+    const pushTimestampMs = 1_700_000_000_900;
+
+    mocks.sessionCache.devices = [
+      {
+        active: true,
+        has_sms: true,
+        iden: 'phone-1',
+        nickname: 'Phone',
+      } satisfies Device,
+    ];
+    mocks.fetchSmsThreads.mockResolvedValue([
+      {
+        id: 'thread-older-same-second',
+        recipients: [{ name: 'Mallory' }],
+        latest: { body: 'older same second body', timestamp: 1_700_000_000_500 },
+      },
+      {
+        id: 'thread-newer-same-second',
+        recipients: [{ name: 'Alice' }],
+        latest: { body: 'newer same second body', timestamp: 1_700_000_000_900 },
+      },
+    ]);
+    mocks.fetchSmsThread.mockImplementation(
+      async (_apiKey: string, _deviceIden: string, threadId: string) => {
+        if (threadId === 'thread-older-same-second') {
+          return [
+            {
+              id: 'message-older-same-second',
+              type: 'incoming',
+              body: 'older same second body',
+              timestamp: 1_700_000_000_500,
+            },
+          ];
+        }
+
+        return [
+          {
+            id: 'message-newer-same-second',
+            type: 'incoming',
+            body: 'newer same second body',
+            timestamp: 1_700_000_000_900,
+          },
+        ];
+      },
+    );
+
+    await loadBackgroundRegistrations();
+    const pushHandler = mocks.eventBusOn.mock.calls.find(
+      ([eventName]) => eventName === 'websocket:push',
+    )?.[1];
+
+    if (!pushHandler) {
+      throw new Error('Expected websocket:push handler registration');
+    }
+
+    await pushHandler({
+      created: pushTimestampMs,
+      iden: 'sms-tickle',
+      notifications: [],
+      source_device_iden: 'phone-1',
+      type: 'sms_changed',
+    } satisfies Push);
+
+    expect(mocks.showPushNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        created: 1_700_000_000,
+        notifications: [
+          expect.objectContaining({
+            title: 'Alice',
+            body: 'newer same second body',
+            timestamp: 1_700_000_000,
+          }),
+        ],
+      }),
+      expect.any(Map),
+    );
+  });
 });
