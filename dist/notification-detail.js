@@ -45,14 +45,23 @@
   var VERIFICATION_CODE_TOKEN = "[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}";
   var TOKEN_BOUNDARY_PATTERN = `(^|[^A-Za-z0-9-])(${VERIFICATION_CODE_TOKEN})(?![A-Za-z0-9-])`;
   var MAX_CONTEXT_CHARS = 48;
-  var VERIFICATION_WORD_PATTERN = /(?:\b(?:verification|security|login|auth(?:entication)?|sms)\s+)?\b(?:code|passcode|otp)\b|\bone[-\s]?time\s+password\b/i;
-  var TRAILING_VERIFICATION_CONTEXT_PATTERN = /^\s*(?:is|as|=|:)?\s*(?:your|the|a|an)?\s*(?:verification\s+|security\s+|login\s+|auth(?:entication)?\s+|sms\s+)?(?:code|passcode|otp)\b/i;
-  var CLAUSE_BREAK_PATTERN = /[.!?]/;
+  var VERIFICATION_WORD_SOURCE = "(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp)\\b|\\bone[-\\s]?time\\s+password\\b)";
+  var DIRECT_LEADING_CONTEXT_PATTERN = new RegExp(
+    `${VERIFICATION_WORD_SOURCE}(?:\\s*(?:is|it|as|=|:)\\s*){0,2}$`,
+    "i"
+  );
+  var DIRECT_TRAILING_CONTEXT_PATTERN = new RegExp(
+    `^\\s*(?:(?:is|as)\\s*)?(?:your|the|a|an)?\\s*${VERIFICATION_WORD_SOURCE}`,
+    "i"
+  );
+  var VERIFICATION_WORD_PATTERN = new RegExp(VERIFICATION_WORD_SOURCE, "i");
+  var CLAUSE_BREAK_PATTERN = /[.!?\n]/;
   function currentClauseTail(text) {
     const lastBreak = Math.max(
       text.lastIndexOf("."),
       text.lastIndexOf("!"),
-      text.lastIndexOf("?")
+      text.lastIndexOf("?"),
+      text.lastIndexOf("\n")
     );
     return text.slice(lastBreak + 1);
   }
@@ -67,10 +76,24 @@
     if (VERIFICATION_WORD_PATTERN.test(before)) {
       return true;
     }
+    const directBefore = fullText.slice(
+      Math.max(0, tokenStart - MAX_CONTEXT_CHARS),
+      tokenStart
+    );
+    if (DIRECT_LEADING_CONTEXT_PATTERN.test(directBefore)) {
+      return true;
+    }
     const after = currentClauseHead(
       fullText.slice(tokenEnd, Math.min(fullText.length, tokenEnd + MAX_CONTEXT_CHARS))
     );
-    return TRAILING_VERIFICATION_CONTEXT_PATTERN.test(after);
+    if (DIRECT_TRAILING_CONTEXT_PATTERN.test(after)) {
+      return true;
+    }
+    const directAfter = fullText.slice(
+      tokenEnd,
+      Math.min(fullText.length, tokenEnd + MAX_CONTEXT_CHARS)
+    );
+    return DIRECT_TRAILING_CONTEXT_PATTERN.test(directAfter);
   }
   function extractVerificationCode(title, message) {
     const fullText = `${title} ${message}`;

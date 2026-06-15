@@ -46,4 +46,10 @@ describe('extractVerificationCode', () => {
       extractVerificationCode('SMS', 'Ticket abc-pqr was opened. Enter the code later.'),
     ).toBeNull();
   });
+
+  it('ignores unrelated hyphenated tokens on the next line after code help text', () => {
+    expect(
+      extractVerificationCode('SMS', 'Need help with your code\nTicket abc-pqr was opened.'),
+    ).toBeNull();
+  });
 });
