@@ -1,22 +1,17 @@
-.env
+*.db
+.auggie.mcp.json
+.beads-credential-key
+.beads/dolt-config.log
+.beads/proxieddb/
 .direnv/
-node_modules/
+.dolt/
+.env
+.tmp/
+.vitest/
+coverage/
 flake.lock
+node_modules/
 package-lock.json
 pushbullet-debug-*.json
 repomix-output.xml
-
-# Test coverage
-coverage/
-.vitest/
-.auggie.mcp.json
-
-# Dolt database files (added by bd init)
-.dolt/
-*.db
-
-# Beads / Dolt files (added by bd init)
-.beads-credential-key
-.beads/dolt-config.log
 tmp/
-.tmp/
