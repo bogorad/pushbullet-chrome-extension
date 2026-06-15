@@ -5266,12 +5266,17 @@
       )
     );
   }
-  function getLatestSmsMessage(thread, messages) {
+  function getLatestCorrelatedSmsMessage(thread, messages, pushTimestamp) {
     const candidates = [...messages, ...thread.messages ?? []];
     if (thread.latest) {
       candidates.push(thread.latest);
     }
-    return candidates.filter((message) => !!message.body || !!message.ciphertext).sort(
+    return candidates.filter(
+      (message) => (!!message.body || !!message.ciphertext) && isSmsHistoryTimestampCorrelated(
+        getTimestampSeconds(message.timestamp),
+        pushTimestamp
+      )
+    ).sort(
       (left, right) => (getTimestampSeconds(right.timestamp) ?? 0) - (getTimestampSeconds(left.timestamp) ?? 0)
     )[0] ?? null;
   }
@@ -5308,10 +5313,7 @@
   }
   function getCorrelatedSmsThreads(threads, pushTimestamp) {
     return threads.filter(
-      (thread) => isSmsHistoryTimestampCorrelated(
-        getSmsThreadTimestamp(thread),
-        pushTimestamp
-      )
+      (thread) => getSmsThreadTimestamp(thread) >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS
     ).sort(
       (left, right) => getSmsThreadTimestamp(right) - getSmsThreadTimestamp(left)
     );
@@ -5374,7 +5376,11 @@
       }
       for (const thread of correlatedThreads) {
         const messages = await fetchSmsThread(apiKey2, smsDevice.iden, thread.id);
-        const latestMessage = getLatestSmsMessage(thread, messages);
+        const latestMessage = getLatestCorrelatedSmsMessage(
+          thread,
+          messages,
+          pushTimestamp
+        );
         if (!latestMessage) {
           continue;
         }
