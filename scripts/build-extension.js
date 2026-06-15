@@ -29,6 +29,10 @@ const bundleConfigs = [
     entryPoint: 'src/notification-detail/index.ts',
     outfile: 'notification-detail.js',
   },
+  {
+    entryPoint: 'src/offscreen/index.ts',
+    outfile: 'offscreen.js',
+  },
 ];
 
 const htmlFiles = [
@@ -36,6 +40,7 @@ const htmlFiles = [
   'options.html',
   'debug-dashboard.html',
   'notification-detail.html',
+  'offscreen.html',
 ];
 
 const staticDirs = ['css', 'icons'];

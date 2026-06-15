@@ -2154,19 +2154,71 @@ function openNotificationDetailWindow(notificationId: string): void {
   chrome.notifications.clear(notificationId);
 }
 
+const OFFSCREEN_CLIPBOARD_DOCUMENT = "offscreen.html";
+const OFFSCREEN_CLIPBOARD_MESSAGE = "copy-text-to-clipboard";
+
+interface ClipboardCopyResponse {
+  success: boolean;
+  error?: string;
+}
+
+let creatingOffscreenClipboardDocument: Promise<void> | null = null;
+
+async function hasOffscreenClipboardDocument(): Promise<boolean> {
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_CLIPBOARD_DOCUMENT);
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["OFFSCREEN_DOCUMENT"],
+      documentUrls: [offscreenUrl],
+    });
+    return contexts.length > 0;
+  }
+
+  return chrome.offscreen.hasDocument();
+}
+
+async function ensureOffscreenClipboardDocument(): Promise<void> {
+  if (await hasOffscreenClipboardDocument()) {
+    return;
+  }
+
+  if (!creatingOffscreenClipboardDocument) {
+    creatingOffscreenClipboardDocument = chrome.offscreen.createDocument({
+      url: OFFSCREEN_CLIPBOARD_DOCUMENT,
+      reasons: ["CLIPBOARD"],
+      justification: "Copy verification codes from notification buttons.",
+    });
+  }
+
+  try {
+    await creatingOffscreenClipboardDocument;
+  } finally {
+    creatingOffscreenClipboardDocument = null;
+  }
+}
+
 async function writeTextToClipboard(text: string): Promise<boolean> {
   try {
-    const clipboard = globalThis.navigator?.clipboard;
-    if (!clipboard?.writeText) {
-      return false;
+    await ensureOffscreenClipboardDocument();
+    const response = (await chrome.runtime.sendMessage({
+      target: "offscreen",
+      type: OFFSCREEN_CLIPBOARD_MESSAGE,
+      text,
+    })) as ClipboardCopyResponse | undefined;
+    if (response?.success) {
+      return true;
     }
 
-    await clipboard.writeText(text);
-    return true;
+    debugLogger.notifications(
+      "WARN",
+      "Offscreen clipboard copy failed",
+      { error: response?.error ?? "unknown error" },
+    );
+    return false;
   } catch (error) {
     debugLogger.notifications(
       "WARN",
-      "Failed to copy notification code directly",
+      "Failed to copy notification code through offscreen document",
       { error: (error as Error).message },
     );
     return false;

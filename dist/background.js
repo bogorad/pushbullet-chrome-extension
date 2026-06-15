@@ -6679,18 +6679,58 @@
     );
     chrome.notifications.clear(notificationId);
   }
+  var OFFSCREEN_CLIPBOARD_DOCUMENT = "offscreen.html";
+  var OFFSCREEN_CLIPBOARD_MESSAGE = "copy-text-to-clipboard";
+  var creatingOffscreenClipboardDocument = null;
+  async function hasOffscreenClipboardDocument() {
+    const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_CLIPBOARD_DOCUMENT);
+    if (chrome.runtime.getContexts) {
+      const contexts = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+        documentUrls: [offscreenUrl]
+      });
+      return contexts.length > 0;
+    }
+    return chrome.offscreen.hasDocument();
+  }
+  async function ensureOffscreenClipboardDocument() {
+    if (await hasOffscreenClipboardDocument()) {
+      return;
+    }
+    if (!creatingOffscreenClipboardDocument) {
+      creatingOffscreenClipboardDocument = chrome.offscreen.createDocument({
+        url: OFFSCREEN_CLIPBOARD_DOCUMENT,
+        reasons: ["CLIPBOARD"],
+        justification: "Copy verification codes from notification buttons."
+      });
+    }
+    try {
+      await creatingOffscreenClipboardDocument;
+    } finally {
+      creatingOffscreenClipboardDocument = null;
+    }
+  }
   async function writeTextToClipboard(text) {
     try {
-      const clipboard = globalThis.navigator?.clipboard;
-      if (!clipboard?.writeText) {
-        return false;
+      await ensureOffscreenClipboardDocument();
+      const response = await chrome.runtime.sendMessage({
+        target: "offscreen",
+        type: OFFSCREEN_CLIPBOARD_MESSAGE,
+        text
+      });
+      if (response?.success) {
+        return true;
       }
-      await clipboard.writeText(text);
-      return true;
+      debugLogger.notifications(
+        "WARN",
+        "Offscreen clipboard copy failed",
+        { error: response?.error ?? "unknown error" }
+      );
+      return false;
     } catch (error) {
       debugLogger.notifications(
         "WARN",
-        "Failed to copy notification code directly",
+        "Failed to copy notification code through offscreen document",
         { error: error.message }
       );
       return false;

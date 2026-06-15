@@ -16,6 +16,7 @@ const createChromeMock = () => {
   return {
     runtime: {
       sendMessage: vi.fn(),
+      getContexts: vi.fn().mockResolvedValue([]),
       getManifest: vi.fn(() => ({ version: '1.3.42' })),
       onMessage: {
         addListener: vi.fn((callback: any) => listeners.onMessage.push(callback)),
@@ -100,6 +101,11 @@ const createChromeMock = () => {
       onStateChanged: {
         addListener: vi.fn()
       }
+    },
+    offscreen: {
+      createDocument: vi.fn().mockResolvedValue(undefined),
+      hasDocument: vi.fn().mockResolvedValue(false),
+      closeDocument: vi.fn().mockResolvedValue(undefined)
     },
     alarms: {
       create: vi.fn(),

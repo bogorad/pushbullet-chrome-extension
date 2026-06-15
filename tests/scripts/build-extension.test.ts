@@ -53,11 +53,13 @@ describe('buildExtension', () => {
       'options.html',
       'debug-dashboard.html',
       'notification-detail.html',
+      'offscreen.html',
       'background.js',
       'popup.js',
       'options.js',
       'debug-dashboard.js',
       'notification-detail.js',
+      'offscreen.js',
       'css/popup.css',
       'css/options.css',
       'css/debug-dashboard.css',
@@ -99,6 +101,7 @@ describe('buildExtension', () => {
       ['options.html', '<script src="options.js"></script>'],
       ['debug-dashboard.html', '<script src="debug-dashboard.js"></script>'],
       ['notification-detail.html', '<script src="notification-detail.js"></script>'],
+      ['offscreen.html', '<script src="offscreen.js"></script>'],
     ];
 
     for (const [fileName, expectedScriptTag] of htmlExpectations) {

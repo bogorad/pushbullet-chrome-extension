@@ -359,7 +359,12 @@ function installChromeMock(): void {
         },
       },
     },
+    offscreen: {
+      createDocument: vi.fn().mockResolvedValue(undefined),
+      hasDocument: vi.fn().mockResolvedValue(false),
+    },
     runtime: {
+      getContexts: vi.fn().mockResolvedValue([]),
       getManifest: vi.fn(() => ({ version: '1.0.0' })),
       getURL: vi.fn((path: string) => `chrome-extension://test/${path}`),
       lastError: undefined,
@@ -474,6 +479,17 @@ async function waitForSendMessage(): Promise<void> {
   throw new Error('Background session update was not sent');
 }
 
+async function waitForNotificationCreated(): Promise<void> {
+  for (let index = 0; index < 50; index += 1) {
+    if (mocks.createNotificationWithTimeout.mock.calls.length > 0) {
+      return;
+    }
+    await Promise.resolve();
+  }
+
+  throw new Error('Notification was not created');
+}
+
 async function flushBackgroundRefresh(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -537,13 +553,8 @@ describe('background GET_SESSION_DATA session cache', () => {
   });
 
   it('copies a detected SMS verification code from notification button clicks', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('navigator', {
-      ...globalThis.navigator,
-      clipboard: { writeText },
-    });
-
     await loadBackgroundRegistrations();
+    chrome.runtime.sendMessage.mockResolvedValue({ success: true });
     const background = await import('../../src/background/index');
     background.addToNotificationStore('sms-notification', {
       created: 100,
@@ -565,8 +576,22 @@ describe('background GET_SESSION_DATA session cache', () => {
 
     buttonHandler('sms-notification', 0);
     await flushBackgroundRefresh();
+    await waitForNotificationCreated();
 
-    expect(writeText).toHaveBeenCalledWith('527176');
+    expect(chrome.runtime.getContexts).toHaveBeenCalledWith({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: ['chrome-extension://test/offscreen.html'],
+    });
+    expect(chrome.offscreen.createDocument).toHaveBeenCalledWith({
+      url: 'offscreen.html',
+      reasons: ['CLIPBOARD'],
+      justification: 'Copy verification codes from notification buttons.',
+    });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      target: 'offscreen',
+      type: 'copy-text-to-clipboard',
+      text: '527176',
+    });
     expect(mocks.createNotificationWithTimeout).toHaveBeenCalledWith(
       expect.stringMatching(/^pushbullet-code-copied-/),
       expect.objectContaining({
