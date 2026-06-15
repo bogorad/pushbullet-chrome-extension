@@ -509,6 +509,46 @@ describe('showPushNotification - Notification Creation', () => {
     ]);
   });
 
+  it('should add a copy-code button for alpha-only grouped verification codes', async () => {
+    const push = {
+      type: 'sms_changed',
+      notifications: [
+        {
+          title: 'SMS',
+          body: 'your code is abc-pqr.',
+        },
+      ],
+    };
+
+    await showPushNotification(push);
+
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
+
+    expect(notificationOptions.buttons).toEqual([
+      { title: 'Copy Code: abc-pqr' },
+    ]);
+  });
+
+  it('should not add a copy-code button for phone numbers after code help text', async () => {
+    const push = {
+      type: 'sms_changed',
+      notifications: [
+        {
+          title: 'SMS',
+          body: 'Need help with your code? Call 800-555-1212.',
+        },
+      ],
+    };
+
+    await showPushNotification(push);
+
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
+
+    expect(notificationOptions.buttons).toBeUndefined();
+  });
+
   it('should handle MMS-style file push with title', async () => {
     // Arrange
     const push = { 

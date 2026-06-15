@@ -244,7 +244,25 @@ export class ChromeStorageRepository implements StorageRepository {
    */
   async getEncryptionPassword(): Promise<string | null> {
     const localResult = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
-    return getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
+    const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
+    if (localPassword !== null) {
+      return localPassword;
+    }
+
+    const sessionStorage = this.getSessionStorage();
+    if (!sessionStorage) {
+      return null;
+    }
+
+    const sessionResult = await sessionStorage.get([ENCRYPTION_PASSWORD_KEY]);
+    const sessionPassword = getStringOrNull(sessionResult[ENCRYPTION_PASSWORD_KEY]);
+    if (sessionPassword === null) {
+      return null;
+    }
+
+    await chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: sessionPassword });
+    await sessionStorage.remove([ENCRYPTION_PASSWORD_KEY]);
+    return sessionPassword;
   }
 
   /**

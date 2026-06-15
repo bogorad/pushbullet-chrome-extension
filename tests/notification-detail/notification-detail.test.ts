@@ -142,4 +142,33 @@ describe('notification detail image URL trust', () => {
     codeButton?.click();
     expect(writeText).toHaveBeenCalledWith('A1c2-P9r8');
   });
+
+  it('adds a copy button for alpha-only grouped verification codes', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      clipboard: { writeText },
+    });
+    mockTextPushResponse('Your code is abcd-pqrs.');
+
+    await import('../../src/notification-detail/index');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await Promise.resolve();
+
+    const codeButton = document.querySelector<HTMLButtonElement>('.btn-code');
+    expect(codeButton?.textContent).toContain('Copy Code: abcd-pqrs');
+
+    codeButton?.click();
+    expect(writeText).toHaveBeenCalledWith('abcd-pqrs');
+  });
+
+  it('does not add a copy button for phone numbers after code help text', async () => {
+    mockTextPushResponse('Need help with your code? Call 800-555-1212.');
+
+    await import('../../src/notification-detail/index');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await Promise.resolve();
+
+    expect(document.querySelector<HTMLButtonElement>('.btn-code')).toBeNull();
+  });
 });

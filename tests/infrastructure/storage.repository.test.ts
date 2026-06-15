@@ -25,6 +25,19 @@ describe('ChromeStorageRepository encryption password storage', () => {
     expect(chrome.storage.session.get).not.toHaveBeenCalled();
   });
 
+  it('migrates session-only encryption passwords into local storage', async () => {
+    const repository = new ChromeStorageRepository();
+    chrome.storage.local.get.mockResolvedValue({});
+    chrome.storage.session.get.mockResolvedValue({ encryptionPassword: 'session-secret' });
+
+    await expect(repository.getEncryptionPassword()).resolves.toBe('session-secret');
+
+    expect(chrome.storage.local.set).toHaveBeenCalledWith({
+      encryptionPassword: 'session-secret',
+    });
+    expect(chrome.storage.session.remove).toHaveBeenCalledWith(['encryptionPassword']);
+  });
+
   it('clears encryption passwords from both session and local storage', async () => {
     const repository = new ChromeStorageRepository();
 

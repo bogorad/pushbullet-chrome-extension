@@ -6,6 +6,7 @@ import type { Push } from '../types/domain';
 import { MessageAction } from '../types/domain';
 import { getElementById, querySelector, setText } from '../lib/ui/dom';
 import { isTrustedImageUrl } from '../lib/security/trusted-image-url';
+import { extractVerificationCode } from '../lib/verification-code';
 
 
 
@@ -216,21 +217,9 @@ function displayNotification(push: Push): void {
  * Detect numeric or grouped alphanumeric verification code
  */
 function detectVerificationCode(title: string, message: string): void {
-  const fullText = (title + ' ' + message).toLowerCase();
+  const code = extractVerificationCode(title, message);
 
-  // Check if text contains "code" keyword
-  if (!fullText.includes('code')) {
-    return;
-  }
-
-  // Look for 123456, 123-456, abc-pqr, or abcd-pqrs.
-  const codeMatch = (title + ' ' + message).match(
-    /\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/,
-  );
-
-  if (codeMatch && codeMatch[1]) {
-    const code = codeMatch[1];
-
+  if (code) {
     // Create code copy button
     const actionsDiv = querySelector<HTMLDivElement>('.actions');
     const codeBtn = document.createElement('button');

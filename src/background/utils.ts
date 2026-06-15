@@ -18,6 +18,7 @@ import type { FilePush, MirrorPush, Push, SmsChangedPush } from "../types/domain
 import { createNotificationWithTimeout } from "../app/notifications";
 import { globalEventBus } from "../lib/events/event-bus";
 import { isTrustedImageUrl } from "../lib/security/trusted-image-url";
+import { extractVerificationCode } from "../lib/verification-code";
 import { ServiceWorkerState, type ServiceWorkerStateMachine } from "./state-machine";
 import { maybeAutoOpenLinkWithDismiss } from "./processing";
 import { summarizePushForLog } from "../app/push-summary";
@@ -131,14 +132,7 @@ function hasSmsNotification(push: SmsChangedPush): push is SmsChangedPushWithNot
   return Array.isArray(push.notifications) && push.notifications.length > 0;
 }
 
-export function extractVerificationCode(title: string, message: string): string | null {
-  const fullText = `${title} ${message}`;
-  if (!fullText.toLowerCase().includes("code")) {
-    return null;
-  }
-
-  return fullText.match(/\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/)?.[1] ?? null;
-}
+export { extractVerificationCode };
 
 function getPushDisplayText(push: Push): PushDisplayText {
   if (push.type === "note") {
