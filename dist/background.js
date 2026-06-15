@@ -5272,7 +5272,7 @@
       )
     );
   }
-  function getLatestCorrelatedSmsMessage(thread, messages, pushTimestamp) {
+  function getLatestCorrelatedSmsMessage(thread, messages, pushTimestamp, pushOrderTimestamp) {
     const candidates = [...messages, ...thread.messages ?? []];
     if (thread.latest) {
       candidates.push(thread.latest);
@@ -5281,7 +5281,7 @@
       (message) => (!!message.body || !!message.ciphertext) && isSmsHistoryTimestampCorrelated(
         getTimestampSeconds(message.timestamp),
         pushTimestamp
-      )
+      ) && isSmsHistoryOrderCorrelated(message.timestamp, pushOrderTimestamp)
     ).sort(
       (left, right) => (getTimestampOrderValue(right.timestamp) ?? 0) - (getTimestampOrderValue(left.timestamp) ?? 0)
     )[0] ?? null;
@@ -5292,11 +5292,21 @@
     const timestamp = Math.max(created, modified);
     return timestamp > 0 ? timestamp : null;
   }
+  function getSmsChangedOrderTimestamp(push) {
+    const created = getTimestampOrderValue(push.created) ?? 0;
+    const modified = getTimestampOrderValue(push.modified) ?? 0;
+    const timestamp = Math.max(created, modified);
+    return timestamp > 0 ? timestamp : null;
+  }
   function isSmsHistoryTimestampCorrelated(messageTimestamp, pushTimestamp) {
     if (!messageTimestamp) {
       return false;
     }
     return messageTimestamp >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS && messageTimestamp <= pushTimestamp;
+  }
+  function isSmsHistoryOrderCorrelated(messageTimestamp, pushOrderTimestamp) {
+    const messageOrderTimestamp = getTimestampOrderValue(messageTimestamp);
+    return !!messageOrderTimestamp && messageOrderTimestamp <= pushOrderTimestamp;
   }
   function getSmsHistoryDevice(push) {
     const smsDevices = sessionCache.devices.filter(
@@ -5371,7 +5381,8 @@
     const apiKey2 = getApiKey();
     const smsDevice = getSmsHistoryDevice(push);
     const pushTimestamp = getSmsChangedTimestamp(push);
-    if (!apiKey2 || !smsDevice || !pushTimestamp) {
+    const pushOrderTimestamp = getSmsChangedOrderTimestamp(push);
+    if (!apiKey2 || !smsDevice || !pushTimestamp || !pushOrderTimestamp) {
       return null;
     }
     try {
@@ -5387,7 +5398,8 @@
           const latestMessage = getLatestCorrelatedSmsMessage(
             thread,
             messages,
-            pushTimestamp
+            pushTimestamp,
+            pushOrderTimestamp
           );
           if (!latestMessage) {
             continue;

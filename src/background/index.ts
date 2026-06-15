@@ -374,6 +374,7 @@ function getLatestCorrelatedSmsMessage(
   thread: SmsThread,
   messages: SmsMessage[],
   pushTimestamp: number,
+  pushOrderTimestamp: number,
 ): SmsMessage | null {
   const candidates = [...messages, ...(thread.messages ?? [])];
   if (thread.latest) {
@@ -386,7 +387,8 @@ function getLatestCorrelatedSmsMessage(
       isSmsHistoryTimestampCorrelated(
         getTimestampSeconds(message.timestamp),
         pushTimestamp,
-      ),
+      ) &&
+      isSmsHistoryOrderCorrelated(message.timestamp, pushOrderTimestamp),
     )
     .sort(
       (left, right) =>
@@ -402,6 +404,13 @@ function getSmsChangedTimestamp(push: SmsChangedPush): number | null {
   return timestamp > 0 ? timestamp : null;
 }
 
+function getSmsChangedOrderTimestamp(push: SmsChangedPush): number | null {
+  const created = getTimestampOrderValue(push.created) ?? 0;
+  const modified = getTimestampOrderValue(push.modified) ?? 0;
+  const timestamp = Math.max(created, modified);
+  return timestamp > 0 ? timestamp : null;
+}
+
 function isSmsHistoryTimestampCorrelated(
   messageTimestamp: number | undefined,
   pushTimestamp: number,
@@ -412,6 +421,14 @@ function isSmsHistoryTimestampCorrelated(
 
   return messageTimestamp >= pushTimestamp - SMS_HISTORY_CORRELATION_WINDOW_SECONDS &&
     messageTimestamp <= pushTimestamp;
+}
+
+function isSmsHistoryOrderCorrelated(
+  messageTimestamp: number | undefined,
+  pushOrderTimestamp: number,
+): boolean {
+  const messageOrderTimestamp = getTimestampOrderValue(messageTimestamp);
+  return !!messageOrderTimestamp && messageOrderTimestamp <= pushOrderTimestamp;
 }
 
 function getSmsHistoryDevice(push: SmsChangedPush): Device | null {
@@ -515,8 +532,9 @@ async function resolveSmsChangedFromHistory(
   const apiKey = getApiKey();
   const smsDevice = getSmsHistoryDevice(push);
   const pushTimestamp = getSmsChangedTimestamp(push);
+  const pushOrderTimestamp = getSmsChangedOrderTimestamp(push);
 
-  if (!apiKey || !smsDevice || !pushTimestamp) {
+  if (!apiKey || !smsDevice || !pushTimestamp || !pushOrderTimestamp) {
     return null;
   }
 
@@ -536,6 +554,7 @@ async function resolveSmsChangedFromHistory(
           thread,
           messages,
           pushTimestamp,
+          pushOrderTimestamp,
         );
         if (!latestMessage) {
           continue;
