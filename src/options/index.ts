@@ -186,8 +186,7 @@ async function saveOnlyThisDevice(): Promise<void> {
 
 /**
  * Save encryption password.
- * Uses Chrome session storage when supported, so the raw password does not
- * persist across browser restarts by default.
+ * Uses Chrome local storage so the raw password survives extension reloads.
  */
 async function saveEncryptionPassword(): Promise<void> {
   const password = encryptionPasswordInput.value.trim();
@@ -196,7 +195,7 @@ async function saveEncryptionPassword(): Promise<void> {
     await storageRepository.setEncryptionPassword(password);
 
     if (password.length > 0) {
-      showStatus('Encryption password saved for this browser session', 'success');
+      showStatus('Encryption password saved locally', 'success');
     } else {
       showStatus('Encryption password cleared', 'success');
     }

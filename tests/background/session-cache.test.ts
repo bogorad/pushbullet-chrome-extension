@@ -279,7 +279,7 @@ vi.mock('../../src/background/utils', () => ({
     const sms = push.type === 'sms_changed' ? push.notifications?.[0] : null;
     const text = `${sms?.title ?? ''} ${sms?.body ?? ''}`;
     return text.toLowerCase().includes('code')
-      ? text.match(/\b(\d{6})\b/)?.[1] ?? null
+      ? text.match(/\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/)?.[1] ?? null
       : null;
   }),
   pushLink: vi.fn(),

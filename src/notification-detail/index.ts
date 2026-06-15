@@ -208,12 +208,12 @@ function displayNotification(push: Push): void {
     setText(sourceEl, 'Pushbullet');
   }
 
-  // Check for 6-digit verification code
+  // Check for verification code
   detectVerificationCode(title, message);
 }
 
 /**
- * Detect 6-digit verification code
+ * Detect numeric or grouped alphanumeric verification code
  */
 function detectVerificationCode(title: string, message: string): void {
   const fullText = (title + ' ' + message).toLowerCase();
@@ -223,8 +223,10 @@ function detectVerificationCode(title: string, message: string): void {
     return;
   }
 
-  // Look for 6-digit number
-  const codeMatch = (title + ' ' + message).match(/\b(\d{6})\b/);
+  // Look for 123456, 123-456, abc-pqr, or abcd-pqrs.
+  const codeMatch = (title + ' ' + message).match(
+    /\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/,
+  );
 
   if (codeMatch && codeMatch[1]) {
     const code = codeMatch[1];

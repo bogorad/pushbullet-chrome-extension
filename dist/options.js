@@ -46,22 +46,8 @@
     Object.entries(markers).sort(([, leftModified], [, rightModified]) => rightModified - leftModified).slice(0, MAX_PROCESSED_PUSH_MARKERS)
   );
   var ChromeStorageRepository = class {
-    fallbackEncryptionPassword = null;
     getSessionStorage() {
       return chrome.storage.session;
-    }
-    async removeLegacyEncryptionPassword() {
-      try {
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
-        const result = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
-        if (getStringOrNull(result[ENCRYPTION_PASSWORD_KEY]) !== null) {
-          console.warn("Storage: Failed to remove legacy encryption password from local storage");
-        }
-      } catch (error) {
-        console.warn("Storage: Failed to clean up legacy encryption password from local storage", {
-          errorType: error instanceof Error ? error.name : typeof error
-        });
-      }
     }
     /**
      * Get API Key from local storage
@@ -154,48 +140,29 @@
       await chrome.storage.sync.set({ onlyThisDevice: value });
     }
     /**
-     * Get Encryption Password from session storage when available.
-     * Existing local plaintext values are migrated once, then removed.
+     * Get Encryption Password from local storage.
+     * Security: PSKs are stored locally and never synced.
      */
     async getEncryptionPassword() {
-      const sessionStorage = this.getSessionStorage();
-      if (sessionStorage) {
-        const sessionResult = await sessionStorage.get([ENCRYPTION_PASSWORD_KEY]);
-        const sessionPassword = getStringOrNull(sessionResult[ENCRYPTION_PASSWORD_KEY]);
-        if (sessionPassword) {
-          return sessionPassword;
-        }
-      }
       const localResult = await chrome.storage.local.get([ENCRYPTION_PASSWORD_KEY]);
-      const localPassword = getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
-      if (localPassword && sessionStorage) {
-        await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: localPassword });
-        await this.removeLegacyEncryptionPassword();
-      }
-      if (!sessionStorage) {
-        return localPassword ?? this.fallbackEncryptionPassword;
-      }
-      return localPassword;
+      return getStringOrNull(localResult[ENCRYPTION_PASSWORD_KEY]);
     }
     /**
-     * Set Encryption Password in session storage when available.
-     * Falls back to memory only on browsers without storage.session.
+     * Set Encryption Password in local storage.
+     * Security: PSKs are stored locally and never synced.
      */
     async setEncryptionPassword(password) {
       const sessionStorage = this.getSessionStorage();
       if (password === null) {
-        this.fallbackEncryptionPassword = null;
         await Promise.all([
           sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve(),
           chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY])
         ]);
-      } else if (sessionStorage) {
-        this.fallbackEncryptionPassword = null;
-        await sessionStorage.set({ [ENCRYPTION_PASSWORD_KEY]: password });
-        await this.removeLegacyEncryptionPassword();
       } else {
-        this.fallbackEncryptionPassword = password;
-        await chrome.storage.local.remove([ENCRYPTION_PASSWORD_KEY]);
+        await Promise.all([
+          chrome.storage.local.set({ [ENCRYPTION_PASSWORD_KEY]: password }),
+          sessionStorage?.remove([ENCRYPTION_PASSWORD_KEY]) ?? Promise.resolve()
+        ]);
       }
     }
     /**
@@ -515,7 +482,7 @@
     try {
       await storageRepository.setEncryptionPassword(password);
       if (password.length > 0) {
-        showStatus2("Encryption password saved for this browser session", "success");
+        showStatus2("Encryption password saved locally", "success");
       } else {
         showStatus2("Encryption password cleared", "success");
       }

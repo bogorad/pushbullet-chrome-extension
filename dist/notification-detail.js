@@ -191,7 +191,9 @@
     if (!fullText.includes("code")) {
       return;
     }
-    const codeMatch = (title + " " + message).match(/\b(\d{6})\b/);
+    const codeMatch = (title + " " + message).match(
+      /\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/
+    );
     if (codeMatch && codeMatch[1]) {
       const code = codeMatch[1];
       const actionsDiv = querySelector(".actions");

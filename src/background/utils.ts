@@ -137,7 +137,7 @@ export function extractVerificationCode(title: string, message: string): string 
     return null;
   }
 
-  return fullText.match(/\b(\d{6})\b/)?.[1] ?? null;
+  return fullText.match(/\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/)?.[1] ?? null;
 }
 
 function getPushDisplayText(push: Push): PushDisplayText {

@@ -467,6 +467,48 @@ describe('showPushNotification - Notification Creation', () => {
     ]);
   });
 
+  it('should add a copy-code button for hyphenated SMS verification codes', async () => {
+    const push = {
+      type: 'sms_changed',
+      notifications: [
+        {
+          title: 'SMS',
+          body: 'the code is 527-176.',
+        },
+      ],
+    };
+
+    await showPushNotification(push);
+
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
+
+    expect(notificationOptions.buttons).toEqual([
+      { title: 'Copy Code: 527-176' },
+    ]);
+  });
+
+  it('should add a copy-code button for grouped alphanumeric verification codes', async () => {
+    const push = {
+      type: 'sms_changed',
+      notifications: [
+        {
+          title: 'SMS',
+          body: 'your code is A1c2-P9r8.',
+        },
+      ],
+    };
+
+    await showPushNotification(push);
+
+    expect(chrome.notifications.create).toHaveBeenCalledTimes(1);
+    const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
+
+    expect(notificationOptions.buttons).toEqual([
+      { title: 'Copy Code: A1c2-P9r8' },
+    ]);
+  });
+
   it('should handle MMS-style file push with title', async () => {
     // Arrange
     const push = { 

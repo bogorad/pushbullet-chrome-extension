@@ -47,6 +47,26 @@ function mockPushResponse(imageUrl: string): void {
   );
 }
 
+function mockTextPushResponse(body: string): void {
+  chrome.runtime.sendMessage.mockImplementation(
+    (_message: unknown, callback: (response: unknown) => void) => {
+      callback({
+        success: true,
+        push: {
+          type: 'sms_changed',
+          notifications: [
+            {
+              title: 'Alice',
+              body,
+            },
+          ],
+          created: 123,
+        },
+      });
+    },
+  );
+}
+
 describe('notification detail image URL trust', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -83,5 +103,43 @@ describe('notification detail image URL trust', () => {
     await Promise.resolve();
 
     expect(fetchMock).toHaveBeenCalledWith('https://files.pushbulletusercontent.com/avatar.png');
+  });
+
+  it('adds a copy button for hyphenated verification codes', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      clipboard: { writeText },
+    });
+    mockTextPushResponse('Your code is 527-176.');
+
+    await import('../../src/notification-detail/index');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await Promise.resolve();
+
+    const codeButton = document.querySelector<HTMLButtonElement>('.btn-code');
+    expect(codeButton?.textContent).toContain('Copy Code: 527-176');
+
+    codeButton?.click();
+    expect(writeText).toHaveBeenCalledWith('527-176');
+  });
+
+  it('adds a copy button for grouped alphanumeric verification codes', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', {
+      ...globalThis.navigator,
+      clipboard: { writeText },
+    });
+    mockTextPushResponse('Your code is A1c2-P9r8.');
+
+    await import('../../src/notification-detail/index');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await Promise.resolve();
+
+    const codeButton = document.querySelector<HTMLButtonElement>('.btn-code');
+    expect(codeButton?.textContent).toContain('Copy Code: A1c2-P9r8');
+
+    codeButton?.click();
+    expect(writeText).toHaveBeenCalledWith('A1c2-P9r8');
   });
 });
