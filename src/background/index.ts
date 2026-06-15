@@ -390,8 +390,8 @@ function getLatestCorrelatedSmsMessage(
     )
     .sort(
       (left, right) =>
-        (getTimestampSeconds(right.timestamp) ?? 0) -
-        (getTimestampSeconds(left.timestamp) ?? 0),
+        (getTimestampOrderValue(right.timestamp) ?? 0) -
+        (getTimestampOrderValue(left.timestamp) ?? 0),
     )[0] ?? null;
 }
 
