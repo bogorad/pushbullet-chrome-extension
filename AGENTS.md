@@ -3,8 +3,9 @@
 ## General
 
 Use beads instead of native task management.
-Use `record-activity` after material changes; write concise notes in the repo-root `activity/` directory.
-On any change, bump the patch version (`zz` in `xx.yy.zz`) in all relevant version files: `package.json`, `manifest.json`, and `options.html`.
+When a beads issue's work is done and pushed, close the issue in the same workflow with the pushed commit as the close-reason evidence. Do not leave completed pushed work open.
+Activity directory: repo-root `activity/` (see system `record-activity` rule).
+On any extension change (code or shipped files), bump the patch version (`zz` in `xx.yy.zz`) in all relevant version files: `package.json`, `manifest.json`, and `options.html`. Docs-only changes do not warrant a bump.
 
 ## Build Commands
 
@@ -33,28 +34,10 @@ On any change, bump the patch version (`zz` in `xx.yy.zz`) in all relevant versi
 
 ## Feature: Dismiss After Offline Auto-Open
 
-### Overview
+On reconnect, missed link pushes can auto-open and, optionally, be dismissed on the server. This keeps the inbox clean.
 
-When the extension reconnects after being offline, it can automatically open missed link pushes AND optionally dismiss them on the Pushbullet server. This keeps the Pushbullet inbox clean while still opening important links.
-
-### Implementation Details
-
-- **File**: `src/background/links.ts` - `autoOpenOfflineLinks()` function
-- **Pattern**: Matches existing real-time dismiss behavior from `src/background/processing.ts`
-- **Settings**: Controlled by `getDismissAfterAutoOpen()` storage setting
-- **Performance**: API calls hoisted outside loops for efficiency
-- **Error Handling**: Non-fatal - dismiss failures don't prevent auto-opening
-- **Logging**: Uses `websocket` category with `Offline AutoOpen:` prefix
-
-### Testing
-
-- Enable both "Auto-open links on reconnect" and "Dismiss after auto-open" in options
-- Disconnect network, send link pushes, reconnect
-- Verify: tabs open AND pushes are dismissed in Pushbullet web interface
-- Check console logs for `Offline AutoOpen:` messages
-
-### Dependencies
-
-- `dismissPush()` from `src/app/api/client.ts`
-- `getApiKey()` from `src/background/state.ts`
-- `getDismissAfterAutoOpen()` from `src/infrastructure/storage/storage.repository.ts`
+- **File/function**: `src/background/links.ts` - `autoOpenOfflineLinks()`; pattern matches real-time dismiss in `src/background/processing.ts`
+- **Setting**: `getDismissAfterAutoOpen()`; API calls hoisted outside loops
+- **Behaviour**: Dismiss failure is non-fatal; it does not block auto-open. Log category `websocket`, prefix `Offline AutoOpen:`
+- **Dependencies**: `dismissPush()` from `src/app/api/client.ts`; `getApiKey()` from `src/background/state.ts`; `getDismissAfterAutoOpen()` from `src/infrastructure/storage/storage.repository.ts`
+- **Test**: Enable "Auto-open links on reconnect" and "Dismiss after auto-open"; go offline, send link pushes, reconnect; check tabs open, pushes are dismissed on the web, and logs show `Offline AutoOpen:`
