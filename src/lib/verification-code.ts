@@ -1,11 +1,13 @@
+// A bare 4-digit token is accepted only via hasVerificationContext below:
+// the keyword-context check replaces the protection the 6-digit-only rule gave.
 const VERIFICATION_CODE_TOKEN =
-  '[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}';
+  '[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}|\\d{4}';
 const TOKEN_BOUNDARY_PATTERN =
   `(^|[^A-Za-z0-9-])(${VERIFICATION_CODE_TOKEN})(?![A-Za-z0-9-])`;
 const MAX_CONTEXT_CHARS = 48;
 
 const VERIFICATION_WORD_SOURCE =
-  '(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp)\\b|\\bone[-\\s]?time\\s+password\\b)';
+  '(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp|pin|c[oó]digo|clave|contrase[nñ]a)\\b|\\bone[-\\s]?time\\s+password\\b)';
 const DIRECT_LEADING_CONTEXT_PATTERN = new RegExp(
   `${VERIFICATION_WORD_SOURCE}(?:\\s*(?:is|it|as|=|:)?\\s*){0,2}$`,
   'i',
