@@ -4519,7 +4519,7 @@
       );
       if (verificationCode) {
         finalNotificationOptions.buttons = [
-          { title: `Copy Code: ${verificationCode}` }
+          { title: `\u{1F4CB} ${verificationCode}` }
         ];
       }
       await createNotificationWithTimeout(

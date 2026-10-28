@@ -275,7 +275,9 @@
       const actionsDiv = querySelector(".actions");
       const codeBtn = document.createElement("button");
       codeBtn.className = "btn-code";
-      codeBtn.innerHTML = `\u{1F4CB} Copy Code: <strong>${code}</strong>`;
+      codeBtn.innerHTML = `\u{1F4CB} <strong>${code}</strong>`;
+      codeBtn.setAttribute("aria-label", "Copy code");
+      codeBtn.title = "Copy code";
       codeBtn.onclick = () => copyCode(code);
       actionsDiv.insertBefore(codeBtn, actionsDiv.firstChild);
     }

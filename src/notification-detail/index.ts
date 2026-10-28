@@ -224,7 +224,9 @@ function detectVerificationCode(title: string, message: string): void {
     const actionsDiv = querySelector<HTMLDivElement>('.actions');
     const codeBtn = document.createElement('button');
     codeBtn.className = 'btn-code';
-    codeBtn.innerHTML = `📋 Copy Code: <strong>${code}</strong>`;
+    codeBtn.innerHTML = `📋 <strong>${code}</strong>`;
+    codeBtn.setAttribute('aria-label', 'Copy code');
+    codeBtn.title = 'Copy code';
     codeBtn.onclick = () => copyCode(code);
 
     // Insert as first button

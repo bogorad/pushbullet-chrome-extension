@@ -42,3 +42,29 @@ describe('tracked dist/ shipped bundle contains Jev verification', () => {
     expect(manifest.host_permissions).toContain('https://api.typesafe.ai/*');
   });
 });
+
+describe('tracked dist/ shipped bundle contains options auto-save toast', () => {
+  it('dist/options.html has the toast container and no save-all/status remnants', async () => {
+    const html = await readDist('options.html');
+    expect(html).toContain('id="toast-container"');
+    expect(html).not.toContain('id="save-settings"');
+    expect(html).not.toContain('id="update-nickname"');
+    expect(html).not.toContain('id="status-message"');
+  });
+
+  it('dist/options.js contains toast calls and nickname debounce', async () => {
+    const js = await readDist('options.js');
+    expect(js).toContain('toast-container');
+    expect(js).toContain('toast-close');
+    expect(js).toContain('scheduleNicknameSave');
+    expect(js).toContain('Device nickname updated');
+    expect(js).not.toContain('saveAllSettings');
+  });
+
+  it('dist/css/options.css has toast styles', async () => {
+    const css = await readDist(path.join('css', 'options.css'));
+    expect(css).toContain('.toast-container');
+    expect(css).toContain('.toast-success');
+    expect(css).toContain('.toast-error');
+  });
+});

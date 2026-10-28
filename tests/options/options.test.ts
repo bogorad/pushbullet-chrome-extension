@@ -310,44 +310,92 @@ describe('options message actions', () => {
     );
   });
 
-  it('uses handled actions when saving all settings', async () => {
+  it('has no save-all button; every control saves independently', async () => {
+    await loadOptions();
+
+    expect(document.getElementById('save-settings')).toBeNull();
+    expect(document.getElementById('update-nickname')).toBeNull();
+    expect(document.getElementById('status-message')).toBeNull();
+    expect(document.getElementById('toast-container')).not.toBeNull();
+
+    const timeoutInput = document.getElementById('notification-timeout') as HTMLInputElement;
+    timeoutInput.value = '12';
+    changeInput(timeoutInput);
+
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setNotificationTimeout).toHaveBeenCalledWith(12000);
+    });
+    await vi.waitFor(() => {
+      expect(document.querySelector('#toast-container')?.textContent).toContain(
+        'Notification timeout',
+      );
+    });
+  });
+
+  it('auto-saves the nickname after debounce and awaits the background response', async () => {
     await loadOptions();
 
     const nicknameInput = document.getElementById('device-nickname') as HTMLInputElement;
-    const timeoutInput = document.getElementById('notification-timeout') as HTMLInputElement;
-    const autoOpenCheckbox = document.getElementById('auto-open-links') as HTMLInputElement;
-    const autoOpenReconnectCheckbox = document.getElementById('auto-open-links-on-reconnect') as HTMLInputElement;
-    const debugCheckbox = document.getElementById('debug-mode') as HTMLInputElement;
-    const saveButton = document.getElementById('save-settings') as HTMLButtonElement;
-
     nicknameInput.value = 'Work Chrome';
-    timeoutInput.value = '12';
-    autoOpenCheckbox.checked = false;
-    autoOpenReconnectCheckbox.checked = true;
-    debugCheckbox.checked = false;
-    saveButton.click();
+    nicknameInput.dispatchEvent(new Event('input', { bubbles: true }));
 
+    expect(storageRepositoryMock.setDeviceNickname).not.toHaveBeenCalled();
+
+    await vi.waitFor(
+      () => {
+        expect(storageRepositoryMock.setDeviceNickname).toHaveBeenCalledWith('Work Chrome');
+      },
+      { timeout: 3000 },
+    );
     await vi.waitFor(() => {
-      expect(storageRepositoryMock.setDeviceNickname).toHaveBeenCalledWith('Work Chrome');
       expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
-        action: MessageAction.UPDATE_DEBUG_CONFIG,
-        config: { enabled: false },
+        action: MessageAction.UPDATE_DEVICE_NICKNAME,
+        nickname: 'Work Chrome',
       });
     });
-
-    const settingsCall = chrome.runtime.sendMessage.mock.calls.find(
-      ([message]: [{ action?: string }]) => message.action === MessageAction.SETTINGS_CHANGED,
-    );
-
-    expect(settingsCall?.[0]).toEqual({
-      action: MessageAction.SETTINGS_CHANGED,
-      settings: {
-        deviceNickname: 'Work Chrome',
-        notificationTimeout: 12000,
-        autoOpenLinks: false,
-      },
+    await vi.waitFor(() => {
+      expect(document.querySelector('#toast-container')?.textContent).toContain('nickname');
     });
-    expect(settingsCall?.[0].settings).not.toHaveProperty('autoOpenLinksOnReconnect');
-    expect(settingsCall?.[0].settings).not.toHaveProperty('debugMode');
+  });
+
+  it('commits the nickname on change without waiting for debounce', async () => {
+    await loadOptions();
+
+    const nicknameInput = document.getElementById('device-nickname') as HTMLInputElement;
+    nicknameInput.value = 'Quick Chrome';
+    changeInput(nicknameInput);
+
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setDeviceNickname).toHaveBeenCalledWith('Quick Chrome');
+    });
+  });
+
+  it('rejects an empty nickname with an error toast and no save', async () => {
+    await loadOptions();
+
+    const nicknameInput = document.getElementById('device-nickname') as HTMLInputElement;
+    nicknameInput.value = '   ';
+    changeInput(nicknameInput);
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#toast-container .toast-error')).not.toBeNull();
+    });
+    expect(storageRepositoryMock.setDeviceNickname).not.toHaveBeenCalled();
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: MessageAction.UPDATE_DEVICE_NICKNAME }),
+    );
+  });
+
+  it('awaits the background response when auto-open links changes', async () => {
+    await loadOptions();
+
+    chrome.runtime.sendMessage.mockResolvedValue({ success: false, error: 'boom' });
+    const checkbox = document.getElementById('auto-open-links') as HTMLInputElement;
+    checkbox.checked = false;
+    changeInput(checkbox);
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('#toast-container .toast-error')).not.toBeNull();
+    });
   });
 });

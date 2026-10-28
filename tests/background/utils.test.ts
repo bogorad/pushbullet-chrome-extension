@@ -463,7 +463,7 @@ describe('showPushNotification - Notification Creation', () => {
     expect(notificationOptions.title).toBe('SMS');
     expect(notificationOptions.message).toBe('the code it 527176.');
     expect(notificationOptions.buttons).toEqual([
-      { title: 'Copy Code: 527176' },
+      { title: '📋 527176' },
     ]);
   });
 
@@ -484,7 +484,7 @@ describe('showPushNotification - Notification Creation', () => {
     const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
 
     expect(notificationOptions.buttons).toEqual([
-      { title: 'Copy Code: 527-176' },
+      { title: '📋 527-176' },
     ]);
   });
 
@@ -505,7 +505,7 @@ describe('showPushNotification - Notification Creation', () => {
     const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
 
     expect(notificationOptions.buttons).toEqual([
-      { title: 'Copy Code: A1c2-P9r8' },
+      { title: '📋 A1c2-P9r8' },
     ]);
   });
 
@@ -526,7 +526,7 @@ describe('showPushNotification - Notification Creation', () => {
     const [, notificationOptions] = chrome.notifications.create.mock.calls[0];
 
     expect(notificationOptions.buttons).toEqual([
-      { title: 'Copy Code: abc-pqr' },
+      { title: '📋 abc-pqr' },
     ]);
   });
 

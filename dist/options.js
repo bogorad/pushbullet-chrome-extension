@@ -8,19 +8,54 @@
     }
     return element;
   }
-  function show(element) {
-    element.style.display = "";
+
+  // src/options/toast.ts
+  var TOAST_CONTAINER_ID = "toast-container";
+  var MAX_TOASTS = 3;
+  var AUTO_HIDE_MS = 3e3;
+  function ensureToastContainer() {
+    let container = document.getElementById(TOAST_CONTAINER_ID);
+    if (!container) {
+      container = document.createElement("div");
+      container.id = TOAST_CONTAINER_ID;
+      container.className = "toast-container";
+      container.setAttribute("aria-live", "polite");
+      document.body.appendChild(container);
+    }
+    return container;
   }
-  function hide(element) {
-    element.style.display = "none";
-  }
-  function showStatus(element, message, type = "info") {
-    element.textContent = message;
-    element.className = `status-message status-${type}`;
-    show(element);
-    setTimeout(() => {
-      hide(element);
-    }, 3e3);
+  function showToast(type, text) {
+    const container = ensureToastContainer();
+    while (container.children.length >= MAX_TOASTS) {
+      const oldest = container.firstChild;
+      if (!oldest) {
+        break;
+      }
+      container.removeChild(oldest);
+    }
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    toast.setAttribute("role", "status");
+    const message = document.createElement("span");
+    message.className = "toast-message";
+    message.textContent = text;
+    toast.appendChild(message);
+    if (type === "error") {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "toast-close";
+      close.setAttribute("aria-label", "Dismiss notification");
+      close.textContent = "\xD7";
+      close.addEventListener("click", () => {
+        toast.remove();
+      });
+      toast.appendChild(close);
+    } else {
+      setTimeout(() => {
+        toast.remove();
+      }, AUTO_HIDE_MS);
+    }
+    container.appendChild(toast);
   }
 
   // src/infrastructure/storage/storage.repository.ts
@@ -840,7 +875,6 @@
 
   // src/options/index.ts
   var deviceNicknameInput = getElementById("device-nickname");
-  var updateNicknameButton = getElementById("update-nickname");
   var notificationTimeoutInput = getElementById("notification-timeout");
   var autoOpenLinksCheckbox = getElementById("auto-open-links");
   var autoOpenLinksOnReconnectCheckbox = getElementById("auto-open-links-on-reconnect");
@@ -849,11 +883,9 @@
   var jevApiKeyInput = getElementById("jev-api-key");
   var jevApiKeyStatus = getElementById("jev-api-key-status");
   var jevApiKeyDot = getElementById("jev-api-key-dot");
-  var saveSettingsButton = getElementById("save-settings");
   var resetSettingsButton = getElementById("reset-settings");
   var forceWakeBtn = getElementById("force-wake");
   var onlyThisDeviceCheckbox = getElementById("only-this-device");
-  var statusMessage = getElementById("status-message");
   var versionSpan = getElementById("version");
   var DEFAULT_SETTINGS = {
     deviceNickname: "Chrome",
@@ -866,9 +898,6 @@
     // E2EE password (stored in session storage when supported)
     debugMode: true
   };
-  function showStatus2(message, type) {
-    showStatus(statusMessage, message, type);
-  }
   async function loadSettings() {
     try {
       const deviceNickname = await storageRepository.getDeviceNickname();
@@ -888,7 +917,7 @@
       storedJevApiKey = jevApiKey && jevApiKey.trim().length > 0 ? jevApiKey : null;
       if (storedJevApiKey) {
         setJevKeyStatus("neutral", "Saved Jev API key \u2014 verifying\u2026");
-        void verifyAndStoreJevApiKey(storedJevApiKey);
+        void verifyAndStoreJevApiKey(storedJevApiKey, false);
       } else {
         setJevKeyStatus("neutral", "");
       }
@@ -898,80 +927,119 @@
       console.log("Settings loaded successfully");
     } catch (error) {
       console.error("Error loading settings:", error);
-      showStatus2("Error loading settings", "error");
+      showToast("error", "Error loading settings");
     }
   }
-  async function updateNickname() {
+  var NICKNAME_DEBOUNCE_MS = 500;
+  var nicknameTimer = null;
+  async function saveNickname() {
     const nickname = deviceNicknameInput.value.trim();
     if (!nickname) {
-      showStatus2("Please enter a device nickname", "error");
+      showToast("error", "Please enter a device nickname");
       return;
     }
     try {
       await storageRepository.setDeviceNickname(nickname);
-      chrome.runtime.sendMessage({
+      const response = await chrome.runtime.sendMessage({
         action: "updateDeviceNickname" /* UPDATE_DEVICE_NICKNAME */,
         nickname
       });
-      showStatus2("Device nickname updated successfully", "success");
+      if (response?.success === false) {
+        throw new Error(response.error || "Failed to update device nickname");
+      }
+      showToast("success", "Device nickname updated");
     } catch (error) {
       console.error("Error updating nickname:", error);
-      showStatus2("Error updating device nickname", "error");
+      showToast("error", "Error updating device nickname");
     }
+  }
+  function scheduleNicknameSave() {
+    if (nicknameTimer !== null) {
+      clearTimeout(nicknameTimer);
+    }
+    nicknameTimer = setTimeout(() => {
+      nicknameTimer = null;
+      void saveNickname();
+    }, NICKNAME_DEBOUNCE_MS);
+  }
+  function commitNicknameNow() {
+    if (nicknameTimer !== null) {
+      clearTimeout(nicknameTimer);
+      nicknameTimer = null;
+    }
+    void saveNickname();
   }
   async function saveNotificationTimeout() {
     const seconds = parseInt(notificationTimeoutInput.value, 10);
     if (isNaN(seconds) || seconds < 0 || seconds > 60) {
-      showStatus2("Timeout must be between 0 and 60 seconds", "error");
+      showToast("error", "Timeout must be between 0 and 60 seconds");
       return;
     }
     const milliseconds = seconds * 1e3;
     try {
       await storageRepository.setNotificationTimeout(milliseconds);
-      showStatus2("Notification timeout updated", "success");
+      showToast("success", "Notification timeout updated");
     } catch (error) {
       console.error("Error saving notification timeout:", error);
-      showStatus2("Error saving notification timeout", "error");
+      showToast("error", "Error saving notification timeout");
     }
   }
   async function saveAutoOpenLinks() {
     const enabled = autoOpenLinksCheckbox.checked;
     try {
       await storageRepository.setAutoOpenLinks(enabled);
-      chrome.runtime.sendMessage({
+    } catch (error) {
+      console.error("Error saving auto-open links:", error);
+      showToast("error", "Error saving auto-open links setting");
+      return;
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({
         action: "settingsChanged" /* SETTINGS_CHANGED */,
         settings: {
           autoOpenLinks: enabled
         }
       });
-      showStatus2("Auto-open links setting updated", "success");
+      if (response?.success === false) {
+        throw new Error(response.error || "Failed to sync auto-open links setting");
+      }
+      showToast("success", "Auto-open links setting updated");
     } catch (error) {
-      console.error("Error saving auto-open links:", error);
-      showStatus2("Error saving auto-open links setting", "error");
+      console.error("Error syncing auto-open links:", error);
+      showToast("error", "Auto-open links saved locally but background sync failed");
     }
   }
   async function saveAutoOpenLinksOnReconnect() {
     const enabled = autoOpenLinksOnReconnectCheckbox.checked;
     try {
       await storageRepository.setAutoOpenLinksOnReconnect(enabled);
-      showStatus2("Auto-open links on reconnect setting updated", "success");
+      showToast("success", "Auto-open links on reconnect setting updated");
     } catch (error) {
       console.error("Error saving auto-open links on reconnect:", error);
-      showStatus2("Error saving auto-open links on reconnect setting", "error");
+      showToast("error", "Error saving auto-open links on reconnect setting");
     }
   }
   async function saveOnlyThisDevice() {
     const enabled = onlyThisDeviceCheckbox.checked;
     try {
       await storageRepository.setOnlyThisDevice(enabled);
-      chrome.runtime.sendMessage({
+    } catch (error) {
+      console.error("Error saving only this device filter:", error);
+      showToast("error", "Error saving filter setting");
+      return;
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({
         action: "settingsChanged" /* SETTINGS_CHANGED */,
         onlyThisDevice: enabled
       });
-      showStatus2("Only this device filter updated", "success");
+      if (response?.success === false) {
+        throw new Error(response.error || "Failed to sync filter setting");
+      }
+      showToast("success", "Only this device filter updated");
     } catch (error) {
-      console.error("Error saving only this device filter:", error);
-      showStatus2("Error saving filter setting", "error");
+      console.error("Error syncing only this device filter:", error);
+      showToast("error", "Filter saved locally but background sync failed");
     }
   }
   async function saveEncryptionPassword() {
@@ -979,13 +1047,13 @@
     try {
       await storageRepository.setEncryptionPassword(password);
       if (password.length > 0) {
-        showStatus2("Encryption password saved locally", "success");
+        showToast("success", "Encryption password saved locally");
       } else {
-        showStatus2("Encryption password cleared", "success");
+        showToast("success", "Encryption password cleared");
       }
     } catch (error) {
       console.error("Error saving encryption password:", error);
-      showStatus2("Error saving encryption password", "error");
+      showToast("error", "Error saving encryption password");
     }
   }
   var JEV_VERIFY_DEBOUNCE_MS = 500;
@@ -1001,7 +1069,7 @@
     jevApiKeyDot.title = label;
     jevApiKeyDot.setAttribute("aria-label", label);
   }
-  async function verifyAndStoreJevApiKey(candidate) {
+  async function verifyAndStoreJevApiKey(candidate, announce = true) {
     const seq = ++jevVerifySeq;
     setJevKeyStatus("verifying", "Verifying Jev API key\u2026");
     const result = await verifyJevApiKey(candidate);
@@ -1013,20 +1081,35 @@
         await storageRepository.setJevApiKey(candidate);
       } catch {
         setJevKeyStatus("error", "Jev API key verified but could not be saved locally.");
+        if (announce) {
+          showToast("error", "Jev API key verified but could not be saved locally.");
+        }
         return false;
       }
       storedJevApiKey = candidate;
       lastVerifiedJevApiKey = candidate;
       setJevKeyStatus("valid", "Jev API key verified and saved locally.");
+      if (announce) {
+        showToast("success", "Jev API key verified and saved locally.");
+      }
       return true;
     }
     const unchanged = storedJevApiKey ? " Previously saved key unchanged." : " Key not saved.";
     if (result.kind === "invalid") {
       setJevKeyStatus("invalid", `Invalid Jev API key (HTTP ${result.status}).${unchanged}`);
+      if (announce) {
+        showToast("error", `Invalid Jev API key (HTTP ${result.status}).${unchanged}`);
+      }
     } else if (result.kind === "timeout") {
       setJevKeyStatus("error", `Jev API key verification timed out.${unchanged}`);
+      if (announce) {
+        showToast("error", `Jev API key verification timed out.${unchanged}`);
+      }
     } else {
       setJevKeyStatus("error", `Jev API key verification failed (network error).${unchanged}`);
+      if (announce) {
+        showToast("error", `Jev API key verification failed (network error).${unchanged}`);
+      }
     }
     return false;
   }
@@ -1050,8 +1133,10 @@
             storedJevApiKey = null;
             lastVerifiedJevApiKey = null;
             setJevKeyStatus("neutral", "Jev API key cleared.");
+            showToast("success", "Jev API key cleared.");
           } catch {
             setJevKeyStatus("error", "Error clearing Jev API key.");
+            showToast("error", "Error clearing Jev API key.");
           }
         })();
         return;
@@ -1073,66 +1158,10 @@
       if (response?.success === false) {
         throw new Error(response.error || "Failed to update debug config");
       }
-      showStatus2("Debug mode updated", "success");
+      showToast("success", "Debug mode updated");
     } catch (error) {
       console.error("Error saving debug mode:", error);
-      showStatus2("Error saving debug mode", "error");
-    }
-  }
-  async function saveAllSettings() {
-    try {
-      const nickname = deviceNicknameInput.value.trim();
-      const seconds = parseInt(notificationTimeoutInput.value, 10);
-      const autoOpen = autoOpenLinksCheckbox.checked;
-      const autoOpenOnReconnect = autoOpenLinksOnReconnectCheckbox.checked;
-      const debug = debugModeCheckbox.checked;
-      if (!nickname) {
-        showStatus2("Please enter a device nickname", "error");
-        return;
-      }
-      if (isNaN(seconds) || seconds < 0 || seconds > 60) {
-        showStatus2("Timeout must be between 0 and 60 seconds", "error");
-        return;
-      }
-      await storageRepository.setDeviceNickname(nickname);
-      await storageRepository.setNotificationTimeout(seconds * 1e3);
-      await storageRepository.setAutoOpenLinks(autoOpen);
-      await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
-      const jevKey = jevApiKeyInput.value.trim();
-      let jevOk = true;
-      if (jevKey.length === 0) {
-        await storageRepository.setJevApiKey(null);
-        storedJevApiKey = null;
-        lastVerifiedJevApiKey = null;
-        setJevKeyStatus("neutral", "Jev API key cleared.");
-      } else if (jevKey === storedJevApiKey && jevKey === lastVerifiedJevApiKey) {
-        setJevKeyStatus("valid", "Jev API key verified and saved locally.");
-      } else {
-        jevOk = await verifyAndStoreJevApiKey(jevKey);
-      }
-      chrome.runtime.sendMessage({
-        action: "settingsChanged" /* SETTINGS_CHANGED */,
-        settings: {
-          deviceNickname: nickname,
-          notificationTimeout: seconds * 1e3,
-          autoOpenLinks: autoOpen
-        }
-      });
-      const debugResponse = await chrome.runtime.sendMessage({
-        action: "updateDebugConfig" /* UPDATE_DEBUG_CONFIG */,
-        config: { enabled: debug }
-      });
-      if (debugResponse?.success === false) {
-        throw new Error(debugResponse.error || "Failed to update debug config");
-      }
-      if (!jevOk) {
-        showStatus2("Settings saved, but Jev API key was not verified and not saved", "error");
-        return;
-      }
-      showStatus2("All settings saved successfully!", "success");
-    } catch (error) {
-      console.error("Error saving settings:", error);
-      showStatus2("Error saving settings", "error");
+      showToast("error", "Error saving debug mode");
     }
   }
   async function resetToDefaults() {
@@ -1145,22 +1174,28 @@
       await storageRepository.setAutoOpenLinks(DEFAULT_SETTINGS.autoOpenLinks);
       await storageRepository.setAutoOpenLinksOnReconnect(DEFAULT_SETTINGS.autoOpenLinksOnReconnect);
       await loadSettings();
-      showStatus2("Settings reset to defaults", "success");
+      showToast("success", "Settings reset to defaults");
     } catch (error) {
       console.error("Error resetting settings:", error);
-      showStatus2("Error resetting settings", "error");
+      showToast("error", "Error resetting settings");
     }
   }
   function init() {
-    updateNicknameButton.addEventListener("click", updateNickname);
-    saveSettingsButton.addEventListener("click", saveAllSettings);
+    ensureToastContainer();
     resetSettingsButton.addEventListener("click", resetToDefaults);
     forceWakeBtn.addEventListener("click", () => {
       chrome.runtime.sendMessage({ action: "attemptReconnect" /* ATTEMPT_RECONNECT */ }).then(() => {
-        showStatus2("Force wake sent, check extension popup for status", "success");
+        showToast("success", "Force wake sent, check extension popup for status");
       }).catch(() => {
-        showStatus2("Failed to send force wake", "error");
+        showToast("error", "Failed to send force wake");
       });
+    });
+    deviceNicknameInput.addEventListener("input", scheduleNicknameSave);
+    deviceNicknameInput.addEventListener("change", commitNicknameNow);
+    deviceNicknameInput.addEventListener("blur", () => {
+      if (nicknameTimer !== null) {
+        commitNicknameNow();
+      }
     });
     notificationTimeoutInput.addEventListener("change", () => {
       const seconds = parseInt(notificationTimeoutInput.value, 10);

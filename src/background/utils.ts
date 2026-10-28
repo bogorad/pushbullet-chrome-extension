@@ -838,7 +838,7 @@ export async function showPushNotification(
     );
     if (verificationCode) {
       finalNotificationOptions.buttons = [
-        { title: `Copy Code: ${verificationCode}` },
+        { title: `📋 ${verificationCode}` },
       ];
     }
 

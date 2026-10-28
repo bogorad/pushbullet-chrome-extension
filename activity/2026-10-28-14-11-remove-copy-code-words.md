@@ -1,0 +1,10 @@
+# Remove COPY CODE words; icon and code only (1.5.31)
+
+- Bead: pushbullet-chrome-extension-w1b (task, P3, left open). ASD-STE100 noted in report per parent task.
+- Operator decision: visible "COPY CODE" / "Copy Code" words removed; copy icon + code itself is enough.
+- Locations found: src/notification-detail/index.ts:227 (`📋 Copy Code: <strong>code</strong>` DOM button) and src/background/utils.ts:841 (Chrome notification button `Copy Code: ${verificationCode}`). Both changed consistently. No other user-visible "Copy Code" label found (`rg -n -i "copy code" src *.html css tests`); remaining hits are aria/title "Copy code", console/alert error text, and test assertions.
+- Change: notification-detail button now `📋 <strong>code</strong>` with `aria-label="Copy code"` and `title="Copy code"` (src/notification-detail/index.ts:227-229). Chrome notification button title now `📋 ${verificationCode}` — Chrome buttons have no separate aria-label/title, so the visible title is icon+code. Copy/clipboard behaviour unchanged: click handler uses buttonIndex/code extraction, not the title string; detail `copyCode(code)` unchanged. No extractor/Jev logic changed.
+- Tests: updated tests/notification-detail/notification-detail.test.ts (visible text no longer matches /copy code/i, contains 📋 and code, aria-label/title = "Copy code", click still calls clipboard writeText with code) and tests/background/utils.test.ts (button title now `📋 <code>`). Focused: 42 passed (notification-detail 6 + utils 36).
+- Checks (direnv/nix): `npm run test` 255 passed (37 files, incl. tests/scripts/dist-jev-shipped.test.ts 4 passed); `npm run typecheck` pass; `npm run lint` pass; `npm run build` pass.
+- Never-stale-dist: rebuilt with `npm run build` and KEPT dist/ changes; dist/notification-detail.js and dist/background.js contain icon+code and "Copy code" aria/title, dist version 1.5.31.
+- Version: 1.5.30 -> 1.5.31 via `node ./scripts/bump-patch.cjs` (package.json, manifest.json, options.html). Not committed/pushed per instructions.

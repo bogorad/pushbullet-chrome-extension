@@ -118,7 +118,7 @@ describe('notification detail image URL trust', () => {
     await Promise.resolve();
 
     const codeButton = document.querySelector<HTMLButtonElement>('.btn-code');
-    expect(codeButton?.textContent).toContain('Copy Code: 527-176');
+    expect(codeButton?.textContent).not.toMatch(/copy code/i); expect(codeButton?.textContent).toContain('📋'); expect(codeButton?.textContent).toContain('527-176'); expect(codeButton?.getAttribute('aria-label')).toBe('Copy code'); expect(codeButton?.title).toBe('Copy code');
 
     codeButton?.click();
     expect(writeText).toHaveBeenCalledWith('527-176');
@@ -137,7 +137,7 @@ describe('notification detail image URL trust', () => {
     await Promise.resolve();
 
     const codeButton = document.querySelector<HTMLButtonElement>('.btn-code');
-    expect(codeButton?.textContent).toContain('Copy Code: A1c2-P9r8');
+    expect(codeButton?.textContent).not.toMatch(/copy code/i); expect(codeButton?.textContent).toContain('A1c2-P9r8'); expect(codeButton?.getAttribute('aria-label')).toBe('Copy code'); expect(codeButton?.title).toBe('Copy code');
 
     codeButton?.click();
     expect(writeText).toHaveBeenCalledWith('A1c2-P9r8');
@@ -156,7 +156,7 @@ describe('notification detail image URL trust', () => {
     await Promise.resolve();
 
     const codeButton = document.querySelector<HTMLButtonElement>('.btn-code');
-    expect(codeButton?.textContent).toContain('Copy Code: abcd-pqrs');
+    expect(codeButton?.textContent).not.toMatch(/copy code/i); expect(codeButton?.textContent).toContain('abcd-pqrs'); expect(codeButton?.getAttribute('aria-label')).toBe('Copy code'); expect(codeButton?.title).toBe('Copy code');
 
     codeButton?.click();
     expect(writeText).toHaveBeenCalledWith('abcd-pqrs');

@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="css/options.css" />
   </head>
   <body>
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
     <div class="container">
       <header>
         <h1>Pushbullet Settings</h1>
@@ -26,7 +27,6 @@
                 id="device-nickname"
                 placeholder="Enter device nickname"
               />
-              <button id="update-nickname" class="btn-primary">Update</button>
             </div>
             <p class="help-text">
               This name will identify this browser in your Pushbullet devices
@@ -163,17 +163,12 @@
         <section class="settings-section">
           <h2>Actions</h2>
           <div class="action-buttons">
-            <button id="save-settings" class="btn-primary btn-large">
-              Save All Settings
-            </button>
             <button id="reset-settings" class="btn-secondary">
               Reset to Defaults
             </button>
             <button id="force-wake" class="btn-primary">Force Wake Service Worker</button>
           </div>
         </section>
-
-        <div id="status-message" class="status-message"></div>
       </main>
 
       <footer>
@@ -181,7 +176,7 @@
           This is an unofficial extension and is not affiliated with Pushbullet
           Inc.
         </p>
-        <p class="version">Version <span id="version">1.5.30</span></p>
+        <p class="version">Version <span id="version">1.5.32</span></p>
         <p class="source">
           <a
             href="https://github.com/bogorad/pushbullet-chrome-extension"
