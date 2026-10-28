@@ -1,6 +1,6 @@
 {
   "name": "Pushbullet for Chrome with SMS reception (Unofficial)",
-  "version": "1.5.22",
+  "version": "1.5.30",
   "description": "UNOFFICIAL Manifest-V3-compatible Pushbullet client - not affiliated with Pushbullet Inc.",
   "manifest_version": 3,
   "icons": {
@@ -27,7 +27,8 @@
   ],
   "host_permissions": [
     "https://*.pushbullet.com/*",
-    "https://*.pushbulletusercontent.com/*"
+    "https://*.pushbulletusercontent.com/*",
+    "https://api.typesafe.ai/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -1212,6 +1212,18 @@
         await chrome.storage.local.set({ apiKey: key });
       }
     }
+    async getJevApiKey() {
+      const result = await chrome.storage.local.get(["jevApiKey"]);
+      const v = getStringOrNull(result.jevApiKey);
+      return v && v.trim().length > 0 ? v : null;
+    }
+    async setJevApiKey(key) {
+      if (key === null || key.trim().length === 0) {
+        await chrome.storage.local.remove(["jevApiKey"]);
+      } else {
+        await chrome.storage.local.set({ jevApiKey: key });
+      }
+    }
     /**
      * Get Device Identifier from local storage
      */
@@ -3604,10 +3616,10 @@
   }
 
   // src/lib/verification-code.ts
-  var VERIFICATION_CODE_TOKEN = "[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}";
+  var VERIFICATION_CODE_TOKEN = "[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}|\\d{4}";
   var TOKEN_BOUNDARY_PATTERN = `(^|[^A-Za-z0-9-])(${VERIFICATION_CODE_TOKEN})(?![A-Za-z0-9-])`;
   var MAX_CONTEXT_CHARS = 48;
-  var VERIFICATION_WORD_SOURCE = "(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp)\\b|\\bone[-\\s]?time\\s+password\\b)";
+  var VERIFICATION_WORD_SOURCE = "(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp|pin|c[o\xF3]digo|clave|contrase[n\xF1]a)\\b|\\bone[-\\s]?time\\s+password\\b)";
   var DIRECT_LEADING_CONTEXT_PATTERN = new RegExp(
     `${VERIFICATION_WORD_SOURCE}(?:\\s*(?:is|it|as|=|:)?\\s*){0,2}$`,
     "i"
@@ -3657,22 +3669,128 @@
     );
     return DIRECT_TRAILING_CONTEXT_PATTERN.test(directAfter);
   }
-  function extractVerificationCode(title, message) {
+  var NUMERIC_TOKEN_PATTERN = /^[\d-]+$/;
+  function analyzeVerificationCode(title, message) {
     const fullText = `${title} ${message}`;
     const tokenPattern = new RegExp(TOKEN_BOUNDARY_PATTERN, "g");
+    const qualifiedCandidates = [];
+    const numericCandidates = [];
     for (const match of fullText.matchAll(tokenPattern)) {
       const prefix = match[1] ?? "";
-      const code = match[2];
-      if (!code || match.index === void 0) {
+      const code2 = match[2];
+      if (!code2 || match.index === void 0) {
         continue;
       }
+      if (NUMERIC_TOKEN_PATTERN.test(code2) && !numericCandidates.includes(code2)) {
+        numericCandidates.push(code2);
+      }
       const tokenStart = match.index + prefix.length;
-      const tokenEnd = tokenStart + code.length;
-      if (hasVerificationContext(fullText, tokenStart, tokenEnd)) {
-        return code;
+      const tokenEnd = tokenStart + code2.length;
+      if (hasVerificationContext(fullText, tokenStart, tokenEnd) && !qualifiedCandidates.includes(code2)) {
+        qualifiedCandidates.push(code2);
       }
     }
-    return null;
+    const code = qualifiedCandidates[0] ?? null;
+    const ambiguous = qualifiedCandidates.length === 0 && numericCandidates.length > 0 || qualifiedCandidates.length > 1;
+    return { code, qualifiedCandidates, numericCandidates, ambiguous };
+  }
+
+  // src/app/api/jev.ts
+  var JEV_MODEL = "jev-1.14.0";
+  var JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+  var NO_MATCH_CHOICE = "__none__";
+  var JEV_TIMEOUT_MS = 8e3;
+  async function pickVerificationCodeWithJev(options) {
+    const candidates = [...new Set(options.candidates)].filter((c) => c !== NO_MATCH_CHOICE);
+    if (candidates.length === 0) {
+      return { kind: "failed" };
+    }
+    const fetchFn = options.fetchFn ?? fetch;
+    const timeoutMs = options.timeoutMs ?? JEV_TIMEOUT_MS;
+    const criteria = {};
+    for (const candidate of candidates) {
+      criteria[candidate] = null;
+    }
+    criteria[NO_MATCH_CHOICE] = "None of these numeric strings is the verification code.";
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchFn(JEV_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: JEV_MODEL,
+          state: options.messageText,
+          questions: {
+            code: {
+              type: "choice",
+              instructions: "Which of these numeric strings is the verification code in the message? Choose __none__ if none of them is the verification code.",
+              criteria
+            }
+          }
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        debugLogger.api("WARN", "Jev disambiguation failed", { status: response.status });
+        return { kind: "failed" };
+      }
+      const data = await response.json();
+      const choice = data?.answers?.code;
+      if (!choice || choice.type !== "choice" || typeof choice.choice !== "string") {
+        return { kind: "failed" };
+      }
+      if (choice.choice === NO_MATCH_CHOICE) {
+        return { kind: "none" };
+      }
+      if (!candidates.includes(choice.choice)) {
+        return { kind: "failed" };
+      }
+      return { kind: "picked", code: choice.choice };
+    } catch {
+      debugLogger.api("WARN", "Jev disambiguation request failed", {});
+      return { kind: "failed" };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // src/lib/verification-code-jev.ts
+  async function extractVerificationCodeWithJevFallback(title, message, deps = {}) {
+    const analysis = analyzeVerificationCode(title, message);
+    if (!analysis.ambiguous) {
+      return analysis.code;
+    }
+    if (analysis.numericCandidates.length === 0) {
+      return analysis.code;
+    }
+    const getKey = deps.getJevApiKey ?? (() => storageRepository.getJevApiKey());
+    let apiKey2;
+    try {
+      apiKey2 = await getKey();
+    } catch {
+      return analysis.code;
+    }
+    if (!apiKey2 || apiKey2.trim().length === 0) {
+      return analysis.code;
+    }
+    const result = await pickVerificationCodeWithJev({
+      apiKey: apiKey2,
+      messageText: message,
+      candidates: analysis.numericCandidates,
+      fetchFn: deps.fetchFn,
+      timeoutMs: deps.timeoutMs
+    });
+    if (result.kind === "picked") {
+      return result.code;
+    }
+    if (result.kind === "none") {
+      return null;
+    }
+    return analysis.code;
   }
 
   // src/background/links.ts
@@ -3924,9 +4042,9 @@
       message: `New ${push.type}`
     };
   }
-  function getPushVerificationCode(push) {
+  async function getPushVerificationCodeAsync(push) {
     const { title, message } = getPushDisplayText(push);
-    return extractVerificationCode(title, message);
+    return extractVerificationCodeWithJevFallback(title, message);
   }
   function getBase64DecodedLength(base64) {
     const paddingLength = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
@@ -4110,6 +4228,32 @@
       debugLogger.general("ERROR", "Incremental refresh failed", {}, error);
       performanceMonitor.recordHealthCheckFailure();
     }
+  }
+  var missedPushCatchUpInFlight = null;
+  function runMissedPushCatchUp(notificationDataStore2) {
+    if (missedPushCatchUpInFlight) {
+      return missedPushCatchUpInFlight;
+    }
+    missedPushCatchUpInFlight = (async () => {
+      try {
+        await hydrateBackgroundConfig();
+        if (!getApiKey()) {
+          debugLogger.general("WARN", "Missed-push catch-up skipped - no API key");
+          return;
+        }
+        const cutoff = sessionCache.lastModifiedCutoff || await storageRepository.getLastModifiedCutoff();
+        if (!cutoff) {
+          debugLogger.general("WARN", "Missed-push catch-up skipped - no cursor");
+          return;
+        }
+        await refreshPushes(notificationDataStore2);
+      } catch (error) {
+        debugLogger.general("ERROR", "Missed-push catch-up failed", {}, error);
+      } finally {
+        missedPushCatchUpInFlight = null;
+      }
+    })();
+    return missedPushCatchUpInFlight;
   }
   var counter = 0;
   async function showPushNotification(push, notificationDataStore2) {
@@ -4369,7 +4513,7 @@
       if (notificationOptions.imageUrl) {
         finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
       }
-      const verificationCode = extractVerificationCode(
+      const verificationCode = await extractVerificationCodeWithJevFallback(
         finalNotificationOptions.title,
         finalNotificationOptions.message
       );
@@ -5810,9 +5954,12 @@
       "WebSocket connected - post-connect tasks starting"
     );
     await stateMachineReady;
-    stateMachine.transition("WS_CONNECTED");
+    await stateMachine.transition("WS_CONNECTED");
     void runPostConnect();
     void maybeRunReconnectAutoOpen();
+    if (stateMachine.isInState("ready" /* READY */)) {
+      void runMissedPushCatchUp(notificationDataStore);
+    }
   });
   globalEventBus.on("websocket:disconnected", async () => {
     await stateMachineReady;
@@ -6815,17 +6962,17 @@
         return;
       }
       const push = notificationDataStore.get(notificationId);
-      const code = push ? getPushVerificationCode(push) : null;
-      if (!code) {
-        debugLogger.notifications(
-          "WARN",
-          "No verification code found for notification button",
-          { notificationId }
-        );
-        openNotificationDetailWindow(notificationId);
-        return;
-      }
       void (async () => {
+        const code = push ? await getPushVerificationCodeAsync(push) : null;
+        if (!code) {
+          debugLogger.notifications(
+            "WARN",
+            "No verification code found for notification button",
+            { notificationId }
+          );
+          openNotificationDetailWindow(notificationId);
+          return;
+        }
         const copied = await writeTextToClipboard(code);
         if (!copied) {
           openNotificationDetailWindow(notificationId);

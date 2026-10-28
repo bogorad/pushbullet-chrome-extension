@@ -113,6 +113,40 @@
         </section>
 
         <section class="settings-section">
+          <h2>Verification Code Help (Optional)</h2>
+          <div class="setting-item">
+            <label for="jev-api-key">Jev API Key (TypeSafe)</label>
+            <div class="input-group">
+              <input
+                type="password"
+                id="jev-api-key"
+                placeholder="Enter your Jev API key"
+                autocomplete="off"
+              />
+              <span
+                id="jev-api-key-dot"
+                class="jev-key-dot jev-key-dot--neutral"
+                title="No Jev API key verification yet"
+                aria-label="Jev API key status: not verified"
+              ></span>
+            </div>
+            <p
+              id="jev-api-key-status"
+              class="jev-key-status"
+              role="status"
+              aria-live="polite"
+            ></p>
+            <p class="help-text">
+              Optional. When saved, ambiguous verification codes are sent to
+              api.typesafe.ai (Jev) to pick among numeric candidates found in
+              the message. Codes are sent only when the local result is
+              ambiguous and a key is saved. The key is stored locally and
+              never synced. Clear the field to disable.
+            </p>
+          </div>
+        </section>
+
+        <section class="settings-section">
           <h2>Debug Settings</h2>
           <div class="setting-item">
             <label class="checkbox-label">
@@ -147,7 +181,7 @@
           This is an unofficial extension and is not affiliated with Pushbullet
           Inc.
         </p>
-        <p class="version">Version <span id="version">1.5.22</span></p>
+        <p class="version">Version <span id="version">1.5.30</span></p>
         <p class="source">
           <a
             href="https://github.com/bogorad/pushbullet-chrome-extension"

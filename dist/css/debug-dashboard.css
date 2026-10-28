@@ -459,3 +459,13 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+
+/* Log window usability */
+.log-counts { font-size: 12px; color: #999; margin-bottom: 8px; }
+.logs-container.logs-nowrap .log-message,
+.logs-container.logs-nowrap .log-data { white-space: nowrap; overflow-x: auto; word-break: normal; }
+.logs-container:not(.logs-nowrap) .log-message { overflow-wrap: anywhere; }
+.logs-container.density-compact .log-entry { padding: 3px 6px; margin-bottom: 3px; font-size: 10px; line-height: 1.25; }
+.logs-container.density-compact .log-message { margin-bottom: 2px; }
+#jump-to-bottom-btn { margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

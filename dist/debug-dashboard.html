@@ -117,10 +117,31 @@
                    placeholder="Search message (regex supported)"
                  />
                </label>
+              <label>
+                Line wrap:
+                <input type="checkbox" id="log-wrap-toggle" checked />
+              </label>
+              <label>
+                Density:
+                <select id="log-density-select">
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </label>
+              <label>
+                Filtered logs:
+                <span>
+                  <button type="button" id="copy-filtered-btn" class="btn btn-secondary">Copy filtered</button>
+                  <button type="button" id="download-log-btn" class="btn btn-secondary">Download .log</button>
+                  <button type="button" id="download-json-btn" class="btn btn-secondary">Download .json</button>
+                </span>
+              </label>
              </div>
+            <div id="log-counts" class="log-counts" aria-live="polite">Showing 0 of 0</div>
             <div id="logs-container" class="logs-container">
               <p class="loading">Loading logs...</p>
             </div>
+            <button type="button" id="jump-to-bottom-btn" class="btn btn-primary" hidden>Jump to bottom</button>
           </div>
 
           <!-- Performance Tab -->

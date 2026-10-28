@@ -61,6 +61,18 @@
         await chrome.storage.local.set({ apiKey: key });
       }
     }
+    async getJevApiKey() {
+      const result = await chrome.storage.local.get(["jevApiKey"]);
+      const v = getStringOrNull(result.jevApiKey);
+      return v && v.trim().length > 0 ? v : null;
+    }
+    async setJevApiKey(key) {
+      if (key === null || key.trim().length === 0) {
+        await chrome.storage.local.remove(["jevApiKey"]);
+      } else {
+        await chrome.storage.local.set({ jevApiKey: key });
+      }
+    }
     /**
      * Get Device Identifier from local storage
      */

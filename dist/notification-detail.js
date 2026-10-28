@@ -42,10 +42,10 @@
   }
 
   // src/lib/verification-code.ts
-  var VERIFICATION_CODE_TOKEN = "[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}";
+  var VERIFICATION_CODE_TOKEN = "[A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\\d{6}|\\d{4}";
   var TOKEN_BOUNDARY_PATTERN = `(^|[^A-Za-z0-9-])(${VERIFICATION_CODE_TOKEN})(?![A-Za-z0-9-])`;
   var MAX_CONTEXT_CHARS = 48;
-  var VERIFICATION_WORD_SOURCE = "(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp)\\b|\\bone[-\\s]?time\\s+password\\b)";
+  var VERIFICATION_WORD_SOURCE = "(?:(?:\\b(?:verification|security|login|auth(?:entication)?|sms)\\s+)?\\b(?:code|passcode|otp|pin|c[o\xF3]digo|clave|contrase[n\xF1]a)\\b|\\bone[-\\s]?time\\s+password\\b)";
   var DIRECT_LEADING_CONTEXT_PATTERN = new RegExp(
     `${VERIFICATION_WORD_SOURCE}(?:\\s*(?:is|it|as|=|:)?\\s*){0,2}$`,
     "i"
@@ -95,22 +95,33 @@
     );
     return DIRECT_TRAILING_CONTEXT_PATTERN.test(directAfter);
   }
-  function extractVerificationCode(title, message) {
+  var NUMERIC_TOKEN_PATTERN = /^[\d-]+$/;
+  function analyzeVerificationCode(title, message) {
     const fullText = `${title} ${message}`;
     const tokenPattern = new RegExp(TOKEN_BOUNDARY_PATTERN, "g");
+    const qualifiedCandidates = [];
+    const numericCandidates = [];
     for (const match of fullText.matchAll(tokenPattern)) {
       const prefix = match[1] ?? "";
-      const code = match[2];
-      if (!code || match.index === void 0) {
+      const code2 = match[2];
+      if (!code2 || match.index === void 0) {
         continue;
       }
+      if (NUMERIC_TOKEN_PATTERN.test(code2) && !numericCandidates.includes(code2)) {
+        numericCandidates.push(code2);
+      }
       const tokenStart = match.index + prefix.length;
-      const tokenEnd = tokenStart + code.length;
-      if (hasVerificationContext(fullText, tokenStart, tokenEnd)) {
-        return code;
+      const tokenEnd = tokenStart + code2.length;
+      if (hasVerificationContext(fullText, tokenStart, tokenEnd) && !qualifiedCandidates.includes(code2)) {
+        qualifiedCandidates.push(code2);
       }
     }
-    return null;
+    const code = qualifiedCandidates[0] ?? null;
+    const ambiguous = qualifiedCandidates.length === 0 && numericCandidates.length > 0 || qualifiedCandidates.length > 1;
+    return { code, qualifiedCandidates, numericCandidates, ambiguous };
+  }
+  function extractVerificationCode(title, message) {
+    return analyzeVerificationCode(title, message).code;
   }
 
   // src/notification-detail/index.ts

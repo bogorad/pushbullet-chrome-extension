@@ -14,6 +14,10 @@ On any extension change (code or shipped files), bump the patch version (`zz` in
 - `npm run lint` - Lint TypeScript files with ESLint
 - `npm run lint:fix` - Auto-fix ESLint issues
 - `node ./scripts/bump-patch.cjs` - Bump patch level
+- **Never stale `dist/`:** `dist/` is tracked and shipped; the browser runs `dist/`, not `src/`.
+- After any source change, run `npm run build` and KEEP the `dist/` changes; commit them with the source.
+- Never revert build output as dirt; a dirty `dist/` after a build is the expected shipped result.
+- Before commit, `tests/scripts/dist-jev-shipped.test.ts` must pass.
 
 ## Test Commands
 

@@ -70,6 +70,18 @@
         await chrome.storage.local.set({ apiKey: key });
       }
     }
+    async getJevApiKey() {
+      const result = await chrome.storage.local.get(["jevApiKey"]);
+      const v = getStringOrNull(result.jevApiKey);
+      return v && v.trim().length > 0 ? v : null;
+    }
+    async setJevApiKey(key) {
+      if (key === null || key.trim().length === 0) {
+        await chrome.storage.local.remove(["jevApiKey"]);
+      } else {
+        await chrome.storage.local.set({ jevApiKey: key });
+      }
+    }
     /**
      * Get Device Identifier from local storage
      */
@@ -368,6 +380,464 @@
   };
   var storageRepository = new ChromeStorageRepository();
 
+  // src/lib/logging/index.ts
+  var STORAGE_KEY = "persistentDebugLogs";
+  var MAX_PERSISTENT_LOGS = 5e3;
+  var MAX_TRACKED_ERRORS = 500;
+  var REDACTED_VALUE = "[redacted]";
+  var SENSITIVE_KEY_PATTERN = /token|key|password|secret|authorization|body|title|url|email|phone|address|street|postal|zipcode|zip_code/i;
+  var URL_VALUE_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+  var EMAIL_VALUE_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  var PHONE_VALUE_PATTERN = /^\+?[0-9][0-9 .().-]{6,}[0-9]$/;
+  var DEBUG_CONFIG = {
+    enabled: false,
+    categories: {
+      WEBSOCKET: true,
+      NOTIFICATIONS: true,
+      API: true,
+      STORAGE: true,
+      GENERAL: true,
+      PERFORMANCE: true,
+      ERROR: true
+    },
+    logLevel: "DEBUG",
+    maxLogEntries: 1e3,
+    sanitizeData: true
+  };
+  var DebugLogger = class {
+    logs = [];
+    startTime = Date.now();
+    performanceMarkers = /* @__PURE__ */ new Map();
+    rehydratePromise = null;
+    /**
+     * Rehydrate logs from persistent storage on startup
+     * This method loads logs from the previous session
+     */
+    async rehydrate() {
+      if (!this.rehydratePromise) {
+        this.rehydratePromise = this.rehydrateFromStorage();
+      }
+      await this.rehydratePromise;
+    }
+    async rehydrateFromStorage() {
+      try {
+        const result = await chrome.storage.local.get(STORAGE_KEY);
+        if (result[STORAGE_KEY] && Array.isArray(result[STORAGE_KEY])) {
+          const storedLogs = result[STORAGE_KEY];
+          this.logs = [...storedLogs, ...this.logs].slice(-MAX_PERSISTENT_LOGS);
+          console.log(
+            `[Logger] Rehydrated ${storedLogs.length} logs from persistent storage.`
+          );
+        }
+      } catch (error) {
+        console.error("[Logger] Failed to rehydrate logs:", error);
+      }
+    }
+    /**
+     * Flush logs to persistent storage
+     * This method saves the current in-memory logs with circular buffer logic
+     */
+    async flush() {
+      try {
+        if (this.logs.length > MAX_PERSISTENT_LOGS) {
+          this.logs = this.logs.slice(this.logs.length - MAX_PERSISTENT_LOGS);
+        }
+        await chrome.storage.local.set({ [STORAGE_KEY]: this.logs });
+      } catch (error) {
+        console.error("[Logger] Failed to flush logs to storage:", error);
+      }
+    }
+    /**
+     * Clear all logs from memory and persistent storage
+     * This method is called when the user clicks "Clear All Logs" in the debug dashboard
+     */
+    async clearLogs() {
+      this.logs = [];
+      await this.flush();
+      this.log("GENERAL", "INFO", "Log buffer has been cleared by the user.");
+    }
+    sanitize(data, seen = /* @__PURE__ */ new WeakSet()) {
+      if (!DEBUG_CONFIG.sanitizeData) return data;
+      if (typeof data === "string") {
+        if (URL_VALUE_PATTERN.test(data) || EMAIL_VALUE_PATTERN.test(data) || PHONE_VALUE_PATTERN.test(data)) {
+          return REDACTED_VALUE;
+        }
+        if (data.length > 20 && /^[a-zA-Z0-9_-]+$/.test(data)) {
+          return data.substring(0, 4) + "***" + data.substring(data.length - 4);
+        }
+        return data;
+      }
+      if (data && typeof data === "object") {
+        if (seen.has(data)) return "[circular]";
+        seen.add(data);
+        if (Array.isArray(data)) {
+          return data.map((item) => this.sanitize(item, seen));
+        }
+        const sanitized = {};
+        for (const [key, value] of Object.entries(data)) {
+          sanitized[key] = SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_VALUE : this.sanitize(value, seen);
+        }
+        return sanitized;
+      }
+      return data;
+    }
+    getTimestamp() {
+      const now = /* @__PURE__ */ new Date();
+      const elapsed = Date.now() - this.startTime;
+      return `${now.toISOString()} (+${elapsed}ms)`;
+    }
+    /**
+     * Format data for console output to avoid [object Object]
+     */
+    formatDataForConsole(data) {
+      if (typeof data === "object" && data !== null) {
+        try {
+          return JSON.stringify(data, null, 2);
+        } catch {
+          return String(data);
+        }
+      }
+      return String(data ?? "null");
+    }
+    /**
+     * Format error for console output
+     */
+    formatErrorForConsole(error) {
+      if (!error) return "null";
+      if (error instanceof Error) {
+        return `${error.name}: ${error.message}`;
+      }
+      try {
+        return JSON.stringify(error, null, 2);
+      } catch {
+        return String(error);
+      }
+    }
+    log(category, level, message, data = null, error = null) {
+      if (!DEBUG_CONFIG.enabled || !DEBUG_CONFIG.categories[category]) return;
+      const timestamp = this.getTimestamp();
+      const entry = {
+        timestamp,
+        category,
+        level,
+        message,
+        data: data ? this.sanitize(data) : null,
+        error: error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        } : null
+      };
+      if (error && level === "ERROR") {
+        globalErrorTracker.trackError(
+          error,
+          { category, message, data: data ? this.sanitize(data) : null },
+          category
+        );
+      }
+      this.logs.push(entry);
+      const prefix = `[${category}:${level}] ${timestamp}`;
+      const full = `${prefix} ${message}`;
+      const sanitized = data ? this.sanitize(data) : null;
+      switch (level) {
+        case "ERROR":
+          if (sanitized && error) {
+            console.error(full);
+            console.error("  Data:", this.formatDataForConsole(sanitized));
+            console.error("  Error:", this.formatErrorForConsole(error));
+          } else if (sanitized) {
+            console.error(full);
+            console.error("  Data:", this.formatDataForConsole(sanitized));
+          } else if (error) {
+            console.error(full);
+            console.error("  Error:", this.formatErrorForConsole(error));
+          } else {
+            console.error(full);
+          }
+          break;
+        case "WARN":
+          if (sanitized) {
+            console.warn(full);
+            console.warn("  Data:", this.formatDataForConsole(sanitized));
+          } else {
+            console.warn(full);
+          }
+          break;
+        case "INFO":
+          if (sanitized) {
+            console.info(full);
+            console.info("  Data:", this.formatDataForConsole(sanitized));
+          } else {
+            console.info(full);
+          }
+          break;
+        default:
+          if (sanitized) {
+            console.log(full);
+            console.log("  Data:", sanitized);
+          } else {
+            console.log(full);
+          }
+      }
+    }
+    websocket(level, message, data, error) {
+      this.log("WEBSOCKET", level, message, data, error || null);
+    }
+    notifications(level, message, data, error) {
+      this.log("NOTIFICATIONS", level, message, data, error || null);
+    }
+    api(level, message, data, error) {
+      this.log("API", level, message, data, error || null);
+    }
+    storage(level, message, data, error) {
+      this.log("STORAGE", level, message, data, error || null);
+    }
+    general(level, message, data, error) {
+      this.log("GENERAL", level, message, data, error || null);
+    }
+    performance(level, message, data, error) {
+      this.log("PERFORMANCE", level, message, data, error || null);
+    }
+    error(message, data, error) {
+      this.log("ERROR", "ERROR", message, data, error || null);
+    }
+    startTimer(name) {
+      this.performanceMarkers.set(name, Date.now());
+      this.performance("DEBUG", `Timer started: ${name}`);
+    }
+    endTimer(name) {
+      const start = this.performanceMarkers.get(name);
+      if (start) {
+        const duration = Date.now() - start;
+        this.performanceMarkers.delete(name);
+        this.performance("INFO", `Timer ended: ${name}`, {
+          duration: `${duration}ms`
+        });
+        return duration;
+      }
+      this.performance("WARN", `Timer not found: ${name}`);
+      return null;
+    }
+    getRecentLogs(count = 50, category = null) {
+      let logs = this.logs;
+      if (category) logs = logs.filter((l) => l.category === category);
+      return logs.slice(-count);
+    }
+    exportLogs() {
+      return {
+        config: DEBUG_CONFIG,
+        logs: this.logs,
+        summary: {
+          totalLogs: this.logs.length,
+          categories: Object.keys(DEBUG_CONFIG.categories).reduce((acc, cat) => {
+            acc[cat] = this.logs.filter((l) => l.category === cat).length;
+            return acc;
+          }, {}),
+          errors: this.logs.filter((l) => l.level === "ERROR").length
+        }
+      };
+    }
+  };
+  var debugLogger = new DebugLogger();
+  debugLogger.rehydrate();
+  var DebugConfigManager = class {
+    async loadConfig() {
+      try {
+        debugLogger.storage("DEBUG", "Loading debug configuration from storage");
+        const result = await chrome.storage.local.get(["debugConfig"]);
+        if (result.debugConfig) {
+          Object.assign(DEBUG_CONFIG, result.debugConfig);
+          debugLogger.storage(
+            "INFO",
+            "Debug configuration loaded from storage",
+            DEBUG_CONFIG
+          );
+        } else {
+          debugLogger.storage(
+            "INFO",
+            "No stored debug configuration found - using defaults",
+            DEBUG_CONFIG
+          );
+        }
+      } catch (error) {
+        debugLogger.storage(
+          "ERROR",
+          "Failed to load debug configuration",
+          null,
+          error
+        );
+      }
+    }
+    async saveConfig() {
+      try {
+        debugLogger.storage("DEBUG", "Saving debug configuration to storage");
+        await chrome.storage.local.set({ debugConfig: DEBUG_CONFIG });
+        debugLogger.storage("INFO", "Debug configuration saved to storage");
+      } catch (error) {
+        debugLogger.storage(
+          "ERROR",
+          "Failed to save debug configuration",
+          null,
+          error
+        );
+      }
+    }
+    async updateConfig(updates) {
+      Object.assign(DEBUG_CONFIG, updates);
+      await this.saveConfig();
+      debugLogger.general("INFO", "Debug configuration updated", updates);
+    }
+    toggleCategory(category) {
+      if (Object.prototype.hasOwnProperty.call(DEBUG_CONFIG.categories, category)) {
+        DEBUG_CONFIG.categories[category] = !DEBUG_CONFIG.categories[category];
+        void this.saveConfig();
+        debugLogger.general("INFO", `Debug category ${category} toggled`, {
+          category,
+          enabled: DEBUG_CONFIG.categories[category]
+        });
+      }
+    }
+    setLogLevel(level) {
+      const valid = ["DEBUG", "INFO", "WARN", "ERROR"];
+      if (valid.includes(level)) {
+        DEBUG_CONFIG.logLevel = level;
+        void this.saveConfig();
+        debugLogger.general("INFO", `Debug log level set to ${level}`);
+      }
+    }
+    getConfig() {
+      return { ...DEBUG_CONFIG };
+    }
+    resetConfig() {
+      const def = {
+        enabled: true,
+        categories: {
+          WEBSOCKET: true,
+          NOTIFICATIONS: true,
+          API: true,
+          STORAGE: true,
+          GENERAL: true,
+          PERFORMANCE: true,
+          ERROR: true
+        },
+        logLevel: "DEBUG",
+        maxLogEntries: 1e3,
+        sanitizeData: true
+      };
+      Object.assign(DEBUG_CONFIG, def);
+      void this.saveConfig();
+      debugLogger.general("INFO", "Debug configuration reset to defaults");
+    }
+  };
+  var debugConfigManager = new DebugConfigManager();
+  var GlobalErrorTracker = class {
+    errors = [];
+    errorCounts = /* @__PURE__ */ new Map();
+    criticalErrors = [];
+    trackError(error, context = {}, category = "GENERAL") {
+      const entry = {
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        category,
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        context
+      };
+      this.errors.push(entry);
+      if (this.errors.length > MAX_TRACKED_ERRORS) {
+        this.errors = this.errors.slice(-MAX_TRACKED_ERRORS);
+      }
+      const count = (this.errorCounts.get(category) || 0) + 1;
+      this.errorCounts.set(category, count);
+      if (count >= 5) {
+        this.criticalErrors.push(entry);
+        if (this.criticalErrors.length > MAX_TRACKED_ERRORS) {
+          this.criticalErrors = this.criticalErrors.slice(-MAX_TRACKED_ERRORS);
+        }
+      }
+    }
+    getErrorSummary() {
+      const byCat = {};
+      this.errorCounts.forEach((v, k) => byCat[k] = v);
+      return {
+        total: this.errors.length,
+        byCategory: byCat,
+        critical: this.criticalErrors.length
+      };
+    }
+    exportErrorData() {
+      return { errors: this.errors.slice(-200), summary: this.getErrorSummary() };
+    }
+  };
+  var globalErrorTracker = new GlobalErrorTracker();
+  try {
+    self.addEventListener("error", (event) => {
+      globalErrorTracker.trackError(
+        event.error || new Error(event.message),
+        {
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+          type: "unhandled"
+        },
+        "GLOBAL"
+      );
+    });
+  } catch (error) {
+    console.warn("Failed to set up global unhandled rejection handler:", error);
+  }
+  try {
+    self.addEventListener(
+      "unhandledrejection",
+      (event) => {
+        globalErrorTracker.trackError(
+          event.reason || new Error("Unhandled promise rejection"),
+          { type: "unhandled_promise" },
+          "GLOBAL"
+        );
+      }
+    );
+  } catch {
+  }
+
+  // src/app/api/jev.ts
+  var JEV_TIMEOUT_MS = 8e3;
+  var JEV_MODELS_ENDPOINT = "https://api.typesafe.ai/v1/models";
+  async function verifyJevApiKey(apiKey, options = {}) {
+    const candidate = apiKey.trim();
+    if (candidate.length === 0) {
+      return { kind: "invalid", status: 0 };
+    }
+    const fetchFn = options.fetchFn ?? fetch;
+    const timeoutMs = options.timeoutMs ?? JEV_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchFn(JEV_MODELS_ENDPOINT, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${candidate}` },
+        signal: controller.signal
+      });
+      if (response.ok) {
+        return { kind: "valid" };
+      }
+      if (response.status === 401 || response.status === 403) {
+        debugLogger.api("WARN", "Jev API key verification rejected", { status: response.status });
+        return { kind: "invalid", status: response.status };
+      }
+      debugLogger.api("WARN", "Jev API key verification failed", { status: response.status });
+      return { kind: "network-error" };
+    } catch (error) {
+      if (controller.signal.aborted || typeof error === "object" && error !== null && "name" in error && error.name === "AbortError") {
+        return { kind: "timeout" };
+      }
+      debugLogger.api("WARN", "Jev API key verification request failed", {});
+      return { kind: "network-error" };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // src/options/index.ts
   var deviceNicknameInput = getElementById("device-nickname");
   var updateNicknameButton = getElementById("update-nickname");
@@ -376,6 +846,9 @@
   var autoOpenLinksOnReconnectCheckbox = getElementById("auto-open-links-on-reconnect");
   var encryptionPasswordInput = getElementById("encryption-password");
   var debugModeCheckbox = getElementById("debug-mode");
+  var jevApiKeyInput = getElementById("jev-api-key");
+  var jevApiKeyStatus = getElementById("jev-api-key-status");
+  var jevApiKeyDot = getElementById("jev-api-key-dot");
   var saveSettingsButton = getElementById("save-settings");
   var resetSettingsButton = getElementById("reset-settings");
   var forceWakeBtn = getElementById("force-wake");
@@ -404,12 +877,21 @@
       const autoOpenLinksOnReconnect = await storageRepository.getAutoOpenLinksOnReconnect();
       const onlyThisDevice = await storageRepository.getOnlyThisDevice();
       const encryptionPassword = await storageRepository.getEncryptionPassword();
+      const jevApiKey = await storageRepository.getJevApiKey();
       deviceNicknameInput.value = deviceNickname || DEFAULT_SETTINGS.deviceNickname;
       notificationTimeoutInput.value = Math.round(notificationTimeout / 1e3).toString();
       autoOpenLinksCheckbox.checked = autoOpenLinks;
       autoOpenLinksOnReconnectCheckbox.checked = autoOpenLinksOnReconnect;
       onlyThisDeviceCheckbox.checked = onlyThisDevice;
       encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
+      jevApiKeyInput.value = jevApiKey || "";
+      storedJevApiKey = jevApiKey && jevApiKey.trim().length > 0 ? jevApiKey : null;
+      if (storedJevApiKey) {
+        setJevKeyStatus("neutral", "Saved Jev API key \u2014 verifying\u2026");
+        void verifyAndStoreJevApiKey(storedJevApiKey);
+      } else {
+        setJevKeyStatus("neutral", "");
+      }
       debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
       const manifest = chrome.runtime.getManifest();
       versionSpan.textContent = manifest.version;
@@ -506,6 +988,81 @@
       showStatus2("Error saving encryption password", "error");
     }
   }
+  var JEV_VERIFY_DEBOUNCE_MS = 500;
+  var jevVerifyTimer = null;
+  var jevVerifySeq = 0;
+  var storedJevApiKey = null;
+  var lastVerifiedJevApiKey = null;
+  function setJevKeyStatus(state, message) {
+    jevApiKeyStatus.textContent = message;
+    const dotState = state === "valid" ? "valid" : state === "invalid" || state === "error" ? "invalid" : state === "verifying" ? "pending" : "neutral";
+    jevApiKeyDot.className = `jev-key-dot jev-key-dot--${dotState}`;
+    const label = state === "valid" ? "Jev API key status: verified valid" : state === "invalid" ? "Jev API key status: invalid" : state === "error" ? "Jev API key status: verification failed" : state === "verifying" ? "Jev API key status: verifying" : "Jev API key status: not verified";
+    jevApiKeyDot.title = label;
+    jevApiKeyDot.setAttribute("aria-label", label);
+  }
+  async function verifyAndStoreJevApiKey(candidate) {
+    const seq = ++jevVerifySeq;
+    setJevKeyStatus("verifying", "Verifying Jev API key\u2026");
+    const result = await verifyJevApiKey(candidate);
+    if (seq !== jevVerifySeq) {
+      return false;
+    }
+    if (result.kind === "valid") {
+      try {
+        await storageRepository.setJevApiKey(candidate);
+      } catch {
+        setJevKeyStatus("error", "Jev API key verified but could not be saved locally.");
+        return false;
+      }
+      storedJevApiKey = candidate;
+      lastVerifiedJevApiKey = candidate;
+      setJevKeyStatus("valid", "Jev API key verified and saved locally.");
+      return true;
+    }
+    const unchanged = storedJevApiKey ? " Previously saved key unchanged." : " Key not saved.";
+    if (result.kind === "invalid") {
+      setJevKeyStatus("invalid", `Invalid Jev API key (HTTP ${result.status}).${unchanged}`);
+    } else if (result.kind === "timeout") {
+      setJevKeyStatus("error", `Jev API key verification timed out.${unchanged}`);
+    } else {
+      setJevKeyStatus("error", `Jev API key verification failed (network error).${unchanged}`);
+    }
+    return false;
+  }
+  function scheduleJevApiKeyVerification(delayMs) {
+    if (jevVerifyTimer !== null) {
+      clearTimeout(jevVerifyTimer);
+      jevVerifyTimer = null;
+    }
+    const current = jevApiKeyInput.value.trim();
+    if (current.length > 0 && current !== lastVerifiedJevApiKey) {
+      setJevKeyStatus("verifying", "Verifying Jev API key\u2026");
+    }
+    jevVerifyTimer = setTimeout(() => {
+      jevVerifyTimer = null;
+      const candidate = jevApiKeyInput.value.trim();
+      if (candidate.length === 0) {
+        jevVerifySeq += 1;
+        void (async () => {
+          try {
+            await storageRepository.setJevApiKey(null);
+            storedJevApiKey = null;
+            lastVerifiedJevApiKey = null;
+            setJevKeyStatus("neutral", "Jev API key cleared.");
+          } catch {
+            setJevKeyStatus("error", "Error clearing Jev API key.");
+          }
+        })();
+        return;
+      }
+      if (candidate === lastVerifiedJevApiKey && candidate === storedJevApiKey) {
+        setJevKeyStatus("valid", "Jev API key verified and saved locally.");
+        return;
+      }
+      void verifyAndStoreJevApiKey(candidate);
+    }, delayMs);
+  }
   async function saveDebugMode() {
     const enabled = debugModeCheckbox.checked;
     try {
@@ -541,6 +1098,18 @@
       await storageRepository.setNotificationTimeout(seconds * 1e3);
       await storageRepository.setAutoOpenLinks(autoOpen);
       await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
+      const jevKey = jevApiKeyInput.value.trim();
+      let jevOk = true;
+      if (jevKey.length === 0) {
+        await storageRepository.setJevApiKey(null);
+        storedJevApiKey = null;
+        lastVerifiedJevApiKey = null;
+        setJevKeyStatus("neutral", "Jev API key cleared.");
+      } else if (jevKey === storedJevApiKey && jevKey === lastVerifiedJevApiKey) {
+        setJevKeyStatus("valid", "Jev API key verified and saved locally.");
+      } else {
+        jevOk = await verifyAndStoreJevApiKey(jevKey);
+      }
       chrome.runtime.sendMessage({
         action: "settingsChanged" /* SETTINGS_CHANGED */,
         settings: {
@@ -555,6 +1124,10 @@
       });
       if (debugResponse?.success === false) {
         throw new Error(debugResponse.error || "Failed to update debug config");
+      }
+      if (!jevOk) {
+        showStatus2("Settings saved, but Jev API key was not verified and not saved", "error");
+        return;
       }
       showStatus2("All settings saved successfully!", "success");
     } catch (error) {
@@ -599,6 +1172,12 @@
     autoOpenLinksOnReconnectCheckbox.addEventListener("change", saveAutoOpenLinksOnReconnect);
     onlyThisDeviceCheckbox.addEventListener("change", saveOnlyThisDevice);
     encryptionPasswordInput.addEventListener("change", saveEncryptionPassword);
+    jevApiKeyInput.addEventListener("paste", () => scheduleJevApiKeyVerification(0));
+    jevApiKeyInput.addEventListener(
+      "input",
+      () => scheduleJevApiKeyVerification(JEV_VERIFY_DEBOUNCE_MS)
+    );
+    jevApiKeyInput.addEventListener("change", () => scheduleJevApiKeyVerification(0));
     debugModeCheckbox.addEventListener("change", saveDebugMode);
     loadSettings();
   }

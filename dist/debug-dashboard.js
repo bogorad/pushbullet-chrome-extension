@@ -9,28 +9,95 @@
     return element;
   }
 
-  // src/debug-dashboard/index.ts
-  var LOG_LEVEL_HIERARCHY = {
+  // src/debug-dashboard/log-view.ts
+  var MAX_RENDERED_LOGS = 1e3;
+  var LOG_PREFS_KEY = "pushbullet-debug-log-prefs";
+  var DEFAULT_PREFS = { category: "", level: "", search: "", wrap: true, density: "comfortable" };
+  var HIERARCHY = {
     DEBUG: ["DEBUG", "INFO", "WARN", "ERROR"],
-    // Show everything
     INFO: ["INFO", "WARN", "ERROR"],
-    // Show INFO and above
     WARN: ["WARN", "ERROR"],
-    // Show WARN and above
     ERROR: ["ERROR"]
-    // Show only ERROR
   };
   function shouldShowLogByLevel(logLevel, filterLevel) {
-    if (!filterLevel || filterLevel === "") {
-      return true;
-    }
-    const allowedLevels = LOG_LEVEL_HIERARCHY[filterLevel];
-    if (!allowedLevels) {
-      console.warn(`Unknown filter level: ${filterLevel}, showing all logs`);
-      return true;
-    }
-    return allowedLevels.includes(logLevel);
+    if (!filterLevel) return true;
+    const allowed = HIERARCHY[filterLevel];
+    return allowed ? allowed.includes(logLevel) : true;
   }
+  function filterLogs(logs, filters) {
+    let out = logs.filter((l) => (!filters.category || l.category === filters.category) && shouldShowLogByLevel(l.level, filters.level));
+    const q = filters.search.trim();
+    if (q) {
+      let re = null;
+      try {
+        re = new RegExp(q, "i");
+      } catch {
+        re = null;
+      }
+      out = out.filter((l) => {
+        const hay = `${l.category} ${l.level} ${l.message}`;
+        return re ? re.test(hay) : hay.toLowerCase().includes(q.toLowerCase());
+      });
+    }
+    return out;
+  }
+  function capLogs(logs, cap = MAX_RENDERED_LOGS) {
+    return cap > 0 && logs.length > cap ? logs.slice(logs.length - cap) : [...logs];
+  }
+  function parseLogTimestamp(ts) {
+    const iso = ts.split(" (")[0]?.trim() ?? ts;
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : t;
+  }
+  function formatRelativeTime(ts, now = Date.now()) {
+    const t = parseLogTimestamp(ts);
+    if (t === null) return ts;
+    const s = Math.max(0, Math.floor((now - t) / 1e3));
+    if (s < 5) return "just now";
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  }
+  function isNearBottom(m, threshold = 48) {
+    return m.scrollHeight - m.scrollTop - m.clientHeight <= threshold;
+  }
+  function formatLogLine(log) {
+    let line = `[${log.timestamp}] [${log.category}:${log.level}] ${log.message}`;
+    if (log.data !== void 0 && log.data !== null) {
+      try {
+        line += `
+  Data: ${JSON.stringify(log.data)}`;
+      } catch {
+        line += "\n  Data: [unserializable]";
+      }
+    }
+    if (log.error) line += `
+  Error: ${log.error.name}: ${log.error.message}`;
+    return line;
+  }
+  function logsToText(logs) {
+    return logs.map(formatLogLine).join("\n");
+  }
+  function parsePrefs(raw) {
+    if (!raw) return { ...DEFAULT_PREFS };
+    try {
+      const p = JSON.parse(raw);
+      return {
+        category: typeof p.category === "string" ? p.category : "",
+        level: typeof p.level === "string" && HIERARCHY[p.level] ? p.level : "",
+        search: typeof p.search === "string" ? p.search : "",
+        wrap: p.wrap !== false,
+        density: p.density === "compact" ? "compact" : "comfortable"
+      };
+    } catch {
+      return { ...DEFAULT_PREFS };
+    }
+  }
+
+  // src/debug-dashboard/index.ts
   var refreshBtn = getElementById("refresh-btn");
   var exportJsonBtn = getElementById("export-json-btn");
   var exportTextBtn = getElementById("export-text-btn");
@@ -51,6 +118,13 @@
   var logCountSelect = getElementById("log-count-select");
   var logMessageFilter = getElementById("log-message-filter");
   var logsContainer = getElementById("logs-container");
+  var logWrapToggle = getElementById("log-wrap-toggle");
+  var logDensitySelect = getElementById("log-density-select");
+  var copyFilteredBtn = getElementById("copy-filtered-btn");
+  var downloadLogBtn = getElementById("download-log-btn");
+  var downloadJsonBtn = getElementById("download-json-btn");
+  var logCountsEl = getElementById("log-counts");
+  var jumpToBottomBtn = getElementById("jump-to-bottom-btn");
   var websocketMetricsEl = getElementById("websocket-metrics");
   var qualityMetricsEl = getElementById("quality-metrics");
   var notificationMetricsEl = getElementById("notification-metrics");
@@ -62,6 +136,53 @@
   var systemInfoEl = getElementById("system-info");
   var autoRefreshInterval = null;
   var currentData = null;
+  var followTail = true;
+  var lastFilteredLogs = [];
+  function loadPrefs() {
+    try {
+      return parsePrefs(localStorage.getItem(LOG_PREFS_KEY));
+    } catch {
+      return parsePrefs(null);
+    }
+  }
+  function savePrefs() {
+    const prefs = {
+      category: logCategoryFilter.value,
+      level: logLevelFilter.value,
+      search: logMessageFilter.value,
+      wrap: logWrapToggle.checked,
+      density: logDensitySelect.value === "compact" ? "compact" : "comfortable"
+    };
+    try {
+      localStorage.setItem(LOG_PREFS_KEY, JSON.stringify(prefs));
+    } catch {
+    }
+  }
+  function applyPrefs() {
+    const prefs = loadPrefs();
+    logCategoryFilter.value = prefs.category;
+    logLevelFilter.value = prefs.level;
+    logMessageFilter.value = prefs.search;
+    logWrapToggle.checked = prefs.wrap;
+    logDensitySelect.value = prefs.density;
+    applyLogDisplayPrefs();
+  }
+  function applyLogDisplayPrefs() {
+    logsContainer.classList.toggle("logs-nowrap", !logWrapToggle.checked);
+    logsContainer.classList.toggle("density-compact", logDensitySelect.value === "compact");
+  }
+  function downloadFiltered(format) {
+    const content = format === "json" ? JSON.stringify(lastFilteredLogs, null, 2) : logsToText(lastFilteredLogs);
+    const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pushbullet-filtered-${Date.now()}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
   var VALID_LOG_LEVELS = /* @__PURE__ */ new Set(["DEBUG", "INFO", "WARN", "ERROR"]);
   function safeLogLevel(level) {
     if (VALID_LOG_LEVELS.has(level)) {
@@ -189,8 +310,34 @@
       loadDashboardData();
     });
     logMessageFilter.addEventListener("input", () => {
+      savePrefs();
       renderLogs();
     });
+    logCategoryFilter.addEventListener("change", savePrefs);
+    logLevelFilter.addEventListener("change", savePrefs);
+    logWrapToggle.addEventListener("change", () => {
+      savePrefs();
+      applyLogDisplayPrefs();
+    });
+    logDensitySelect.addEventListener("change", () => {
+      savePrefs();
+      applyLogDisplayPrefs();
+    });
+    logsContainer.addEventListener("scroll", () => {
+      followTail = isNearBottom(logsContainer);
+      jumpToBottomBtn.hidden = followTail;
+    });
+    jumpToBottomBtn.addEventListener("click", () => {
+      followTail = true;
+      jumpToBottomBtn.hidden = true;
+      logsContainer.scrollTop = logsContainer.scrollHeight;
+    });
+    copyFilteredBtn.addEventListener("click", () => {
+      const text = logsToText(lastFilteredLogs);
+      if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(() => showError("Failed to copy logs."));
+    });
+    downloadLogBtn.addEventListener("click", () => downloadFiltered("log"));
+    downloadJsonBtn.addEventListener("click", () => downloadFiltered("json"));
   }
   function switchTab(tabName) {
     tabBtns.forEach((btn) => {
@@ -280,39 +427,29 @@
     appendMetricRow(smsEphemeralSummaryEl, "History Failures", (stats.historyFetchFailed || 0).toString());
   }
   function renderLogs() {
+    const total = currentData?.logs?.length ?? 0;
     if (!currentData || !currentData.logs) {
+      lastFilteredLogs = [];
+      logCountsEl.textContent = "Showing 0 of 0";
       renderLoading(logsContainer, "No logs available");
       return;
     }
-    const categoryFilter = logCategoryFilter.value;
-    const levelFilter = logLevelFilter.value;
-    const messageFilter = logMessageFilter.value.trim();
-    let filteredLogs = currentData.logs;
-    if (categoryFilter) {
-      filteredLogs = filteredLogs.filter((log) => log.category === categoryFilter);
-    }
-    if (levelFilter) {
-      filteredLogs = filteredLogs.filter(
-        (log) => shouldShowLogByLevel(log.level, levelFilter)
-      );
-    }
-    if (messageFilter) {
-      try {
-        const regex = new RegExp(messageFilter, "i");
-        filteredLogs = filteredLogs.filter((log) => regex.test(log.message));
-      } catch {
-        const lowerFilter = messageFilter.toLowerCase();
-        filteredLogs = filteredLogs.filter(
-          (log) => log.message.toLowerCase().includes(lowerFilter)
-        );
-      }
-    }
-    if (filteredLogs.length === 0) {
+    const wasFollowing = followTail;
+    const prevScrollTop = logsContainer.scrollTop;
+    const filtered = filterLogs(currentData.logs, {
+      category: logCategoryFilter.value,
+      level: logLevelFilter.value,
+      search: logMessageFilter.value
+    });
+    const capped = capLogs(filtered);
+    lastFilteredLogs = capped;
+    logCountsEl.textContent = capped.length < filtered.length ? "Showing " + capped.length + " of " + filtered.length + " filtered (" + total + " total, render cap " + MAX_RENDERED_LOGS + ")" : "Showing " + filtered.length + " of " + total;
+    if (filtered.length === 0) {
       renderLoading(logsContainer, "No logs match the current filters");
       return;
     }
     const fragment = document.createDocumentFragment();
-    [...filteredLogs].reverse().forEach((log) => {
+    capped.forEach((log) => {
       const logLevel = safeLogLevel(log.level);
       const entry = document.createElement("div");
       entry.classList.add("log-entry", logLevel);
@@ -320,19 +457,20 @@
       header.className = "log-header";
       const category = document.createElement("span");
       category.className = "log-category";
-      category.textContent = `[${log.category}]`;
+      category.textContent = "[" + log.category + "]";
       const level = document.createElement("span");
       level.classList.add("log-level", logLevel);
       level.textContent = logLevel;
       header.append(category, level);
       const timestamp = document.createElement("div");
       timestamp.className = "log-timestamp";
-      timestamp.textContent = log.timestamp;
+      timestamp.textContent = formatRelativeTime(log.timestamp);
+      timestamp.title = log.timestamp;
       const message = document.createElement("div");
       message.className = "log-message";
       message.textContent = log.message;
       entry.append(header, timestamp, message);
-      if (log.data !== void 0) {
+      if (log.data !== void 0 && log.data !== null) {
         const data = document.createElement("div");
         data.className = "log-data";
         data.textContent = stringifyForDisplay(log.data);
@@ -341,12 +479,19 @@
       if (log.error) {
         const error = document.createElement("div");
         error.classList.add("log-data", "error");
-        error.textContent = `${log.error.name}: ${log.error.message}`;
+        error.textContent = log.error.name + ": " + log.error.message;
         entry.appendChild(error);
       }
       fragment.appendChild(entry);
     });
     logsContainer.replaceChildren(fragment);
+    if (wasFollowing) {
+      logsContainer.scrollTop = logsContainer.scrollHeight;
+      jumpToBottomBtn.hidden = true;
+    } else {
+      logsContainer.scrollTop = prevScrollTop;
+      jumpToBottomBtn.hidden = false;
+    }
   }
   function formatDuration(ms) {
     if (!ms || ms === 0) return "0s";
@@ -641,6 +786,7 @@
   }
   function init() {
     console.log("Debug Dashboard loaded");
+    applyPrefs();
     setupEventListeners();
     loadDashboardData();
     if (autoRefreshToggle.checked) {

@@ -217,6 +217,44 @@ button {
   border: 1px solid #f5c6cb;
 }
 
+/* Jev API key verification status */
+.jev-key-status {
+  font-size: 13px;
+  margin-top: 6px;
+  min-height: 1em;
+}
+
+.jev-key-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+  background: #adb5bd;
+}
+
+.jev-key-dot--neutral {
+  background: #adb5bd;
+}
+
+.jev-key-dot--pending {
+  background: #ffc107;
+  animation: jev-dot-pulse 1s ease-in-out infinite;
+}
+
+.jev-key-dot--valid {
+  background: #28a745;
+}
+
+.jev-key-dot--invalid {
+  background: #dc3545;
+}
+
+@keyframes jev-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* Footer */
 footer {
   background: #f8f9fa;
