@@ -448,6 +448,43 @@ export async function refreshPushes(
   }
 }
 
+let missedPushCatchUpInFlight: Promise<void> | null = null;
+
+/**
+ * Catch up on pushes missed while disconnected, via the incremental
+ * refreshPushes() path. Single-flight; skips without side effects when
+ * the API key or a persisted cursor is not yet hydrated (no seed run).
+ */
+export function runMissedPushCatchUp(
+  notificationDataStore?: Map<string, Push>,
+): Promise<void> {
+  if (missedPushCatchUpInFlight) {
+    return missedPushCatchUpInFlight;
+  }
+  missedPushCatchUpInFlight = (async (): Promise<void> => {
+    try {
+      await hydrateBackgroundConfig();
+      if (!getApiKey()) {
+        debugLogger.general('WARN', 'Missed-push catch-up skipped - no API key');
+        return;
+      }
+      const cutoff =
+        sessionCache.lastModifiedCutoff ||
+        (await storageRepository.getLastModifiedCutoff());
+      if (!cutoff) {
+        debugLogger.general('WARN', 'Missed-push catch-up skipped - no cursor');
+        return;
+      }
+      await refreshPushes(notificationDataStore);
+    } catch (error) {
+      debugLogger.general('ERROR', 'Missed-push catch-up failed', {}, error as Error);
+    } finally {
+      missedPushCatchUpInFlight = null;
+    }
+  })();
+  return missedPushCatchUpInFlight;
+}
+
 /**
  * Counter for notification IDs
  */

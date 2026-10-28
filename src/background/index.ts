@@ -64,6 +64,7 @@ import {
 } from "./state";
 import {
   refreshPushes,
+  runMissedPushCatchUp,
   showPushNotification,
   checkPollingMode,
   stopPollingMode,
@@ -969,9 +970,12 @@ globalEventBus.on("websocket:connected", async () => {
     "WebSocket connected - post-connect tasks starting",
   );
   await stateMachineReady;
-  stateMachine.transition("WS_CONNECTED");
+  await stateMachine.transition("WS_CONNECTED");
   void runPostConnect();
   void maybeRunReconnectAutoOpen();
+  if (stateMachine.isInState(ServiceWorkerState.READY)) {
+    void runMissedPushCatchUp(notificationDataStore);
+  }
 });
 
 globalEventBus.on("websocket:disconnected", async () => {

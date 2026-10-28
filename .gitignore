@@ -9,7 +9,6 @@
 .tmp/
 .vitest/
 coverage/
-flake.lock
 node_modules/
 package-lock.json
 pushbullet-debug-*.json

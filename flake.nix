@@ -35,22 +35,18 @@
             echo "Node.js: $(node --version)"
             echo "npm: $(npm --version)"
             echo "esbuild: $(esbuild --version)"
-            # Ensure npm dependencies are installed
-            if [ ! -d node_modules ]; then
-              echo "Installing npm dependencies..."
-              ${pkgs.nodejs_24}/bin/npm install || { echo "Error: npm install failed"; exit 1; }
-            fi
-            # Ensure vitest is installed
-            ${pkgs.nodejs_24}/bin/npm install vitest 2>/dev/null || \
-              { echo "Error: npm install vitest failed"; exit 1; }
             # Add node_modules/.bin to PATH
             export PATH=$PWD/node_modules/.bin:$PATH
-            # Verify vitest installation
+            # Install project dependencies from the lock file only when absent.
+            # Never block shell load: warn instead of exiting.
+            if [ ! -d node_modules ]; then
+              echo "Installing npm dependencies from package-lock.json..."
+              npm ci || echo "Warning: npm ci failed; run 'npm ci' manually. Continuing without dependencies."
+            fi
             if command -v vitest >/dev/null 2>&1; then
               echo "Vitest: $(vitest --version)"
             else
-              echo "Error: vitest not found after installation"
-              exit 1
+              echo "Warning: vitest not found; run 'npm ci' to install dependencies."
             fi
             echo "Environment ready. Run 'vitest run' or 'npm test' to execute tests."
           '';
