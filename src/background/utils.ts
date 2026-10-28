@@ -19,6 +19,7 @@ import { createNotificationWithTimeout } from "../app/notifications";
 import { globalEventBus } from "../lib/events/event-bus";
 import { isTrustedImageUrl } from "../lib/security/trusted-image-url";
 import { extractVerificationCode } from "../lib/verification-code";
+import { extractVerificationCodeWithJevFallback } from "../lib/verification-code-jev";
 import { ServiceWorkerState, type ServiceWorkerStateMachine } from "./state-machine";
 import { maybeAutoOpenLinkWithDismiss } from "./processing";
 import { summarizePushForLog } from "../app/push-summary";
@@ -183,6 +184,11 @@ function getPushDisplayText(push: Push): PushDisplayText {
 export function getPushVerificationCode(push: Push): string | null {
   const { title, message } = getPushDisplayText(push);
   return extractVerificationCode(title, message);
+}
+
+export async function getPushVerificationCodeAsync(push: Push): Promise<string | null> {
+  const { title, message } = getPushDisplayText(push);
+  return extractVerificationCodeWithJevFallback(title, message);
 }
 
 function getBase64DecodedLength(base64: string): number {
@@ -826,7 +832,7 @@ export async function showPushNotification(
       finalNotificationOptions.imageUrl = notificationOptions.imageUrl;
     }
 
-    const verificationCode = extractVerificationCode(
+    const verificationCode = await extractVerificationCodeWithJevFallback(
       finalNotificationOptions.title,
       finalNotificationOptions.message,
     );

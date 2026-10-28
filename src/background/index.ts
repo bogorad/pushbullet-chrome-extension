@@ -73,7 +73,7 @@ import {
   updatePopupConnectionState,
   pushLink,
   pushNote,
-  getPushVerificationCode,
+  getPushVerificationCodeAsync,
 } from "./utils";
 import { autoOpenOfflineLinks } from "./links";
 import { orchestrateInitialization } from "./startup";
@@ -2270,18 +2270,17 @@ chrome.notifications.onButtonClicked.addListener(
     }
 
     const push = notificationDataStore.get(notificationId);
-    const code = push ? getPushVerificationCode(push) : null;
-    if (!code) {
-      debugLogger.notifications(
-        "WARN",
-        "No verification code found for notification button",
-        { notificationId },
-      );
-      openNotificationDetailWindow(notificationId);
-      return;
-    }
-
     void (async () => {
+      const code = push ? await getPushVerificationCodeAsync(push) : null;
+      if (!code) {
+        debugLogger.notifications(
+          "WARN",
+          "No verification code found for notification button",
+          { notificationId },
+        );
+        openNotificationDetailWindow(notificationId);
+        return;
+      }
       const copied = await writeTextToClipboard(code);
       if (!copied) {
         openNotificationDetailWindow(notificationId);

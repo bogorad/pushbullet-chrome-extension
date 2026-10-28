@@ -282,6 +282,13 @@ vi.mock('../../src/background/utils', () => ({
       ? text.match(/\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/)?.[1] ?? null
       : null;
   }),
+  getPushVerificationCodeAsync: vi.fn(async (push: Push) => {
+    const sms = push.type === 'sms_changed' ? push.notifications?.[0] : null;
+    const text = `${sms?.title ?? ''} ${sms?.body ?? ''}`;
+    return text.toLowerCase().includes('code')
+      ? text.match(/\b([A-Za-z0-9]{3,4}-[A-Za-z0-9]{3,4}|\d{6})\b/)?.[1] ?? null
+      : null;
+  }),
   pushLink: vi.fn(),
   pushNote: vi.fn(),
   refreshPushes: vi.fn().mockResolvedValue(undefined),

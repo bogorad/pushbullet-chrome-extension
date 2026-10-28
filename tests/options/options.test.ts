@@ -17,6 +17,8 @@ const storageRepositoryMock = {
   setAutoOpenLinksOnReconnect: vi.fn(),
   setOnlyThisDevice: vi.fn(),
   setEncryptionPassword: vi.fn(),
+  getJevApiKey: vi.fn(),
+  setJevApiKey: vi.fn(),
 };
 
 vi.mock('../../src/infrastructure/storage/storage.repository', () => ({
@@ -68,6 +70,8 @@ describe('options message actions', () => {
     storageRepositoryMock.setAutoOpenLinksOnReconnect.mockResolvedValue(undefined);
     storageRepositoryMock.setOnlyThisDevice.mockResolvedValue(undefined);
     storageRepositoryMock.setEncryptionPassword.mockResolvedValue(undefined);
+    storageRepositoryMock.getJevApiKey.mockResolvedValue('');
+    storageRepositoryMock.setJevApiKey.mockResolvedValue(undefined);
   });
 
   afterAll(() => {
@@ -150,6 +154,24 @@ describe('options message actions', () => {
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ action: 'encryptionPasswordChanged' }),
     );
+  });
+
+  it('loads and saves Jev API key via local storage repository', async () => {
+    storageRepositoryMock.getJevApiKey.mockResolvedValue('jev-loaded');
+    await loadOptions();
+    const input = document.getElementById('jev-api-key') as HTMLInputElement;
+    expect(input.type).toBe('password');
+    expect(input.value).toBe('jev-loaded');
+    input.value = 'jev-new';
+    changeInput(input);
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setJevApiKey).toHaveBeenCalledWith('jev-new');
+    });
+    input.value = '';
+    changeInput(input);
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setJevApiKey).toHaveBeenCalledWith(null);
+    });
   });
 
   it('uses UPDATE_DEBUG_CONFIG when debug mode changes', async () => {

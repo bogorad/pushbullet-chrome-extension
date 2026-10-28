@@ -68,9 +68,20 @@ function hasVerificationContext(
   return DIRECT_TRAILING_CONTEXT_PATTERN.test(directAfter);
 }
 
-export function extractVerificationCode(title: string, message: string): string | null {
+export interface VerificationCodeAnalysis {
+  code: string | null;
+  qualifiedCandidates: string[];
+  numericCandidates: string[];
+  ambiguous: boolean;
+}
+
+const NUMERIC_TOKEN_PATTERN = /^[\d-]+$/;
+
+export function analyzeVerificationCode(title: string, message: string): VerificationCodeAnalysis {
   const fullText = `${title} ${message}`;
   const tokenPattern = new RegExp(TOKEN_BOUNDARY_PATTERN, 'g');
+  const qualifiedCandidates: string[] = [];
+  const numericCandidates: string[] = [];
 
   for (const match of fullText.matchAll(tokenPattern)) {
     const prefix = match[1] ?? '';
@@ -78,13 +89,23 @@ export function extractVerificationCode(title: string, message: string): string 
     if (!code || match.index === undefined) {
       continue;
     }
-
+    if (NUMERIC_TOKEN_PATTERN.test(code) && !numericCandidates.includes(code)) {
+      numericCandidates.push(code);
+    }
     const tokenStart = match.index + prefix.length;
     const tokenEnd = tokenStart + code.length;
-    if (hasVerificationContext(fullText, tokenStart, tokenEnd)) {
-      return code;
+    if (hasVerificationContext(fullText, tokenStart, tokenEnd) && !qualifiedCandidates.includes(code)) {
+      qualifiedCandidates.push(code);
     }
   }
 
-  return null;
+  const code = qualifiedCandidates[0] ?? null;
+  const ambiguous =
+    (qualifiedCandidates.length === 0 && numericCandidates.length > 0) ||
+    qualifiedCandidates.length > 1;
+  return { code, qualifiedCandidates, numericCandidates, ambiguous };
+}
+
+export function extractVerificationCode(title: string, message: string): string | null {
+  return analyzeVerificationCode(title, message).code;
 }

@@ -47,3 +47,27 @@ describe('ChromeStorageRepository encryption password storage', () => {
     expect(chrome.storage.local.remove).toHaveBeenCalledWith(['encryptionPassword']);
   });
 });
+
+describe('ChromeStorageRepository Jev API key storage', () => {
+  it('stores Jev key in local storage only, sync untouched', async () => {
+    const repository = new ChromeStorageRepository();
+    await repository.setJevApiKey('jev-secret');
+    expect(chrome.storage.local.set).toHaveBeenCalledWith({ jevApiKey: 'jev-secret' });
+    expect(chrome.storage.sync.set).not.toHaveBeenCalled();
+    expect(chrome.storage.sync.get).not.toHaveBeenCalled();
+  });
+  it('reads Jev key from local storage only', async () => {
+    const repository = new ChromeStorageRepository();
+    chrome.storage.local.get.mockResolvedValue({ jevApiKey: 'jev-secret' });
+    await expect(repository.getJevApiKey()).resolves.toBe('jev-secret');
+    expect(chrome.storage.local.get).toHaveBeenCalledWith(['jevApiKey']);
+    expect(chrome.storage.sync.get).not.toHaveBeenCalled();
+  });
+  it('empty Jev key deletes from local storage', async () => {
+    const repository = new ChromeStorageRepository();
+    await repository.setJevApiKey(null);
+    expect(chrome.storage.local.remove).toHaveBeenCalledWith(['jevApiKey']);
+    await repository.setJevApiKey('  ');
+    expect(chrome.storage.local.set).not.toHaveBeenCalledWith(expect.objectContaining({ jevApiKey: expect.anything() }));
+  });
+});

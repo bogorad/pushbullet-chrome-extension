@@ -14,6 +14,7 @@ const autoOpenLinksCheckbox = getElementById<HTMLInputElement>('auto-open-links'
 const autoOpenLinksOnReconnectCheckbox = getElementById<HTMLInputElement>('auto-open-links-on-reconnect');
 const encryptionPasswordInput = getElementById<HTMLInputElement>('encryption-password');
 const debugModeCheckbox = getElementById<HTMLInputElement>('debug-mode');
+const jevApiKeyInput = getElementById<HTMLInputElement>('jev-api-key');
 const saveSettingsButton = getElementById<HTMLButtonElement>('save-settings');
 const resetSettingsButton = getElementById<HTMLButtonElement>('reset-settings');
 const forceWakeBtn = getElementById<HTMLButtonElement>('force-wake');
@@ -50,6 +51,7 @@ async function loadSettings(): Promise<void> {
     const autoOpenLinksOnReconnect = await storageRepository.getAutoOpenLinksOnReconnect();
     const onlyThisDevice = await storageRepository.getOnlyThisDevice();
     const encryptionPassword = await storageRepository.getEncryptionPassword();
+    const jevApiKey = await storageRepository.getJevApiKey();
 
     // Set device nickname
     deviceNicknameInput.value = deviceNickname || DEFAULT_SETTINGS.deviceNickname;
@@ -64,6 +66,7 @@ async function loadSettings(): Promise<void> {
 
     // Set encryption password
     encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
+    jevApiKeyInput.value = jevApiKey || '';
 
     // Set debug mode (note: debug config is complex, keeping simple for now)
     debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
@@ -205,6 +208,17 @@ async function saveEncryptionPassword(): Promise<void> {
   }
 }
 
+async function saveJevApiKey(): Promise<void> {
+  const key = jevApiKeyInput.value.trim();
+  try {
+    await storageRepository.setJevApiKey(key.length > 0 ? key : null);
+    showStatus(key.length > 0 ? 'Jev API key saved locally' : 'Jev API key cleared', 'success');
+  } catch (error) {
+    console.error('Error saving Jev API key:', error);
+    showStatus('Error saving Jev API key', 'error');
+  }
+}
+
 /**
  * Save debug mode setting
  */
@@ -256,6 +270,8 @@ async function saveAllSettings(): Promise<void> {
     await storageRepository.setNotificationTimeout(seconds * 1000);
     await storageRepository.setAutoOpenLinks(autoOpen);
     await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
+    const jevKey = jevApiKeyInput.value.trim();
+    await storageRepository.setJevApiKey(jevKey.length > 0 ? jevKey : null);
 
     // Notify background script
     chrome.runtime.sendMessage({
@@ -338,6 +354,7 @@ function init(): void {
   autoOpenLinksOnReconnectCheckbox.addEventListener('change', saveAutoOpenLinksOnReconnect);
   onlyThisDeviceCheckbox.addEventListener('change', saveOnlyThisDevice);
   encryptionPasswordInput.addEventListener('change', saveEncryptionPassword);
+  jevApiKeyInput.addEventListener('change', saveJevApiKey);
   debugModeCheckbox.addEventListener('change', saveDebugMode);
 
   // Load settings
