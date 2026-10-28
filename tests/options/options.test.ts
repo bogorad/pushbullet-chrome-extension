@@ -50,6 +50,17 @@ function changeInput(element: HTMLInputElement): void {
   element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+const fetchMock = vi.fn();
+
+function mockModelsResponse(status: number): void {
+  fetchMock.mockResolvedValue(
+    new Response(JSON.stringify({ data: [] }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  );
+}
+
 describe('options message actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,6 +83,9 @@ describe('options message actions', () => {
     storageRepositoryMock.setEncryptionPassword.mockResolvedValue(undefined);
     storageRepositoryMock.getJevApiKey.mockResolvedValue('');
     storageRepositoryMock.setJevApiKey.mockResolvedValue(undefined);
+    fetchMock.mockReset();
+    mockModelsResponse(200);
+    vi.stubGlobal('fetch', fetchMock);
   });
 
   afterAll(() => {
@@ -172,6 +186,110 @@ describe('options message actions', () => {
     await vi.waitFor(() => {
       expect(storageRepositoryMock.setJevApiKey).toHaveBeenCalledWith(null);
     });
+  });
+
+  it('verifies a pasted Jev key once, stores it on 200, and shows a green dot', async () => {
+    await loadOptions();
+    fetchMock.mockClear();
+    storageRepositoryMock.setJevApiKey.mockClear();
+    const input = document.getElementById('jev-api-key') as HTMLInputElement;
+    input.value = 'fake-pasted-key';
+    input.dispatchEvent(new Event('paste', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(storageRepositoryMock.setJevApiKey).toHaveBeenCalledWith('fake-pasted-key');
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.typesafe.ai/v1/models');
+    expect(init.method).toBe('GET');
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      'Bearer fake-pasted-key',
+    );
+    const dot = document.getElementById('jev-api-key-dot') as HTMLSpanElement;
+    expect(dot.className).toContain('jev-key-dot--valid');
+    expect(dot.getAttribute('aria-label')).toContain('verified valid');
+    expect(document.getElementById('jev-api-key-status')?.textContent).toContain('verified');
+  });
+
+  it('shows a red dot and does not store the key on 401', async () => {
+    await loadOptions();
+    mockModelsResponse(401);
+    fetchMock.mockClear();
+    storageRepositoryMock.setJevApiKey.mockClear();
+    const input = document.getElementById('jev-api-key') as HTMLInputElement;
+    input.value = 'fake-bad-key';
+    input.dispatchEvent(new Event('paste', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.getElementById('jev-api-key-status')?.textContent).toContain('Invalid');
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(storageRepositoryMock.setJevApiKey).not.toHaveBeenCalled();
+    const dot = document.getElementById('jev-api-key-dot') as HTMLSpanElement;
+    expect(dot.className).toContain('jev-key-dot--invalid');
+    expect(dot.getAttribute('aria-label')).toContain('invalid');
+  });
+
+  it('shows an error and does not store the key on network failure', async () => {
+    await loadOptions();
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    storageRepositoryMock.setJevApiKey.mockClear();
+    const input = document.getElementById('jev-api-key') as HTMLInputElement;
+    input.value = 'fake-unreachable-key';
+    input.dispatchEvent(new Event('paste', { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(document.getElementById('jev-api-key-status')?.textContent).toContain(
+        'network error',
+      );
+    });
+    expect(storageRepositoryMock.setJevApiKey).not.toHaveBeenCalled();
+    expect(document.getElementById('jev-api-key-dot')?.className).toContain(
+      'jev-key-dot--invalid',
+    );
+  });
+
+  it('verifies typed input after debounce and does not fetch for empty input', async () => {
+    await loadOptions();
+    fetchMock.mockClear();
+    storageRepositoryMock.setJevApiKey.mockClear();
+    const input = document.getElementById('jev-api-key') as HTMLInputElement;
+    input.value = 'fake-typed-key';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(
+      () => {
+        expect(storageRepositoryMock.setJevApiKey).toHaveBeenCalledWith('fake-typed-key');
+      },
+      { timeout: 3000 },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockClear();
+    storageRepositoryMock.setJevApiKey.mockClear();
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(
+      () => {
+        expect(storageRepositoryMock.setJevApiKey).toHaveBeenCalledWith(null);
+      },
+      { timeout: 3000 },
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.getElementById('jev-api-key-dot')?.className).toContain(
+      'jev-key-dot--neutral',
+    );
+  });
+
+  it('verifies a stored key on load and shows a green dot when valid', async () => {
+    storageRepositoryMock.getJevApiKey.mockResolvedValue('fake-stored-key');
+    await loadOptions();
+    await vi.waitFor(() => {
+      expect(document.getElementById('jev-api-key-dot')?.className).toContain(
+        'jev-key-dot--valid',
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.typesafe.ai/v1/models',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 
   it('uses UPDATE_DEBUG_CONFIG when debug mode changes', async () => {

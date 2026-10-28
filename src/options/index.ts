@@ -5,6 +5,7 @@
 import { getElementById, showStatus as showStatusUI } from '../lib/ui/dom';
 import { storageRepository } from '../infrastructure/storage/storage.repository';
 import { MessageAction } from '../types/domain';
+import { verifyJevApiKey } from '../app/api/jev';
 
 // DOM elements
 const deviceNicknameInput = getElementById<HTMLInputElement>('device-nickname');
@@ -15,6 +16,8 @@ const autoOpenLinksOnReconnectCheckbox = getElementById<HTMLInputElement>('auto-
 const encryptionPasswordInput = getElementById<HTMLInputElement>('encryption-password');
 const debugModeCheckbox = getElementById<HTMLInputElement>('debug-mode');
 const jevApiKeyInput = getElementById<HTMLInputElement>('jev-api-key');
+const jevApiKeyStatus = getElementById<HTMLParagraphElement>('jev-api-key-status');
+const jevApiKeyDot = getElementById<HTMLSpanElement>('jev-api-key-dot');
 const saveSettingsButton = getElementById<HTMLButtonElement>('save-settings');
 const resetSettingsButton = getElementById<HTMLButtonElement>('reset-settings');
 const forceWakeBtn = getElementById<HTMLButtonElement>('force-wake');
@@ -67,6 +70,13 @@ async function loadSettings(): Promise<void> {
     // Set encryption password
     encryptionPasswordInput.value = encryptionPassword || DEFAULT_SETTINGS.encryptionPassword;
     jevApiKeyInput.value = jevApiKey || '';
+    storedJevApiKey = jevApiKey && jevApiKey.trim().length > 0 ? jevApiKey : null;
+    if (storedJevApiKey) {
+      setJevKeyStatus('neutral', 'Saved Jev API key — verifying…');
+      void verifyAndStoreJevApiKey(storedJevApiKey);
+    } else {
+      setJevKeyStatus('neutral', '');
+    }
 
     // Set debug mode (note: debug config is complex, keeping simple for now)
     debugModeCheckbox.checked = DEFAULT_SETTINGS.debugMode;
@@ -208,15 +218,101 @@ async function saveEncryptionPassword(): Promise<void> {
   }
 }
 
-async function saveJevApiKey(): Promise<void> {
-  const key = jevApiKeyInput.value.trim();
-  try {
-    await storageRepository.setJevApiKey(key.length > 0 ? key : null);
-    showStatus(key.length > 0 ? 'Jev API key saved locally' : 'Jev API key cleared', 'success');
-  } catch (error) {
-    console.error('Error saving Jev API key:', error);
-    showStatus('Error saving Jev API key', 'error');
+type JevKeyStatusState = 'neutral' | 'verifying' | 'valid' | 'invalid' | 'error';
+
+const JEV_VERIFY_DEBOUNCE_MS = 500;
+let jevVerifyTimer: ReturnType<typeof setTimeout> | null = null;
+let jevVerifySeq = 0;
+let storedJevApiKey: string | null = null;
+let lastVerifiedJevApiKey: string | null = null;
+
+function setJevKeyStatus(state: JevKeyStatusState, message: string): void {
+  jevApiKeyStatus.textContent = message;
+  const dotState =
+    state === 'valid'
+      ? 'valid'
+      : state === 'invalid' || state === 'error'
+        ? 'invalid'
+        : state === 'verifying'
+          ? 'pending'
+          : 'neutral';
+  jevApiKeyDot.className = `jev-key-dot jev-key-dot--${dotState}`;
+  const label =
+    state === 'valid'
+      ? 'Jev API key status: verified valid'
+      : state === 'invalid'
+        ? 'Jev API key status: invalid'
+        : state === 'error'
+          ? 'Jev API key status: verification failed'
+          : state === 'verifying'
+            ? 'Jev API key status: verifying'
+            : 'Jev API key status: not verified';
+  jevApiKeyDot.title = label;
+  jevApiKeyDot.setAttribute('aria-label', label);
+}
+
+async function verifyAndStoreJevApiKey(candidate: string): Promise<boolean> {
+  const seq = ++jevVerifySeq;
+  setJevKeyStatus('verifying', 'Verifying Jev API key…');
+  const result = await verifyJevApiKey(candidate);
+  if (seq !== jevVerifySeq) {
+    return false;
   }
+  if (result.kind === 'valid') {
+    try {
+      await storageRepository.setJevApiKey(candidate);
+    } catch {
+      setJevKeyStatus('error', 'Jev API key verified but could not be saved locally.');
+      return false;
+    }
+    storedJevApiKey = candidate;
+    lastVerifiedJevApiKey = candidate;
+    setJevKeyStatus('valid', 'Jev API key verified and saved locally.');
+    return true;
+  }
+  const unchanged = storedJevApiKey ? ' Previously saved key unchanged.' : ' Key not saved.';
+  if (result.kind === 'invalid') {
+    setJevKeyStatus('invalid', `Invalid Jev API key (HTTP ${result.status}).${unchanged}`);
+  } else if (result.kind === 'timeout') {
+    setJevKeyStatus('error', `Jev API key verification timed out.${unchanged}`);
+  } else {
+    setJevKeyStatus('error', `Jev API key verification failed (network error).${unchanged}`);
+  }
+  return false;
+}
+
+function scheduleJevApiKeyVerification(delayMs: number): void {
+  if (jevVerifyTimer !== null) {
+    clearTimeout(jevVerifyTimer);
+    jevVerifyTimer = null;
+  }
+  const current = jevApiKeyInput.value.trim();
+  if (current.length > 0 && current !== lastVerifiedJevApiKey) {
+    setJevKeyStatus('verifying', 'Verifying Jev API key…');
+  }
+  jevVerifyTimer = setTimeout(() => {
+    jevVerifyTimer = null;
+    const candidate = jevApiKeyInput.value.trim();
+    if (candidate.length === 0) {
+      jevVerifySeq += 1;
+      void (async () => {
+        try {
+          await storageRepository.setJevApiKey(null);
+          storedJevApiKey = null;
+          lastVerifiedJevApiKey = null;
+          setJevKeyStatus('neutral', 'Jev API key cleared.');
+        } catch {
+          setJevKeyStatus('error', 'Error clearing Jev API key.');
+        }
+      })();
+      return;
+    }
+    if (candidate === lastVerifiedJevApiKey && candidate === storedJevApiKey) {
+      setJevKeyStatus('valid', 'Jev API key verified and saved locally.');
+      return;
+    }
+    void verifyAndStoreJevApiKey(candidate);
+  }, delayMs);
 }
 
 /**
@@ -271,7 +367,17 @@ async function saveAllSettings(): Promise<void> {
     await storageRepository.setAutoOpenLinks(autoOpen);
     await storageRepository.setAutoOpenLinksOnReconnect(autoOpenOnReconnect);
     const jevKey = jevApiKeyInput.value.trim();
-    await storageRepository.setJevApiKey(jevKey.length > 0 ? jevKey : null);
+    let jevOk = true;
+    if (jevKey.length === 0) {
+      await storageRepository.setJevApiKey(null);
+      storedJevApiKey = null;
+      lastVerifiedJevApiKey = null;
+      setJevKeyStatus('neutral', 'Jev API key cleared.');
+    } else if (jevKey === storedJevApiKey && jevKey === lastVerifiedJevApiKey) {
+      setJevKeyStatus('valid', 'Jev API key verified and saved locally.');
+    } else {
+      jevOk = await verifyAndStoreJevApiKey(jevKey);
+    }
 
     // Notify background script
     chrome.runtime.sendMessage({
@@ -292,6 +398,10 @@ async function saveAllSettings(): Promise<void> {
       throw new Error(debugResponse.error || 'Failed to update debug config');
     }
 
+    if (!jevOk) {
+      showStatus('Settings saved, but Jev API key was not verified and not saved', 'error');
+      return;
+    }
     showStatus('All settings saved successfully!', 'success');
   } catch (error) {
     console.error('Error saving settings:', error);
@@ -354,7 +464,11 @@ function init(): void {
   autoOpenLinksOnReconnectCheckbox.addEventListener('change', saveAutoOpenLinksOnReconnect);
   onlyThisDeviceCheckbox.addEventListener('change', saveOnlyThisDevice);
   encryptionPasswordInput.addEventListener('change', saveEncryptionPassword);
-  jevApiKeyInput.addEventListener('change', saveJevApiKey);
+  jevApiKeyInput.addEventListener('paste', () => scheduleJevApiKeyVerification(0));
+  jevApiKeyInput.addEventListener('input', () =>
+    scheduleJevApiKeyVerification(JEV_VERIFY_DEBOUNCE_MS),
+  );
+  jevApiKeyInput.addEventListener('change', () => scheduleJevApiKeyVerification(0));
   debugModeCheckbox.addEventListener('change', saveDebugMode);
 
   // Load settings

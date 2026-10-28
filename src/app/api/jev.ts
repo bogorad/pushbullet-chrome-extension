@@ -4,6 +4,62 @@ export const JEV_MODEL = 'jev-1.14.0';
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const NO_MATCH_CHOICE = '__none__';
 export const JEV_TIMEOUT_MS = 8000;
+export const JEV_MODELS_ENDPOINT = 'https://api.typesafe.ai/v1/models';
+
+export type JevVerifyResult =
+  | { kind: 'valid' }
+  | { kind: 'invalid'; status: number }
+  | { kind: 'network-error' }
+  | { kind: 'timeout' };
+
+export interface JevVerifyOptions {
+  fetchFn?: typeof fetch;
+  timeoutMs?: number;
+}
+
+export async function verifyJevApiKey(
+  apiKey: string,
+  options: JevVerifyOptions = {},
+): Promise<JevVerifyResult> {
+  const candidate = apiKey.trim();
+  if (candidate.length === 0) {
+    return { kind: 'invalid', status: 0 };
+  }
+  const fetchFn = options.fetchFn ?? fetch;
+  const timeoutMs = options.timeoutMs ?? JEV_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchFn(JEV_MODELS_ENDPOINT, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${candidate}` },
+      signal: controller.signal,
+    });
+    if (response.ok) {
+      return { kind: 'valid' };
+    }
+    if (response.status === 401 || response.status === 403) {
+      debugLogger.api('WARN', 'Jev API key verification rejected', { status: response.status });
+      return { kind: 'invalid', status: response.status };
+    }
+    debugLogger.api('WARN', 'Jev API key verification failed', { status: response.status });
+    return { kind: 'network-error' };
+  } catch (error) {
+    if (
+      controller.signal.aborted ||
+      (typeof error === 'object' &&
+        error !== null &&
+        'name' in error &&
+        (error as { name?: unknown }).name === 'AbortError')
+    ) {
+      return { kind: 'timeout' };
+    }
+    debugLogger.api('WARN', 'Jev API key verification request failed', {});
+    return { kind: 'network-error' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export type JevPickResult =
   | { kind: 'picked'; code: string }
