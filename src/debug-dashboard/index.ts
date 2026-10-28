@@ -4,6 +4,17 @@
 
 import { getElementById } from '../lib/ui/dom';
 import { MessageAction } from '../types/domain';
+import {
+  LOG_PREFS_KEY,
+  MAX_RENDERED_LOGS,
+  capLogs,
+  filterLogs,
+  formatRelativeTime,
+  isNearBottom,
+  logsToText,
+  parsePrefs,
+  type LogViewPrefs,
+} from './log-view';
 
 // Type definitions
 interface DebugSummary {
@@ -132,59 +143,6 @@ interface SmsEphemeralStats {
   historyFetchFailed: number;
 }
 
-/**
- * Log level hierarchy map.
- * Each key is a log level, and the value is an array of levels that should be visible
- * when that level is selected in the filter.
- *
- * Hierarchy (least to most severe): DEBUG < INFO < WARN < ERROR
- *
- * Examples:
- * - Selecting DEBUG shows all levels (nothing is filtered out)
- * - Selecting WARN shows WARN and ERROR only
- * - Selecting ERROR shows only ERROR
- */
-const LOG_LEVEL_HIERARCHY: Record<string, string[]> = {
-  DEBUG: ["DEBUG", "INFO", "WARN", "ERROR"], // Show everything
-  INFO: ["INFO", "WARN", "ERROR"], // Show INFO and above
-  WARN: ["WARN", "ERROR"], // Show WARN and above
-  ERROR: ["ERROR"], // Show only ERROR
-};
-
-/**
- * Check if a log entry should be visible based on the selected filter level.
- * Uses hierarchical filtering where selecting a level shows that level plus all more severe levels.
- *
- * @param logLevel - The level of the log entry (DEBUG, INFO, WARN, ERROR)
- * @param filterLevel - The currently selected filter level (or empty string for "All")
- * @returns True if the log should be shown, false if it should be filtered out
- *
- * @example
- * // Filter is set to "WARN"
- * shouldShowLogByLevel('DEBUG', 'WARN')  // false (DEBUG is less severe than WARN)
- * shouldShowLogByLevel('INFO', 'WARN')   // false (INFO is less severe than WARN)
- * shouldShowLogByLevel('WARN', 'WARN')   // true (WARN matches)
- * shouldShowLogByLevel('ERROR', 'WARN')  // true (ERROR is more severe than WARN)
- */
-function shouldShowLogByLevel(logLevel: string, filterLevel: string): boolean {
-  // If no filter is selected (empty string or "All"), show everything
-  if (!filterLevel || filterLevel === "") {
-    return true;
-  }
-
-  // Get the array of levels that should be visible for this filter
-  const allowedLevels = LOG_LEVEL_HIERARCHY[filterLevel];
-
-  // If the filter level is not in our hierarchy map, show everything (fail-safe)
-  if (!allowedLevels) {
-    console.warn(`Unknown filter level: ${filterLevel}, showing all logs`);
-    return true;
-  }
-
-  // Check if the log's level is in the allowed levels array
-  return allowedLevels.includes(logLevel);
-}
-
 // DOM Elements
 const refreshBtn = getElementById<HTMLButtonElement>('refresh-btn');
 const exportJsonBtn = getElementById<HTMLButtonElement>('export-json-btn');
@@ -212,6 +170,13 @@ const logLevelFilter = getElementById<HTMLSelectElement>('log-level-filter');
 const logCountSelect = getElementById<HTMLSelectElement>('log-count-select');
 const logMessageFilter = getElementById<HTMLInputElement>('log-message-filter');
 const logsContainer = getElementById<HTMLDivElement>('logs-container');
+const logWrapToggle = getElementById<HTMLInputElement>('log-wrap-toggle');
+const logDensitySelect = getElementById<HTMLSelectElement>('log-density-select');
+const copyFilteredBtn = getElementById<HTMLButtonElement>('copy-filtered-btn');
+const downloadLogBtn = getElementById<HTMLButtonElement>('download-log-btn');
+const downloadJsonBtn = getElementById<HTMLButtonElement>('download-json-btn');
+const logCountsEl = getElementById<HTMLDivElement>('log-counts');
+const jumpToBottomBtn = getElementById<HTMLButtonElement>('jump-to-bottom-btn');
 
 // Performance tab elements
 const websocketMetricsEl = getElementById<HTMLDivElement>('websocket-metrics');
@@ -231,6 +196,47 @@ const systemInfoEl = getElementById<HTMLDivElement>('system-info');
 // State
 let autoRefreshInterval: number | null = null;
 let currentData: DebugSummary['summary'] | null = null;
+let followTail = true;
+let lastFilteredLogs: LogEntry[] = [];
+
+function loadPrefs(): LogViewPrefs {
+  try { return parsePrefs(localStorage.getItem(LOG_PREFS_KEY)); } catch { return parsePrefs(null); }
+}
+function savePrefs(): void {
+  const prefs: LogViewPrefs = {
+    category: logCategoryFilter.value,
+    level: logLevelFilter.value,
+    search: logMessageFilter.value,
+    wrap: logWrapToggle.checked,
+    density: logDensitySelect.value === 'compact' ? 'compact' : 'comfortable',
+  };
+  try { localStorage.setItem(LOG_PREFS_KEY, JSON.stringify(prefs)); } catch { /* storage unavailable */ }
+}
+function applyPrefs(): void {
+  const prefs = loadPrefs();
+  logCategoryFilter.value = prefs.category;
+  logLevelFilter.value = prefs.level;
+  logMessageFilter.value = prefs.search;
+  logWrapToggle.checked = prefs.wrap;
+  logDensitySelect.value = prefs.density;
+  applyLogDisplayPrefs();
+}
+function applyLogDisplayPrefs(): void {
+  logsContainer.classList.toggle('logs-nowrap', !logWrapToggle.checked);
+  logsContainer.classList.toggle('density-compact', logDensitySelect.value === 'compact');
+}
+function downloadFiltered(format: 'log' | 'json'): void {
+  const content = format === 'json' ? JSON.stringify(lastFilteredLogs, null, 2) : logsToText(lastFilteredLogs);
+  const blob = new Blob([content], { type: format === 'json' ? 'application/json' : 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `pushbullet-filtered-${Date.now()}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 const VALID_LOG_LEVELS = new Set<string>(['DEBUG', 'INFO', 'WARN', 'ERROR']);
 
@@ -405,8 +411,29 @@ function setupEventListeners(): void {
   });
 
   logMessageFilter.addEventListener('input', () => {
+    savePrefs();
     renderLogs();
   });
+
+  logCategoryFilter.addEventListener('change', savePrefs);
+  logLevelFilter.addEventListener('change', savePrefs);
+  logWrapToggle.addEventListener('change', () => { savePrefs(); applyLogDisplayPrefs(); });
+  logDensitySelect.addEventListener('change', () => { savePrefs(); applyLogDisplayPrefs(); });
+  logsContainer.addEventListener('scroll', () => {
+    followTail = isNearBottom(logsContainer);
+    jumpToBottomBtn.hidden = followTail;
+  });
+  jumpToBottomBtn.addEventListener('click', () => {
+    followTail = true;
+    jumpToBottomBtn.hidden = true;
+    logsContainer.scrollTop = logsContainer.scrollHeight;
+  });
+  copyFilteredBtn.addEventListener('click', () => {
+    const text = logsToText(lastFilteredLogs);
+    if (navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(() => showError('Failed to copy logs.'));
+  });
+  downloadLogBtn.addEventListener('click', () => downloadFiltered('log'));
+  downloadJsonBtn.addEventListener('click', () => downloadFiltered('json'));
 }
 
 /**
@@ -531,100 +558,75 @@ function renderSmsEphemeralSummary(stats: SmsEphemeralStats | undefined): void {
  * Render logs
  */
 function renderLogs(): void {
+  const total = currentData?.logs?.length ?? 0;
   if (!currentData || !currentData.logs) {
-    renderLoading(logsContainer, 'No logs available');
+    lastFilteredLogs = [];
+    logCountsEl.textContent = "Showing 0 of 0";
+    renderLoading(logsContainer, "No logs available");
     return;
   }
-
-  // Apply filters
-  const categoryFilter = logCategoryFilter.value;
-  const levelFilter = logLevelFilter.value;
-  const messageFilter = logMessageFilter.value.trim();
-
-  let filteredLogs = currentData.logs;
-
-  if (categoryFilter) {
-    filteredLogs = filteredLogs.filter(log => log.category === categoryFilter);
-  }
-
-  // Filter by level (hierarchical - shows selected level + more severe levels)
-  if (levelFilter) {
-    filteredLogs = filteredLogs.filter((log) =>
-      shouldShowLogByLevel(log.level, levelFilter),
-    );
-  }
-
-  // Filter by message (supports regex)
-  if (messageFilter) {
-    try {
-      // Try to use as regex (case-insensitive)
-      const regex = new RegExp(messageFilter, "i");
-      filteredLogs = filteredLogs.filter((log) => regex.test(log.message));
-    } catch {
-      // If regex is invalid, fall back to simple text search
-      const lowerFilter = messageFilter.toLowerCase();
-      filteredLogs = filteredLogs.filter((log) =>
-        log.message.toLowerCase().includes(lowerFilter),
-      );
-    }
-  }
-
-  // Render logs
-  if (filteredLogs.length === 0) {
-    renderLoading(logsContainer, 'No logs match the current filters');
+  const wasFollowing = followTail;
+  const prevScrollTop = logsContainer.scrollTop;
+  const filtered = filterLogs(currentData.logs, {
+    category: logCategoryFilter.value,
+    level: logLevelFilter.value,
+    search: logMessageFilter.value,
+  });
+  const capped = capLogs(filtered);
+  lastFilteredLogs = capped;
+  logCountsEl.textContent = capped.length < filtered.length
+    ? "Showing " + capped.length + " of " + filtered.length + " filtered (" + total + " total, render cap " + MAX_RENDERED_LOGS + ")"
+    : "Showing " + filtered.length + " of " + total;
+  if (filtered.length === 0) {
+    renderLoading(logsContainer, "No logs match the current filters");
     return;
   }
-
-  // By creating a copy with [...filteredLogs] and then reversing it,
-  // we ensure the newest logs are processed first without changing the original data.
+  // Chronological order (oldest first) so follow-tail scrolls to newest at bottom.
+  // Bounded render: capLogs limits to MAX_RENDERED_LOGS, single DocumentFragment (no virtualization lib).
   const fragment = document.createDocumentFragment();
-
-  [...filteredLogs].reverse().forEach(log => {
+  capped.forEach(log => {
     const logLevel = safeLogLevel(log.level);
-    const entry = document.createElement('div');
-    entry.classList.add('log-entry', logLevel);
-
-    const header = document.createElement('div');
-    header.className = 'log-header';
-
-    const category = document.createElement('span');
-    category.className = 'log-category';
-    category.textContent = `[${log.category}]`;
-
-    const level = document.createElement('span');
-    level.classList.add('log-level', logLevel);
+    const entry = document.createElement("div");
+    entry.classList.add("log-entry", logLevel);
+    const header = document.createElement("div");
+    header.className = "log-header";
+    const category = document.createElement("span");
+    category.className = "log-category";
+    category.textContent = "[" + log.category + "]";
+    const level = document.createElement("span");
+    level.classList.add("log-level", logLevel);
     level.textContent = logLevel;
-
     header.append(category, level);
-
-    const timestamp = document.createElement('div');
-    timestamp.className = 'log-timestamp';
-    timestamp.textContent = log.timestamp;
-
-    const message = document.createElement('div');
-    message.className = 'log-message';
+    const timestamp = document.createElement("div");
+    timestamp.className = "log-timestamp";
+    timestamp.textContent = formatRelativeTime(log.timestamp);
+    timestamp.title = log.timestamp;
+    const message = document.createElement("div");
+    message.className = "log-message";
     message.textContent = log.message;
-
     entry.append(header, timestamp, message);
-
-    if (log.data !== undefined) {
-      const data = document.createElement('div');
-      data.className = 'log-data';
+    if (log.data !== undefined && log.data !== null) {
+      const data = document.createElement("div");
+      data.className = "log-data";
       data.textContent = stringifyForDisplay(log.data);
       entry.appendChild(data);
     }
-
     if (log.error) {
-      const error = document.createElement('div');
-      error.classList.add('log-data', 'error');
-      error.textContent = `${log.error.name}: ${log.error.message}`;
+      const error = document.createElement("div");
+      error.classList.add("log-data", "error");
+      error.textContent = log.error.name + ": " + log.error.message;
       entry.appendChild(error);
     }
-
     fragment.appendChild(entry);
   });
-
   logsContainer.replaceChildren(fragment);
+  if (wasFollowing) {
+    logsContainer.scrollTop = logsContainer.scrollHeight;
+    jumpToBottomBtn.hidden = true;
+  } else {
+    logsContainer.scrollTop = prevScrollTop;
+    jumpToBottomBtn.hidden = false;
+  }
 }
 
 /**
@@ -1013,6 +1015,7 @@ function showError(message: string): void {
 function init(): void {
   console.log('Debug Dashboard loaded');
 
+  applyPrefs();
   // Set up event listeners
   setupEventListeners();
 
