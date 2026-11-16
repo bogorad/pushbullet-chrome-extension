@@ -2,9 +2,6 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_server_host": "doltsrv.lan",
-  "dolt_server_port": 3307,
-  "dolt_server_user": "root",
   "dolt_database": "pushbullet_chrome_extension",
   "project_id": "646d0852-0af5-4818-b35a-43a834c3304a"
 }
